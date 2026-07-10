@@ -6,30 +6,32 @@ base-image: ghcr.io/ublue-os/bazzite
 image-version: latest
 
 modules:
-  # 1. Das vDS Kernel-Modul in der Cloud kompilieren
-  - type: akmods
-    install:
-      - vds
-
-  # 2. Das Userspace-Programm (vdsd) nativ aus dem Quellcode bauen und installieren
   - type: script
     snippets:
       - |
-        echo "Installiere kurzzeitig Build-Tools im Image..."
-        rpm-ostree install -y git cmake gcc-c++ opus-devel libudev-devel dbus-devel bluez-libs-devel
-        
-        echo "Klone das vDS-Repository..."
+        echo "=== 1. Installiere notwendige Build-Werkzeuge ==="
+        rpm-ostree install -y git cmake gcc-c++ opus-devel libudev-devel dbus-devel bluez-libs-devel kernel-devel
+
+        echo "=== 2. Klone das vDS-Repository ==="
+        # HIER BITTE DEINEN ECHTEN, VOLLSTÄNDIGEN GIT-LINK EINSETZEN:
         git clone https://github.com/hurryman2212/vds.git /tmp/vds_source
         
-        echo "Kompiliere das Userspace-Programm..."
+        cd /tmp/vds_source
+
+        echo "=== 3. Kompiliere und installiere das Kernel-Modul ==="
+        cd module
+        make
+        KERNEL_VER=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1)
+        mkdir -p /usr/lib/modules/${KERNEL_VER}/extra/
+        cp vds_hcd.ko /usr/lib/modules/${KERNEL_VER}/extra/
+        
+        echo "=== 4. Kompiliere und installiere das Steuerprogramm ==="
         cd /tmp/vds_source
         cmake . -B build
         make -C build
-        
-        echo "Kopiere die fertigen Programme in das System..."
         cp build/vdsd /usr/bin/vdsd
         cp build/vdsctl /usr/bin/vdsctl
-        
-        echo "Aktiviere den Bluetooth-Override..."
+
+        echo "=== 5. Bluetooth-Anpassung aktivieren ==="
         chmod +x override-bluetoothd.sh
         ./override-bluetoothd.sh disable-input
