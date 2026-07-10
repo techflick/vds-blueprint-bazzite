@@ -6,8 +6,8 @@ base-image: ghcr.io/ublue-os/bazzite
 image-version: latest
 
 modules:
-  # 1. Hier installieren wir die Build-Werkzeuge sauber über das BlueBuild-System
-  - type: container-packages
+  # 1. Hier installieren wir die Build-Werkzeuge sauber über das korrekte BlueBuild-Modul
+  - type: rpm-ostree
     install:
       - git
       - cmake
@@ -23,7 +23,7 @@ modules:
     snippets:
       - |
         echo "=== 1. Klone das vDS-Repository ==="
-        git clone https://github.com/hurryman2212/vds.git /tmp/vds_source
+        git clone https://github.com /tmp/vds_source
         cd /tmp/vds_source
 
         echo "=== 2. Kompiliere das Kernel-Modul ==="
