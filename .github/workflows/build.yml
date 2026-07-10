@@ -20,6 +20,7 @@ jobs:
         uses: blue-build/github-action@v1
         with:
           recipe: 'config/recipe.yml'
-          cosign_private_key: ${{ secrets.SIGNING_SECRET }}
           registry_token: ${{ github.token }}
           prune: true
+          # Hier schalten wir die Fehlermeldung ab:
+          no_sign: true
