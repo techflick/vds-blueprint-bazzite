@@ -1,0 +1,25 @@
+name: Build Mein Bazzite Image
+on:
+  schedule:
+    - cron: '0 0 * * *' # Baut automatisch jede Nacht ein Update
+  push:
+    branches:
+      - main
+  workflow_dispatch: # Erlaubt es dir, den Bau jederzeit manuell zu starten
+
+jobs:
+  bluebuild:
+    name: Build Image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    steps:
+      - name: Build Image
+        uses: blue-build/github-action@v1
+        with:
+          recipe: 'config/recipe.yml'
+          cosign_private_key: ${{ secrets.SIGNING_SECRET }}
+          registry_token: ${{ github.token }}
+          prune: true
