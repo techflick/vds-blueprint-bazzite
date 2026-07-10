@@ -1,50 +1,35 @@
-# GitHub Bauplan für ein angepasstes Bazzite mit vDS
+# yaml-language-server: $schema=https://blue-build.org
 name: mein-bazzite-vds
-description: Mein persönliches Bazzite mit integriertem vDS (virtual DualSense) Treiber via Multi-Stage-Build.
+description: Mein persönliches Bazzite mit integriertem vDS (virtual DualSense) Treiber.
 
 base-image: ghcr.io/ublue-os/bazzite
 image-version: latest
 
 modules:
-  # Keine Paketinstallationen auf dem Host-System! Wir bauen alles im Skript-Container.
+  # 1. Das Kernel-Modul automatisch über das offizielle akmods-Modul bauen lassen
+  - type: akmods
+    install:
+      - vds
+
+  # 2. Das Steuerprogramm direkt aus der fertigen .deb-Datei ins System entpacken
+  # Du musst hier nur deinen funktionierenden Link zur .deb-Datei eintragen!
   - type: script
     snippets:
       - |
-        echo "=== 1. Starte temporäre Ubuntu-Bauumgebung ==="
-        # Wir nutzen podman (das in Bazzite integriert ist), um einen Ubuntu-Container für den Bau zu starten
-        podman run --name vds_builder -v /tmp:/tmp:rw -v /usr:/host_usr:ro ubuntu:22.04 /bin/bash -c "
-          apt-get update && apt-get install -y git cmake gcc-g++ pkg-config libopus-dev libudev-dev libdbus-1-dev libbluetooth-dev linux-headers-generic
-          
-          echo '=== 2. Klone das vDS-Repository ==='
-          git clone https://github.com /tmp/vds_source
-          
-          echo '=== 3. Kompiliere das Kernel-Modul ==='
-          cd /tmp/vds_source/module
-          # Wir nutzen ein Dummy-Makefile oder erzwingen den Bau für die Host-Struktur
-          make || true
-          
-          echo '=== 4. Kompiliere das Steuerprogramm ==='
-          cd /tmp/vds_source
-          cmake . -B build
-          make -C build
-        "
-
-        echo "=== 5. Kopiere die fertigen Programme in dein Bazzite-Image ==="
-        # Userspace-Programme gehören bei Ostree nach /usr/local/bin
-        mkdir -p /usr/local/bin
-        podman cp vds_builder:/tmp/vds_source/build/vdsd /usr/local/bin/vdsd
-        podman cp vds_builder:/tmp/vds_source/build/vdsctl /usr/local/bin/vdsctl
-
-        # Wir holen das fertig gebaute Kernel-Modul aus dem Container
-        KERNEL_VER=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1)
-        mkdir -p /var/lib/modules/${KERNEL_VER}/extra/
-        podman cp vds_builder:/tmp/vds_source/module/vds_hcd.ko /var/lib/modules/${KERNEL_VER}/extra/vds_hcd.ko || true
-
-        echo "=== 6. Bluetooth-Anpassung aktivieren ==="
-        # Wir laden das Skript und führen es direkt im Image aus
-        git clone https://github.com /tmp/vds_host_script
-        chmod +x /tmp/vds_host_script/override-bluetoothd.sh
-        /tmp/vds_host_script/override-bluetoothd.sh disable-input
-
-        echo "=== 7. Bau-Container aufräumen ==="
-        podman rm vds_builder
+        echo "=== vDS Userspace Tools installieren ==="
+        # Bitte setze hier in der nächsten Zeile deinen funktionierenden Link zur .deb ein:
+        URL_ZUR_DEB=https://github.com/hurryman2212/vds/releases/download/0.3.0-rc7/vds_0.3.0.rc7-1_amd64.deb
+        
+        curl -L -o /tmp/vds.deb "$URL_ZUR_DEB"
+        
+        # Wir entpacken die Dateien direkt in das schreibgeschützte Image
+        dpkg-deb -x /tmp/vds.deb /
+        
+        echo "=== Bluetooth-Anpassung aktivieren ==="
+        # Da wir kein Git haben, schreiben wir die Service-Änderung direkt per Hand
+        mkdir -p /etc/systemd/system/bluetooth.service.d
+        cat << 'EOF' > /etc/systemd/system/bluetooth.service.d/override.conf
+        [Service]
+        ExecStart=
+        ExecStart=/usr/libexec/bluetooth/bluetoothd --noplugin=input
+        EOF
