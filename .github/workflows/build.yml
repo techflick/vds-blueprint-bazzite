@@ -1,11 +1,11 @@
 name: Build Mein Bazzite Image
 on:
   schedule:
-    - cron: '0 0 * * *' # Baut automatisch jede Nacht ein Update
+    - cron: '0 0 * * *'
   push:
     branches:
       - main
-  workflow_dispatch: # Erlaubt es dir, den Bau jederzeit manuell zu starten
+  workflow_dispatch:
 
 jobs:
   bluebuild:
@@ -22,5 +22,6 @@ jobs:
           recipe: 'config/recipe.yml'
           registry_token: ${{ github.token }}
           prune: true
-          # Hier schalten wir die Fehlermeldung ab:
-          no_sign: true
+        # Hier erzwingen wir die Deaktivierung direkt als Umgebungsvariable:
+        env:
+          BB_NO_SIGN: "true"
