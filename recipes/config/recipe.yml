@@ -6,27 +6,28 @@ base-image: ghcr.io/ublue-os/bazzite
 image-version: latest
 
 modules:
-  # 1. Das Kernel-Modul automatisch über das offizielle akmods-Modul bauen lassen
-  - type: akmods
-    install:
-      - vds
-
-  # 2. Das Steuerprogramm direkt aus der fertigen .deb-Datei ins System entpacken
-  # Du musst hier nur deinen funktionierenden Link zur .deb-Datei eintragen!
+  # Wir steuern alles über ein robustes Skript, um unteilbare Blockaden zu umgehen
   - type: script
     snippets:
       - |
-        echo "=== vDS Userspace Tools installieren ==="
-        # Bitte setze hier in der nächsten Zeile deinen funktionierenden Link zur .deb ein:
+        echo "=== 1. Vorbereitungen für das Image ==="
+        # Da wir im Image nicht direkt kompilieren können, laden wir deine fertige .deb-Datei
+        # Setze hier in der nächsten Zeile deinen funktionierenden Link zur .deb ein:
         URL_ZUR_DEB=https://github.com/hurryman2212/vds/releases/download/0.3.0-rc7/vds_0.3.0.rc7-1_amd64.deb
         
         curl -L -o /tmp/vds.deb "$URL_ZUR_DEB"
         
-        # Wir entpacken die Dateien direkt in das schreibgeschützte Image
+        echo "=== 2. Entpacke Userspace-Tools direkt ins System ==="
+        # dpkg-deb entpackt das fertige vdsd-Programm nativ in das Image
         dpkg-deb -x /tmp/vds.deb /
-        
-        echo "=== Bluetooth-Anpassung aktivieren ==="
-        # Da wir kein Git haben, schreiben wir die Service-Änderung direkt per Hand
+
+        echo "=== 3. Kernel-Modul für den Systemstart registrieren ==="
+        # Wir sagen dem Bazzite-Host, dass er das vds_hcd Modul beim Booten laden soll
+        mkdir -p /etc/modules-load.d
+        echo "vds_hcd" > /etc/modules-load.d/vds.conf
+
+        echo "=== 4. Bluetooth-Anpassung aktivieren ==="
+        # Wir deaktivieren das störende Standard-Bluetooth-Eingabe-Plugin
         mkdir -p /etc/systemd/system/bluetooth.service.d
         cat << 'EOF' > /etc/systemd/system/bluetooth.service.d/override.conf
         [Service]
