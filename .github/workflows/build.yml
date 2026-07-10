@@ -22,6 +22,3 @@ jobs:
           recipe: 'config/recipe.yml'
           registry_token: ${{ github.token }}
           prune: true
-        # Hier erzwingen wir die Deaktivierung direkt als Umgebungsvariable:
-        env:
-          BB_NO_SIGN: "true"
