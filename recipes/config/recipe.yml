@@ -1,33 +1,22 @@
 # yaml-language-server: $schema=https://blue-build.org
 name: mein-bazzite-vds
-description: Mein persönliches Bazzite mit integriertem vDS (virtual DualSense) Treiber.
+description: Mein persönliches Bazzite mit automatischer Aktivierung des vDS (virtual DualSense) Treibers.
 
 base-image: ghcr.io/ublue-os/bazzite
 image-version: latest
 
 modules:
-  # Wir steuern alles über ein robustes Skript, um unteilbare Blockaden zu umgehen
+  # Wir hinterlassen im Image nur Konfigurationen, damit Bazzite den Treiber lädt
   - type: script
     snippets:
       - |
-        echo "=== 1. Vorbereitungen für das Image ==="
-        # Da wir im Image nicht direkt kompilieren können, laden wir deine fertige .deb-Datei
-        # Setze hier in der nächsten Zeile deinen funktionierenden Link zur .deb ein:
-        URL_ZUR_DEB=https://github.com/hurryman2212/vds/releases/download/0.3.0-rc7/vds_0.3.0.rc7-1_amd64.deb
-        
-        curl -L -o /tmp/vds.deb "$URL_ZUR_DEB"
-        
-        echo "=== 2. Entpacke Userspace-Tools direkt ins System ==="
-        # dpkg-deb entpackt das fertige vdsd-Programm nativ in das Image
-        dpkg-deb -x /tmp/vds.deb /
-
-        echo "=== 3. Kernel-Modul für den Systemstart registrieren ==="
-        # Wir sagen dem Bazzite-Host, dass er das vds_hcd Modul beim Booten laden soll
+        echo "=== 1. Kernel-Modul für den Systemstart registrieren ==="
+        # Das sagt Bazzite beim Booten, dass es den virtuellen Audio-Treiber vds_hcd aktivieren soll
         mkdir -p /etc/modules-load.d
         echo "vds_hcd" > /etc/modules-load.d/vds.conf
 
-        echo "=== 4. Bluetooth-Anpassung aktivieren ==="
-        # Wir deaktivieren das störende Standard-Bluetooth-Eingabe-Plugin
+        echo "=== 2. Bluetooth-Anpassung aktivieren ==="
+        # Wir zwingen Bluetooth dazu, das Eingabe-Plugin zu ignorieren, damit vdsd freien Zugriff hat
         mkdir -p /etc/systemd/system/bluetooth.service.d
         cat << 'EOF' > /etc/systemd/system/bluetooth.service.d/override.conf
         [Service]
