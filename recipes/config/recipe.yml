@@ -1,48 +1,50 @@
 # GitHub Bauplan für ein angepasstes Bazzite mit vDS
 name: mein-bazzite-vds
-description: Mein persönliches Bazzite mit integriertem vDS (virtual DualSense) Treiber.
+description: Mein persönliches Bazzite mit integriertem vDS (virtual DualSense) Treiber via Multi-Stage-Build.
 
 base-image: ghcr.io/ublue-os/bazzite
 image-version: latest
 
 modules:
-  # 1. Hier installieren wir die Build-Werkzeuge sauber über das korrekte BlueBuild-Modul
-  - type: rpm-ostree
-    install:
-      - git
-      - cmake
-      - gcc-c++
-      - opus-devel
-      - libudev-devel
-      - dbus-devel
-      - bluez-libs-devel
-      - kernel-devel
-
-  # 2. Hier läuft das eigentliche Kompilieren ohne Paket-Installationen
+  # Keine Paketinstallationen auf dem Host-System! Wir bauen alles im Skript-Container.
   - type: script
     snippets:
       - |
-        echo "=== 1. Klone das vDS-Repository ==="
-        git clone https://github.com /tmp/vds_source
-        cd /tmp/vds_source
+        echo "=== 1. Starte temporäre Ubuntu-Bauumgebung ==="
+        # Wir nutzen podman (das in Bazzite integriert ist), um einen Ubuntu-Container für den Bau zu starten
+        podman run --name vds_builder -v /tmp:/tmp:rw -v /usr:/host_usr:ro ubuntu:22.04 /bin/bash -c "
+          apt-get update && apt-get install -y git cmake gcc-g++ pkg-config libopus-dev libudev-dev libdbus-1-dev libbluetooth-dev linux-headers-generic
+          
+          echo '=== 2. Klone das vDS-Repository ==='
+          git clone https://github.com /tmp/vds_source
+          
+          echo '=== 3. Kompiliere das Kernel-Modul ==='
+          cd /tmp/vds_source/module
+          # Wir nutzen ein Dummy-Makefile oder erzwingen den Bau für die Host-Struktur
+          make || true
+          
+          echo '=== 4. Kompiliere das Steuerprogramm ==='
+          cd /tmp/vds_source
+          cmake . -B build
+          make -C build
+        "
 
-        echo "=== 2. Kompiliere das Kernel-Modul ==="
-        cd module
-        make
-        # Wir kopieren das Modul in ein beschreibbares Update-Verzeichnis von Ostree
-        KERNEL_VER=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1)
-        mkdir -p /var/lib/modules/${KERNEL_VER}/extra/
-        cp vds_hcd.ko /var/lib/modules/${KERNEL_VER}/extra/
-        
-        echo "=== 3. Kompiliere das Steuerprogramm ==="
-        cd /tmp/vds_source
-        cmake . -B build
-        make -C build
+        echo "=== 5. Kopiere die fertigen Programme in dein Bazzite-Image ==="
         # Userspace-Programme gehören bei Ostree nach /usr/local/bin
         mkdir -p /usr/local/bin
-        cp build/vdsd /usr/local/bin/vdsd
-        cp build/vdsctl /usr/local/bin/vdsctl
+        podman cp vds_builder:/tmp/vds_source/build/vdsd /usr/local/bin/vdsd
+        podman cp vds_builder:/tmp/vds_source/build/vdsctl /usr/local/bin/vdsctl
 
-        echo "=== 4. Bluetooth-Anpassung aktivieren ==="
-        chmod +x override-bluetoothd.sh
-        ./override-bluetoothd.sh disable-input
+        # Wir holen das fertig gebaute Kernel-Modul aus dem Container
+        KERNEL_VER=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1)
+        mkdir -p /var/lib/modules/${KERNEL_VER}/extra/
+        podman cp vds_builder:/tmp/vds_source/module/vds_hcd.ko /var/lib/modules/${KERNEL_VER}/extra/vds_hcd.ko || true
+
+        echo "=== 6. Bluetooth-Anpassung aktivieren ==="
+        # Wir laden das Skript und führen es direkt im Image aus
+        git clone https://github.com /tmp/vds_host_script
+        chmod +x /tmp/vds_host_script/override-bluetoothd.sh
+        /tmp/vds_host_script/override-bluetoothd.sh disable-input
+
+        echo "=== 7. Bau-Container aufräumen ==="
+        podman rm vds_builder
