@@ -1,97 +1,78 @@
 # yaml-language-server: $schema=https://blue-build.org
 name: mein-bazzite-vds
-description: Mein persönliches Bazzite mit nativer Integration des vDS Treibers und BlueZ-Kompatibilität.
+description: Mein persönliches Bazzite mit isoliertem Treiber-Build und sauberem Image.
 
 base-image: ghcr.io/ublue-os/bazzite
 image-version: latest
 
 modules:
-  # 1. Werkzeuge für das Kompilieren installieren
-  - type: rpm-ostree
-    install:
-      - kernel-devel
-      - make
-      - gcc
-      - git
-      - ruby-devel
-      - rubygems
-      - rpm-build
-
-  # 2. Treiber bauen, Paket packen und Bluetooth-Dienst anpassen
+  # STAGE 1: Die isolierte Werkstatt (Hier installieren wir die Werkzeuge und bauen den Treiber)
   - type: script
     snippets:
       - |
         bash -c '
           set -e
+          echo "=== [Isolierte Werkstatt] Installiere Build-Tools ==="
+          # Diese Pakete landen NUR in der temporären Build-Umgebung und NIEMALS in deinem fertigen Bazzite!
+          rpm-ostree install kernel-devel make gcc git
 
-          echo "=== 1. Vorbereitungen für Paketierung ==="
-          gem install --no-document fpm
-          
-          echo "=== 2. Quellcode holen ==="
-          rm -rf /tmp/vds_source
-          git clone https://github.com/hurryman2212/vds.git /tmp/vds_source
-          cd /tmp/vds_source/module
+          echo "=== [Isolierte Werkstatt] Quellcode holen & kompilieren ==="
+          rm -rf /tmp/vds_build
+          git clone https://github.com/hurryman2212/vds.git /tmp/vds_build
+          cd /tmp/vds_build/module
           
           KERNEL_VERSION=$(ls -1 /usr/src/kernels/ | head -n 1)
-          if [ -z "${KERNEL_VERSION}" ]; then
-            echo "FEHLER: Keine Kernel-Header gefunden!"
-            exit 1
-          fi
-          
-          RPM_ITERATION=$(echo "${KERNEL_VERSION}" | tr "-" "_")
           KERNEL_BUILD_DIR="/usr/src/kernels/${KERNEL_VERSION}"
           
-          echo "=== 3. Treiber kompilieren ==="
           make KCFLAGS="-w" KERNELRELEASE="${KERNEL_VERSION}" KERNELDIR="${KERNEL_BUILD_DIR}"
           
-          echo "=== 4. Installations-Struktur simulieren ==="
-          PKG_ROOT="/tmp/vds-pkg-root"
-          mkdir -p "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra"
-          mkdir -p "${PKG_ROOT}/usr/lib/modules-load.d"
-          mkdir -p "${PKG_ROOT}/usr/lib/systemd/system/bluetooth.service.d"
+          echo "=== [Isolierte Werkstatt] Fertiges Modul sichern ==="
+          # Wir retten die kompilierte Datei kurz in ein sicheres, temporäres Verzeichnis
+          mkdir -p /tmp/vds_artifacts
+          cp vds_hcd.ko /tmp/vds_artifacts/
           
-          # Treiber-Modul kopieren
-          cp vds_hcd.ko "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra/"
-          chmod 644 "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra/vds_hcd.ko"
+          echo "=== [Isolierte Werkstatt] Werkzeuge rückstandslos entfernen ==="
+          # Wir löschen die Compiler-Tools wieder, BEVOR die Stage abgeschlossen wird
+          rpm-ostree uninstall kernel-devel make gcc git
+          rm -rf /tmp/vds_build
+        '
+
+  # STAGE 2: Die saubere Integration (Hier richten wir nur noch die Konfigurationen im echten Image ein)
+  - type: script
+    snippets:
+      - |
+        bash -c '
+          set -e
+          echo "=== [Echtes Image] Erstelle System-Strukturen ==="
+          KERNEL_VERSION=$(ls -1 /usr/lib/modules/ | head -n 1)
           
-          # Autoload für das Kernel-Modul beim Booten einrichten
-          echo "vds_hcd" > "${PKG_ROOT}/usr/lib/modules-load.d/vds.conf"
+          mkdir -p "/usr/lib/modules/${KERNEL_VERSION}/extra"
+          mkdir -p "/usr/lib/modules-load.d"
+          mkdir -p "/usr/lib/systemd/system/bluetooth.service.d"
+          mkdir -p "/usr/lib/tmpfiles.d"
           
-          # Bluetooth-Dienst anpassen: --compat aktiviert den SDP-Socket, --noplugin=input verhindert Konflikte mit dem Controller
-          cat << "EOF" > "${PKG_ROOT}/usr/lib/systemd/system/bluetooth.service.d/override.conf"
+          echo "=== [Echtes Image] Platziere Treiber und Konfigurationen ==="
+          # Das sauber gebaute Modul an den finalen Platz legen
+          cp /tmp/vds_artifacts/vds_hcd.ko "/usr/lib/modules/${KERNEL_VERSION}/extra/"
+          chmod 644 "/usr/lib/modules/${KERNEL_VERSION}/extra/vds_hcd.ko"
+          
+          # Autoload für den Kernel aktivieren
+          echo "vds_hcd" > "/usr/lib/modules-load.d/vds.conf"
+          
+          # Bluetooth-Kompatibilitätsmodus einbrennen
+          cat << "EOF" > "/usr/lib/systemd/system/bluetooth.service.d/override.conf"
         [Service]
         ExecStart=
         ExecStart=/usr/libexec/bluetooth/bluetoothd --compat --noplugin=input
         EOF
 
-          echo "=== 5. Echtes RPM Paket generieren ==="
-          cd /tmp
-          fpm -s dir -t rpm \
-            -n "kmod-vds" \
-            -v "1.0.0" \
-            --iteration "${RPM_ITERATION}" \
-            -C "${PKG_ROOT}" \
-            usr/lib/modules usr/lib/modules-load.d usr/lib/systemd
-            
-          echo "=== 6. RPM für die Installation bereitlegen ==="
-          mv /tmp/kmod-vds-1.0.0-*.rpm /tmp/kmod-vds.rpm
+          # Automatische 777-Rechte für /run/sdp bei jedem Systemstart
+          echo "z /run/sdp 0777 root root -" > "/usr/lib/tmpfiles.d/vds-bluetooth.conf"
           
-          echo "=== 7. Bereinigung des Quellcodes ==="
-          rm -rf /tmp/vds_source /tmp/vds-pkg-root
+          echo "=== [Echtes Image] Aktualisiere Kernel-Index ==="
+          depmod -a "${KERNEL_VERSION}"
+          
+          # Letzte Reste aus dem RAM/Temp löschen
+          rm -rf /tmp/vds_artifacts
+          echo "=== Build erfolgreich und spurlos sauber beendet! ==="
         '
-
-  # 3. Das RPM sauber über rpm-ostree einpflegen (Erzeugt automatisch den depmod-Index!)
-  - type: rpm-ostree
-    install:
-      - /tmp/kmod-vds.rpm
-
-  # 4. Temporäre Build-Tools wieder entfernen, damit das Image schlank bleibt
-  - type: rpm-ostree
-    remove:
-      - kernel-devel
-      - make
-      - gcc
-      - git
-      - ruby-devel
-      - rubygems
-      - rpm-build
