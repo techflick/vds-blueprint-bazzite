@@ -29,8 +29,11 @@ modules:
         gem install --no-document fpm
         
         echo "=== 2. Quellcode holen ==="
-        rm -rf /tmp/vds_source
+        rm -rf /tmp/vds_source /tmp/bluez_source
         git clone https://github.com/hurryman2212/vds.git /tmp/vds_source
+        
+        # NEU: Wir klonen das offizielle BlueZ-Repository, um an ALLE echten Header-Dateien zu kommen
+        git clone --depth 1 https://github.com /tmp/bluez_source
         
         KERNEL_VERSION=$(ls -1 /usr/src/kernels/ | head -n 1)
         if [ -z "${KERNEL_VERSION}" ]; then
@@ -42,37 +45,10 @@ modules:
         RPM_ITERATION=$(echo "${KERNEL_VERSION}" | tr "-" "_")
         KERNEL_BUILD_DIR="/usr/src/kernels/${KERNEL_VERSION}"
         
-        echo "=== 2b. Minimale BlueZ-Schnittstellen lokal erstellen ==="
+        echo "=== 2b. Echte BlueZ-Header in das System kopieren ==="
+        # Wir kopieren die vollständigen lib-Header von BlueZ direkt nach /usr/include/bluetooth
         mkdir -p /usr/include/bluetooth
-
-        # bluetooth.h
-        echo "#ifndef __BLUETOOTH_H" > /usr/include/bluetooth/bluetooth.h
-        echo "#define __BLUETOOTH_H" >> /usr/include/bluetooth/bluetooth.h
-        echo "#include <stdint.h>" >> /usr/include/bluetooth/bluetooth.h
-        echo "typedef struct { uint8_t b; } __attribute__((packed)) bdaddr_t;" >> /usr/include/bluetooth/bluetooth.h
-        echo "#define AF_BLUETOOTH 31" >> /usr/include/bluetooth/bluetooth.h
-        echo "#define PF_BLUETOOTH AF_BLUETOOTH" >> /usr/include/bluetooth/bluetooth.h
-        echo "#define BTPROTO_L2CAP 0" >> /usr/include/bluetooth/bluetooth.h
-        echo "#endif" >> /usr/include/bluetooth/bluetooth.h
-
-        # hci.h
-        echo "#ifndef __HCI_H" > /usr/include/bluetooth/hci.h
-        echo "#define __HCI_H" >> /usr/include/bluetooth/hci.h
-        echo "#include <bluetooth/bluetooth.h>" >> /usr/include/bluetooth/hci.h
-        echo "#endif" >> /usr/include/bluetooth/hci.h
-
-        # l2cap.h
-        echo "#ifndef __L2CAP_H" > /usr/include/bluetooth/l2cap.h
-        echo "#define __L2CAP_H" >> /usr/include/bluetooth/l2cap.h
-        echo "#include <bluetooth/bluetooth.h>" >> /usr/include/bluetooth/l2cap.h
-        echo "struct sockaddr_l2 {" >> /usr/include/bluetooth/l2cap.h
-        echo "    sa_family_t l2_family;" >> /usr/include/bluetooth/l2cap.h
-        echo "    uint16_t    l2_psm;" >> /usr/include/bluetooth/l2cap.h
-        echo "    bdaddr_t    l2_bdaddr;" >> /usr/include/bluetooth/l2cap.h
-        echo "    uint16_t    l2_cid;" >> /usr/include/bluetooth/l2cap.h
-        echo "    uint8_t     l2_bdaddr_type;" >> /usr/include/bluetooth/l2cap.h
-        echo "};" >> /usr/include/bluetooth/l2cap.h
-        echo "#endif" >> /usr/include/bluetooth/l2cap.h
+        cp /tmp/bluez_source/lib/*.h /usr/include/bluetooth/
 
         echo "=== 3. Native Kompilierung ==="
         # 3a. Kernel-Modul bauen
@@ -82,10 +58,10 @@ modules:
         # 3b. Userspace-Daemon via CMake bauen
         cd /tmp/vds_source
         
-        # Den alten BlueZ Check weiterhin überspringen
+        # Den alten BlueZ pkg-config Check weiterhin überspringen
         sed -i '/pkg_check_modules.*bluez/c\set(bluez_FOUND TRUE)' CMakeLists.txt
         
-        # NEU: Wir entfernen die fehlerhafte Linker-Anweisung für PkgConfig::BLUEZ aus der CMake-Konfiguration
+        # Die fehlerhafte Verknüpfung entfernen
         sed -i 's/PkgConfig::BLUEZ//g' CMakeLists.txt
         
         mkdir -p build
@@ -166,5 +142,5 @@ modules:
         depmod -a "${KERNEL_VERSION}"
         
         echo "=== 7. Bereinigung ==="
-        rm -rf /tmp/vds_source /tmp/vds-pkg-root /tmp/kmod-vds-*.rpm
+        rm -rf /tmp/vds_source /tmp/bluez_source /tmp/vds-pkg-root /tmp/kmod-vds-*.rpm
         echo "=== Build erfolgreich abgeschlossen! ==="
