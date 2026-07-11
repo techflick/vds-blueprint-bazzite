@@ -27,7 +27,7 @@ modules:
           
           echo "=== 2. Quellcode holen ==="
           rm -rf /tmp/vds_source
-          git clone https://github.com /tmp/vds_source
+          git clone https://github.com/hurryman2212/vds.git /tmp/vds_source
           
           # Kernel-Version über das installierte kernel-devel Verzeichnis ermitteln
           KERNEL_VERSION=$(ls -1 /usr/src/kernels/ | head -n 1)
