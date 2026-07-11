@@ -14,6 +14,7 @@ modules:
       - git
       - ruby-devel
       - rubygems
+      - rpm-build
 
   - type: script
     snippets:
@@ -29,7 +30,7 @@ modules:
           git clone https://github.com/hurryman2212/vds.git /tmp/vds_source
           cd /tmp/vds_source/module
           
-          # ERSTRECKTE KORREKTUR: Kernel-Version über das installierte kernel-devel Verzeichnis ermitteln
+          # Kernel-Version über das installierte kernel-devel Verzeichnis ermitteln
           KERNEL_VERSION=$(ls -1 /usr/src/kernels/ | head -n 1)
           
           if [ -z "${KERNEL_VERSION}" ]; then
@@ -39,12 +40,13 @@ modules:
           
           echo "Ziel-Kernel für die Kompilierung ermittelt: ${KERNEL_VERSION}"
           
+          # RPM-kompatible Iteration erstellen (Bindestriche durch Unterstriche ersetzen)
+          RPM_ITERATION=$(echo "${KERNEL_VERSION}" | tr "-" "_")
+          
           # Kernel-Build-Pfad setzen
           KERNEL_BUILD_DIR="/usr/src/kernels/${KERNEL_VERSION}"
-          echo "Nutze Kernel-Build-Verzeichnis: ${KERNEL_BUILD_DIR}"
           
           echo "=== 3. Treiber kompilieren ==="
-          # Wir übergeben KERNELDIR direkt an das Makefile
           make KCFLAGS="-w" KERNELRELEASE="${KERNEL_VERSION}" KERNELDIR="${KERNEL_BUILD_DIR}"
           
           echo "=== 4. Installations-Struktur simulieren ==="
@@ -68,7 +70,7 @@ modules:
           fpm -s dir -t rpm \
             -n "kmod-vds" \
             -v "1.0.0" \
-            --iteration "${KERNEL_VERSION}" \
+            --iteration "${RPM_ITERATION}" \
             -C "${PKG_ROOT}" \
             usr/lib/modules usr/lib/modules-load.d usr/lib/systemd
             
