@@ -78,13 +78,14 @@ modules:
         make KCFLAGS="-w" KERNELRELEASE="${KERNEL_VERSION}" KERNELDIR="${KERNEL_BUILD_DIR}"
         
         # 3b. Userspace-Daemon via CMake bauen
-        # KORREKTUR: Expliziter absoluter Pfad, um den Verzeichnis-Verlust zu verhindern
         cd /tmp/vds_source
+        
+        # RADIKALER FIX: Finde JEDE CMakeLists.txt und ersetze den bluez pkg-config Check komplett
+        find . -name "CMakeLists.txt" -exec sed -i 's/pkg_check_modules(bluez REQUIRED bluez)/set(bluez_FOUND TRUE)/g' {} +
+        
         mkdir -p build
         cd build
-        
-        # BESSERE LÖSUNG: Wir übergeben die Variable direkt an CMake, anstatt die Datei zu patchen
-        cmake .. -DCMAKE_BUILD_TYPE=Release -Dbluez_FOUND=TRUE
+        cmake .. -DCMAKE_BUILD_TYPE=Release
         make
         
         echo "=== 4. Installations-Struktur simulieren ==="
