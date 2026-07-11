@@ -17,6 +17,7 @@ modules:
       - ruby-devel
       - rubygems
       - rpm-build
+      - dbus-devel # Neu hinzugefügt für die reguläre D-Bus Erkennung in CMake
 
   - type: script
     snippets:
@@ -80,8 +81,7 @@ modules:
         # 3b. Userspace-Daemon via CMake bauen
         cd /tmp/vds_source
         
-        # DEFINITIVER FIX: Wir rasieren zeilenbasierte Abfragen direkt per sed anhand Mustern ab
-        # Wir ersetzen jegliche pkg_check_modules Zeile, die bluez enthält, durch einen statischen Erfolg
+        # Den alten BlueZ Check weiterhin überspringen
         sed -i '/pkg_check_modules.*bluez/c\set(bluez_FOUND TRUE)' CMakeLists.txt
         
         mkdir -p build
