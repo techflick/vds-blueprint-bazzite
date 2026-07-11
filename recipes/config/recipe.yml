@@ -10,8 +10,9 @@ modules:
     snippets:
       - |
         bash -c '
+          set -e # Bricht bei Fehlern sofort ab, damit Sie im GitHub-Log sehen, wo es klemmt
+
           echo "=== 1. Benötigte Build-Tools installieren ==="
-          # Akzeptiert die Paketinstallationen im ostree-Kontext
           rpm-ostree install kernel-devel make gcc git
 
           echo "=== 2. vDS Quellcode frisch klonen ==="
@@ -28,7 +29,6 @@ modules:
           # Bauvorgang starten
           make KERNELDIR=/usr/lib/modules/${KERNEL_VERSION}/build
           
-          # WICHTIG: Manuelle Installation in das beschreibbare /usr/lib/modules/ Verzeichnis von Bazzite
           echo "=== 4. Kernel-Modul manuell an den richtigen Ort kopieren ==="
           MODULE_DEST="/usr/lib/modules/${KERNEL_VERSION}/extra"
           mkdir -p "${MODULE_DEST}"
@@ -38,14 +38,21 @@ modules:
           depmod -a "${KERNEL_VERSION}"
 
           echo "=== 5. Kernel-Modul für automatischen Start registrieren ==="
-          mkdir -p /etc/modules-load.d
-          echo "vds_hcd" > /etc/modules-load.d/vds.conf
+          # In ublue/Bazzite nutzt man für dauerhafte Configs im Image oft /usr/etc/ oder /usr/lib/modules-load.d/
+          mkdir -p /usr/lib/modules-load.d
+          echo "vds_hcd" > /usr/lib/modules-load.d/vds.conf
 
           echo "=== 6. Bluetooth-Anpassung aktivieren ==="
-          mkdir -p /etc/systemd/system/bluetooth.service.d
-          cat << "EOF" > /etc/systemd/system/bluetooth.service.d/override.conf
+          mkdir -p /usr/lib/systemd/system/bluetooth.service.d
+          cat << "EOF" > /usr/lib/systemd/system/bluetooth.service.d/override.conf
         [Service]
         ExecStart=
         ExecStart=/usr/libexec/bluetooth/bluetoothd --noplugin=input
         EOF
+
+          echo "=== 7. Initramfs neu bauen (WICHTIG FÜR TREIBER) ==="
+          # Dracut zwingt das System, das neue Modul in das Boot-Image aufzunehmen
+          dracut --force --kver "${KERNEL_VERSION}"
+          
+          echo "=== Build erfolgreich abgeschlossen! ==="
         '
