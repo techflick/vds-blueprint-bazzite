@@ -10,7 +10,7 @@ modules:
     snippets:
       - |
         bash -c '
-          set -e # Bricht bei Fehlern sofort ab, damit wir das Log sehen
+          set -e # Bricht bei Fehlern sofort ab
 
           echo "=== 1. Benötigte Build-Tools installieren ==="
           rpm-ostree install kernel-devel make gcc git
@@ -19,10 +19,11 @@ modules:
           rm -rf /tmp/vds_source
           git clone https://github.com/hurryman2212/vds.git /tmp/vds_source
           
-          echo "=== 3. In den driver-Ordner wechseln und bauen ==="
-          cd /tmp/vds_source/driver
+          echo "=== 3. In den module-Ordner wechseln und bauen ==="
+          # Der Ordner im Repository heißt "module"
+          cd /tmp/vds_source/module
           
-          # Ermittle die genaue Kernel-Version des Ziel-Images für das Suchen der Build-Header
+          # Ermittle die genaue Kernel-Version des Ziel-Images
           KERNEL_VERSION=$(rpm -q --qf "%{VERSION}-%{RELEASE}.%{ARCH}\n" kernel | head -n 1)
           echo "Bauen für Kernel-Header in: ${KERNEL_VERSION}"
           
@@ -30,14 +31,14 @@ modules:
           make KERNELDIR=/usr/lib/modules/${KERNEL_VERSION}/build
           
           echo "=== 4. Kernel-Modul an den ostree-konformen Ort kopieren ==="
-          # WICHTIG: Wir kopieren NICHT nach /usr/lib/modules/${KERNEL_VERSION}/ (schreibgeschützt!)
-          # Stattdessen nutzen wir das spezielle "extra" Verzeichnis, das ostree beim Booten merged.
-          MODULE_DEST="/usr/lib/modules/extra"
+          MODULE_DEST="/usr/lib/modules/${KERNEL_VERSION}/extra"
           mkdir -p "${MODULE_DEST}"
           cp vds_hcd.ko "${MODULE_DEST}/"
           
+          # Abhängigkeiten aktualisieren, damit dracut das Modul kennt
+          depmod -a "${KERNEL_VERSION}"
+          
           echo "=== 5. Kernel-Modul für automatischen Start registrieren ==="
-          # Nutzen von /usr/lib statt /etc, da /etc im Build-Prozess flüchtig ist
           mkdir -p /usr/lib/modules-load.d
           echo "vds_hcd" > /usr/lib/modules-load.d/vds.conf
 
@@ -50,8 +51,8 @@ modules:
         EOF
 
           echo "=== 7. Initramfs für das finale Image aktualisieren ==="
-          # Hier sagen wir dracut, dass es das Modul aus dem globalen "extra"-Ordner mitnehmen soll
           dracut --force --add-drivers vds_hcd --kver "${KERNEL_VERSION}"
           
           echo "=== Build erfolgreich abgeschlossen! ==="
         '
+
