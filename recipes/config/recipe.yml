@@ -26,22 +26,22 @@ modules:
           echo "=== 2. In den module-Ordner wechseln ==="
           cd /tmp/vds_source/module
           
-          # Ermittle die genaue Kernel-Version des Ziel-Images
+          # Ermittle die genaue Kernel-Version des Ziel-Images (Bazzite)
           KERNEL_VERSION=$(rpm -q --qf "%{VERSION}-%{RELEASE}.%{ARCH}\n" kernel | head -n 1)
-          echo "Ziel-Kernel Version: ${KERNEL_VERSION}"
+          echo "Echter Bazzite-Kernel: ${KERNEL_VERSION}"
           
-          echo "=== 3. Kernel-Build-Verzeichnis reparieren ==="
-          # Falls der symbolische Link /build ins Leere zeigt oder fehlt, biegen wir ihn 
-          # direkt auf den realen Speicherort unter /usr/src/kernels/ um.
+          echo "=== 3. Kernel-Build-Verzeichnis verknüpfen ==="
+          # Wir suchen den realen Pfad der installierten Bazzite-Header
           REAL_KERNEL_DIR=$(ls -d /usr/src/kernels/${KERNEL_VERSION}* | head -n 1)
           echo "Echte Kernel-Header gefunden in: ${REAL_KERNEL_DIR}"
           
-          # Wir löschen den kaputten Link und setzen ihn neu auf den echten Ordner
+          # Wir korrigieren den Link im Bazzite-Pfad
           rm -f /usr/lib/modules/${KERNEL_VERSION}/build
           ln -s "${REAL_KERNEL_DIR}" /usr/lib/modules/${KERNEL_VERSION}/build
           
-          echo "=== 4. Bauvorgang starten ==="
-          make KCFLAGS="-w" KERNELDIR=/usr/lib/modules/${KERNEL_VERSION}/build
+          echo "=== 4. Bauvorgang starten (Azure-Kernel blockieren) ==="
+          # WICHTIG: Wir überschreiben KERNELRELEASE, damit das Makefile NICHT den GitHub-Server abfragt!
+          make KCFLAGS="-w" KERNELRELEASE="${KERNEL_VERSION}" KERNELDIR=/usr/lib/modules/${KERNEL_VERSION}/build
           
           echo "=== 5. Kernel-Modul an einen sicheren Ort kopieren ==="
           MODULE_DEST="/usr/lib/modules/${KERNEL_VERSION}/updates"
