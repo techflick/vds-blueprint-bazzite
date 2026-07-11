@@ -1,11 +1,12 @@
 # yaml-language-server: $schema=https://blue-build.org
 name: mein-bazzite-vds
-description: Mein persönliches Bazzite mit nativer Integration des vDS Treibers als RPM Paket.
+description: Mein persönliches Bazzite mit nativer Integration des vDS Treibers und BlueZ-Kompatibilität.
 
 base-image: ghcr.io/ublue-os/bazzite
 image-version: latest
 
 modules:
+  # 1. Werkzeuge für das Kompilieren installieren
   - type: rpm-ostree
     install:
       - kernel-devel
@@ -16,6 +17,7 @@ modules:
       - rubygems
       - rpm-build
 
+  # 2. Treiber bauen, Paket packen und Bluetooth-Dienst anpassen
   - type: script
     snippets:
       - |
@@ -30,20 +32,13 @@ modules:
           git clone https://github.com/hurryman2212/vds.git /tmp/vds_source
           cd /tmp/vds_source/module
           
-          # Kernel-Version über das installierte kernel-devel Verzeichnis ermitteln
           KERNEL_VERSION=$(ls -1 /usr/src/kernels/ | head -n 1)
-          
           if [ -z "${KERNEL_VERSION}" ]; then
-            echo "FEHLER: Keine Kernel-Header in /usr/src/kernels/ gefunden!"
+            echo "FEHLER: Keine Kernel-Header gefunden!"
             exit 1
           fi
           
-          echo "Ziel-Kernel für die Kompilierung ermittelt: ${KERNEL_VERSION}"
-          
-          # RPM-kompatible Iteration erstellen (Bindestriche durch Unterstriche ersetzen)
           RPM_ITERATION=$(echo "${KERNEL_VERSION}" | tr "-" "_")
-          
-          # Kernel-Build-Pfad setzen
           KERNEL_BUILD_DIR="/usr/src/kernels/${KERNEL_VERSION}"
           
           echo "=== 3. Treiber kompilieren ==="
@@ -55,14 +50,18 @@ modules:
           mkdir -p "${PKG_ROOT}/usr/lib/modules-load.d"
           mkdir -p "${PKG_ROOT}/usr/lib/systemd/system/bluetooth.service.d"
           
+          # Treiber-Modul kopieren
           cp vds_hcd.ko "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra/"
           chmod 644 "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra/vds_hcd.ko"
+          
+          # Autoload für das Kernel-Modul beim Booten einrichten
           echo "vds_hcd" > "${PKG_ROOT}/usr/lib/modules-load.d/vds.conf"
           
+          # Bluetooth-Dienst anpassen: --compat aktiviert den SDP-Socket, --noplugin=input verhindert Konflikte mit dem Controller
           cat << "EOF" > "${PKG_ROOT}/usr/lib/systemd/system/bluetooth.service.d/override.conf"
         [Service]
         ExecStart=
-        ExecStart=/usr/libexec/bluetooth/bluetoothd --noplugin=input
+        ExecStart=/usr/libexec/bluetooth/bluetoothd --compat --noplugin=input
         EOF
 
           echo "=== 5. Echtes RPM Paket generieren ==="
@@ -74,10 +73,25 @@ modules:
             -C "${PKG_ROOT}" \
             usr/lib/modules usr/lib/modules-load.d usr/lib/systemd
             
-          echo "=== 6. Das generierte Paket installieren ==="
-          rpm -ivh kmod-vds-1.0.0-*.rpm
+          echo "=== 6. RPM für die Installation bereitlegen ==="
+          mv /tmp/kmod-vds-1.0.0-*.rpm /tmp/kmod-vds.rpm
           
-          echo "=== 7. Bereinigung ==="
-          rm -rf /tmp/vds_source /tmp/vds-pkg-root /tmp/kmod-vds-*.rpm
-          echo "=== Build erfolgreich abgeschlossen! ==="
+          echo "=== 7. Bereinigung des Quellcodes ==="
+          rm -rf /tmp/vds_source /tmp/vds-pkg-root
         '
+
+  # 3. Das RPM sauber über rpm-ostree einpflegen (Erzeugt automatisch den depmod-Index!)
+  - type: rpm-ostree
+    install:
+      - /tmp/kmod-vds.rpm
+
+  # 4. Temporäre Build-Tools wieder entfernen, damit das Image schlank bleibt
+  - type: rpm-ostree
+    remove:
+      - kernel-devel
+      - make
+      - gcc
+      - git
+      - ruby-devel
+      - rubygems
+      - rpm-build
