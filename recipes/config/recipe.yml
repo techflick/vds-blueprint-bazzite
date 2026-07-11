@@ -41,14 +41,13 @@ modules:
         KERNEL_BUILD_DIR="/usr/src/kernels/${KERNEL_VERSION}"
         
         echo "=== 2b. Minimale BlueZ-Schnittstellen lokal erstellen ==="
-        # Da kein Internet im Container aktiv ist, erstellen wir die Header-Strukturen direkt per Echo
         mkdir -p /usr/include/bluetooth
 
         # bluetooth.h
         echo "#ifndef __BLUETOOTH_H" > /usr/include/bluetooth/bluetooth.h
         echo "#define __BLUETOOTH_H" >> /usr/include/bluetooth/bluetooth.h
         echo "#include <stdint.h>" >> /usr/include/bluetooth/bluetooth.h
-        echo "typedef struct { uint8_t b[6]; } __attribute__((packed)) bdaddr_t;" >> /usr/include/bluetooth/bluetooth.h
+        echo "typedef struct { uint8_t b; } __attribute__((packed)) bdaddr_t;" >> /usr/include/bluetooth/bluetooth.h
         echo "#define AF_BLUETOOTH 31" >> /usr/include/bluetooth/bluetooth.h
         echo "#define PF_BLUETOOTH AF_BLUETOOTH" >> /usr/include/bluetooth/bluetooth.h
         echo "#define BTPROTO_L2CAP 0" >> /usr/include/bluetooth/bluetooth.h
@@ -81,8 +80,8 @@ modules:
         # 3b. Userspace-Daemon via CMake bauen
         cd /tmp/vds_source
         
-        # Wir übergehen den pkg-config-Check von CMake, da die Header nun lokal bereitstehen
-        sed -i 's/pkg_check_modules(bluez REQUIRED bluez)/set(bluez_FOUND TRUE)/g' CMakeLists.txt
+        # JETZT KORREKT: Wir manipulieren die Datei im Unterordner 'src'
+        sed -i 's/pkg_check_modules(bluez REQUIRED bluez)/set(bluez_FOUND TRUE)/g' src/CMakeLists.txt
         
         mkdir build
         cd build
