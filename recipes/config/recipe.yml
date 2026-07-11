@@ -18,7 +18,7 @@ modules:
       - rubygems
       - rpm-build
       - dbus-devel
-      - opus-devel # Neu hinzugefügt für die Audio-Kompilierung des Daemons
+      - opus-devel
 
   - type: script
     snippets:
@@ -84,6 +84,9 @@ modules:
         
         # Den alten BlueZ Check weiterhin überspringen
         sed -i '/pkg_check_modules.*bluez/c\set(bluez_FOUND TRUE)' CMakeLists.txt
+        
+        # NEU: Wir entfernen die fehlerhafte Linker-Anweisung für PkgConfig::BLUEZ aus der CMake-Konfiguration
+        sed -i 's/PkgConfig::BLUEZ//g' CMakeLists.txt
         
         mkdir -p build
         cd build
