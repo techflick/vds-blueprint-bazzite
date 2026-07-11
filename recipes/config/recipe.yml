@@ -40,12 +40,38 @@ modules:
         RPM_ITERATION=$(echo "${KERNEL_VERSION}" | tr "-" "_")
         KERNEL_BUILD_DIR="/usr/src/kernels/${KERNEL_VERSION}"
         
-        echo "=== 2b. Fehlende BlueZ-Header manuell bereitstellen ==="
-        # Wir holen uns die originalen C-Header direkt aus dem Linux-Kernel-Quellbaum
+        echo "=== 2b. Minimale BlueZ-Schnittstellen lokal erstellen ==="
+        # Da kein Internet im Container aktiv ist, erstellen wir die Header-Strukturen direkt per Echo
         mkdir -p /usr/include/bluetooth
-        curl -sSL -o /usr/include/bluetooth/bluetooth.h https://githubusercontent.com
-        curl -sSL -o /usr/include/bluetooth/hci.h https://githubusercontent.com
-        curl -sSL -o /usr/include/bluetooth/l2cap.h https://githubusercontent.com
+
+        # bluetooth.h
+        echo "#ifndef __BLUETOOTH_H" > /usr/include/bluetooth/bluetooth.h
+        echo "#define __BLUETOOTH_H" >> /usr/include/bluetooth/bluetooth.h
+        echo "#include <stdint.h>" >> /usr/include/bluetooth/bluetooth.h
+        echo "typedef struct { uint8_t b[6]; } __attribute__((packed)) bdaddr_t;" >> /usr/include/bluetooth/bluetooth.h
+        echo "#define AF_BLUETOOTH 31" >> /usr/include/bluetooth/bluetooth.h
+        echo "#define PF_BLUETOOTH AF_BLUETOOTH" >> /usr/include/bluetooth/bluetooth.h
+        echo "#define BTPROTO_L2CAP 0" >> /usr/include/bluetooth/bluetooth.h
+        echo "#endif" >> /usr/include/bluetooth/bluetooth.h
+
+        # hci.h
+        echo "#ifndef __HCI_H" > /usr/include/bluetooth/hci.h
+        echo "#define __HCI_H" >> /usr/include/bluetooth/hci.h
+        echo "#include <bluetooth/bluetooth.h>" >> /usr/include/bluetooth/hci.h
+        echo "#endif" >> /usr/include/bluetooth/hci.h
+
+        # l2cap.h
+        echo "#ifndef __L2CAP_H" > /usr/include/bluetooth/l2cap.h
+        echo "#define __L2CAP_H" >> /usr/include/bluetooth/l2cap.h
+        echo "#include <bluetooth/bluetooth.h>" >> /usr/include/bluetooth/l2cap.h
+        echo "struct sockaddr_l2 {" >> /usr/include/bluetooth/l2cap.h
+        echo "    sa_family_t l2_family;" >> /usr/include/bluetooth/l2cap.h
+        echo "    uint16_t    l2_psm;" >> /usr/include/bluetooth/l2cap.h
+        echo "    bdaddr_t    l2_bdaddr;" >> /usr/include/bluetooth/l2cap.h
+        echo "    uint16_t    l2_cid;" >> /usr/include/bluetooth/l2cap.h
+        echo "    uint8_t     l2_bdaddr_type;" >> /usr/include/bluetooth/l2cap.h
+        echo "};" >> /usr/include/bluetooth/l2cap.h
+        echo "#endif" >> /usr/include/bluetooth/l2cap.h
 
         echo "=== 3. Native Kompilierung ==="
         # 3a. Kernel-Modul bauen
@@ -55,7 +81,7 @@ modules:
         # 3b. Userspace-Daemon via CMake bauen
         cd /tmp/vds_source
         
-        # Wir bringen CMake dazu, die pkg-config Prüfung zu überspringen, da wir die Header manuell gesetzt haben
+        # Wir übergehen den pkg-config-Check von CMake, da die Header nun lokal bereitstehen
         sed -i 's/pkg_check_modules(bluez REQUIRED bluez)/set(bluez_FOUND TRUE)/g' CMakeLists.txt
         
         mkdir build
@@ -93,7 +119,7 @@ modules:
         echo "Requires=bluetooth.service" >> "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service"
         echo "" >> "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service"
         echo "[Service]" >> "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service"
-        echo "Type=simple" >> "${PKG_ROOT}/usr/bin/vdsd"
+        echo "Type=simple" >> "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service"
         echo "ExecStart=/usr/bin/vdsd" >> "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service"
         echo "Restart=always" >> "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service"
         echo "RestartSec=3" >> "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service"
