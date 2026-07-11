@@ -17,6 +17,7 @@ modules:
       - ruby-devel
       - rubygems
       - rpm-build
+      - bluez-libs-devel # Neu hinzugefügt für den CMake BlueZ Check
 
   - type: script
     snippets:
@@ -41,7 +42,7 @@ modules:
         KERNEL_BUILD_DIR="/usr/src/kernels/${KERNEL_VERSION}"
         
         echo "=== 3. Native Kompilierung ==="
-        # 3a. Kernel-Modul wie gewohnt bauen
+        # 3a. Kernel-Modul bauen
         cd /tmp/vds_source/module
         make KCFLAGS="-w" KERNELRELEASE="${KERNEL_VERSION}" KERNELDIR="${KERNEL_BUILD_DIR}"
         
