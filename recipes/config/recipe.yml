@@ -1,6 +1,6 @@
 # yaml-language-server: $schema=https://blue-build.org
 name: mein-bazzite-vds
-description: Mein persönliches Bazzite mit automatischer Aktivierung des vDS Treibers.
+description: Mein persönliches Bazzite mit nativer Integration des vDS Treibers als RPM Paket.
 
 base-image: ghcr.io/ublue-os/bazzite
 image-version: latest
@@ -12,56 +12,66 @@ modules:
       - make
       - gcc
       - git
+      - ruby-devel
+      - rubygems
 
   - type: script
     snippets:
       - |
         bash -c '
-          set -e # Bricht bei Fehlern sofort ab
+          set -e
 
-          echo "=== 1. vDS Quellcode frisch klonen ==="
+          echo "=== 1. Vorbereitungen für Paketierung ==="
+          gem install --no-document fpm
+          
+          echo "=== 2. Quellcode holen ==="
           rm -rf /tmp/vds_source
           git clone https://github.com/hurryman2212/vds.git /tmp/vds_source
-          
-          echo "=== 2. In den module-Ordner wechseln ==="
           cd /tmp/vds_source/module
           
-          # Ermittle die genaue Kernel-Version des Ziel-Images (Bazzite)
-          KERNEL_VERSION=$(rpm -q --qf "%{VERSION}-%{RELEASE}.%{ARCH}\n" kernel | head -n 1)
-          echo "Echter Bazzite-Kernel: ${KERNEL_VERSION}"
+          # Ermittle die exakte Kernel-Version des Ziel-Images
+          KERNEL_VERSION=$(rpm -q --qf "%{VERSION}-%{RELEASE}.%|ARCH?{%{ARCH}}:{%|_target_cpu}||\n" kernel | head -n 1)
+          echo "Ziel-Kernel für die Kompilierung: ${KERNEL_VERSION}"
           
-          echo "=== 3. Kernel-Build-Verzeichnis verknüpfen ==="
-          # Wir suchen den realen Pfad der installierten Bazzite-Header
-          REAL_KERNEL_DIR=$(ls -d /usr/src/kernels/${KERNEL_VERSION}* | head -n 1)
-          echo "Echte Kernel-Header gefunden in: ${REAL_KERNEL_DIR}"
+          # Kernel-Build-Pfad validieren
+          KERNEL_BUILD_DIR="/usr/lib/modules/${KERNEL_VERSION}/build"
           
-          # Wir korrigieren den Link im Bazzite-Pfad
-          rm -f /usr/lib/modules/${KERNEL_VERSION}/build
-          ln -s "${REAL_KERNEL_DIR}" /usr/lib/modules/${KERNEL_VERSION}/build
+          echo "=== 3. Treiber kompilieren ==="
+          make KCFLAGS="-w" KERNELRELEASE="${KERNEL_VERSION}" KERNELDIR="${KERNEL_BUILD_DIR}"
           
-          echo "=== 4. Bauvorgang starten (Azure-Kernel blockieren) ==="
-          # WICHTIG: Wir überschreiben KERNELRELEASE, damit das Makefile NICHT den GitHub-Server abfragt!
-          make KCFLAGS="-w" KERNELRELEASE="${KERNEL_VERSION}" KERNELDIR=/usr/lib/modules/${KERNEL_VERSION}/build
+          echo "=== 4. Installations-Struktur simulieren ==="
+          # Wir bauen die Ordnerstruktur in einem temporären Verzeichnis nach
+          PKG_ROOT="/tmp/vds-pkg-root"
+          mkdir -p "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra"
+          mkdir -p "${PKG_ROOT}/usr/lib/modules-load.d"
+          mkdir -p "${PKG_ROOT}/usr/lib/systemd/system/bluetooth.service.d"
           
-          echo "=== 5. Kernel-Modul an einen sicheren Ort kopieren ==="
-          MODULE_DEST="/usr/lib/modules/${KERNEL_VERSION}/updates"
-          mkdir -p "${MODULE_DEST}"
-          cp vds_hcd.ko "${MODULE_DEST}/"
+          # Dateien an ihren simulierten Platz legen
+          cp vds_hcd.ko "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra/"
+          chmod 644 "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra/vds_hcd.ko"
+          echo "vds_hcd" > "${PKG_ROOT}/usr/lib/modules-load.d/vds.conf"
           
-          echo "=== 6. Kernel-Modul für automatischen Start registrieren ==="
-          mkdir -p /usr/lib/modules-load.d
-          echo "vds_hcd" > /usr/lib/modules-load.d/vds.conf
-
-          echo "=== 7. Bluetooth-Anpassung aktivieren ==="
-          mkdir -p /usr/lib/systemd/system/bluetooth.service.d
-          cat << "EOF" > /usr/lib/systemd/system/bluetooth.service.d/override.conf
+          cat << "EOF" > "${PKG_ROOT}/usr/lib/systemd/system/bluetooth.service.d/override.conf"
         [Service]
         ExecStart=
         ExecStart=/usr/libexec/bluetooth/bluetoothd --noplugin=input
         EOF
 
-          echo "=== 8. Berechtigungen sicherstellen ==="
-          chmod 644 "${MODULE_DEST}/vds_hcd.ko"
+          echo "=== 5. Echtes RPM Paket generieren ==="
+          cd /tmp
+          fpm -s dir -t rpm \
+            -n "kmod-vds" \
+            -v "1.0.0" \
+            --iteration "${KERNEL_VERSION}" \
+            -C "${PKG_ROOT}" \
+            usr/lib/modules usr/lib/modules-load.d usr/lib/systemd
+            
+          echo "=== 6. Das generierte Paket sauber via rpm-ostree installieren ==="
+          # Hier installieren wir es so, wie Bazzite es von "fertigen" Paketen erwartet
+          rpm-ostree cliwrap install-to-root /
+          rpm -ivh kmod-vds-1.0.0-*.rpm
           
-          echo "=== Build im Skript abgeschlossen. Blue-Build übernimmt den Rest! ==="
+          echo "=== 7. Bereinigung der Build-Werkzeuge (spart Image-Größe) ==="
+          # Optionale Aufräumarbeit
+          rm -rf /tmp/vds_source /tmp/vds-pkg-root /tmp/kmod-vds-*.rpm
         '
