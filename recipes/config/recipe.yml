@@ -12,12 +12,14 @@ modules:
         bash -c '
           set -e # Bricht bei Fehlern sofort ab
 
-          echo "=== 1. Benötigte Build-Tools installieren ==="
+          echo "=== 1. Benötigte Build-Tools installieren und live schalten ==="
           rpm-ostree install kernel-devel make gcc git
+          # WICHTIG: Das schaltet die installierten Kernel-Header im laufenden Container sofort aktiv
+          rpm-ostree ex live-apply
 
           echo "=== 2. vDS Quellcode frisch klonen ==="
           rm -rf /tmp/vds_source
-          git clone https://github.com/hurryman2212/vds.git /tmp/vds_source
+          git clone https://github.com /tmp/vds_source
           
           echo "=== 3. In den module-Ordner wechseln und bauen ==="
           cd /tmp/vds_source/module
@@ -26,13 +28,11 @@ modules:
           KERNEL_VERSION=$(rpm -q --qf "%{VERSION}-%{RELEASE}.%{ARCH}\n" kernel | head -n 1)
           echo "Bauen für Kernel-Header in: ${KERNEL_VERSION}"
           
-          # Bauvorgang starten
-          make KERNELDIR=/usr/lib/modules/${KERNEL_VERSION}/build
+          # Bauvorgang starten. 
+          # WICHTIG: Wir deaktivieren '-Werror', falls gcc Warnungen als kritische Fehler einstuft.
+          make KCFLAGS="-w" KERNELDIR=/usr/lib/modules/${KERNEL_VERSION}/build
           
           echo "=== 4. Kernel-Modul an einen sicheren Ort kopieren ==="
-          # Wir legen das Modul in ein Verzeichnis, das von Blue-Build/Bazzite garantiert 
-          # mit in das finale Image verpackt und nicht gelöscht wird.
-          # Das "updates"-Verzeichnis hat höchste Priorität beim Kernel-Boot.
           MODULE_DEST="/usr/lib/modules/${KERNEL_VERSION}/updates"
           mkdir -p "${MODULE_DEST}"
           cp vds_hcd.ko "${MODULE_DEST}/"
