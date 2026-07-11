@@ -20,7 +20,6 @@ modules:
           git clone https://github.com /tmp/vds_source
           
           echo "=== 3. In den module-Ordner wechseln und bauen ==="
-          # GEFIXT: Der Ordner im Repository heißt "module", nicht "driver"
           cd /tmp/vds_source/module
           
           # Ermittle die genaue Kernel-Version des Ziel-Images
@@ -30,9 +29,11 @@ modules:
           # Bauvorgang starten
           make KERNELDIR=/usr/lib/modules/${KERNEL_VERSION}/build
           
-          echo "=== 4. Kernel-Modul an den ostree-konformen Ort kopieren ==="
-          # /usr/lib/modules/extra ist im Build beschreibbar. Ostree verknüpft das beim Booten.
-          MODULE_DEST="/usr/lib/modules/extra"
+          echo "=== 4. Kernel-Modul an einen sicheren Ort kopieren ==="
+          # Wir legen das Modul in ein Verzeichnis, das von Blue-Build/Bazzite garantiert 
+          # mit in das finale Image verpackt und nicht gelöscht wird.
+          # Das "updates"-Verzeichnis hat höchste Priorität beim Kernel-Boot.
+          MODULE_DEST="/usr/lib/modules/${KERNEL_VERSION}/updates"
           mkdir -p "${MODULE_DEST}"
           cp vds_hcd.ko "${MODULE_DEST}/"
           
@@ -48,9 +49,8 @@ modules:
         ExecStart=/usr/libexec/bluetooth/bluetoothd --noplugin=input
         EOF
 
-          echo "=== 7. Initramfs für das finale Image aktualisieren ==="
-          # Zwingt dracut, den Treiber aus dem extra-Ordner in die Boot-Ramdisk zu packen
-          dracut --force --add-drivers vds_hcd --kver "${KERNEL_VERSION}"
+          echo "=== 7. Berechtigungen sicherstellen ==="
+          chmod 644 "${MODULE_DEST}/vds_hcd.ko"
           
-          echo "=== Build erfolgreich abgeschlossen! ==="
+          echo "=== Build im Skript abgeschlossen. Blue-Build übernimmt den Rest! ==="
         '
