@@ -1,3 +1,10 @@
+# yaml-language-server: $schema=https://blue-build.org
+name: mein-bazzite-vds
+description: Mein persönliches Bazzite mit nativer Integration des vDS Treibers und Daemons ohne Distrobox.
+
+base-image: ghcr.io/ublue-os/bazzite
+image-version: latest
+
 modules:
   - type: rpm-ostree
     install:
@@ -18,7 +25,7 @@ modules:
       - |
         RUN gem install --no-document fpm
         
-        RUN git clone https://github.com/hurryman2212/vds.git /tmp/vds_source
+        RUN git clone https://github.com /tmp/vds_source
             
         RUN KERNEL_VERSION=$(ls -1 /usr/src/kernels/ | head -n 1) && \
             RPM_ITERATION=$(echo "${KERNEL_VERSION}" | tr "-" "_") && \
@@ -48,7 +55,7 @@ modules:
             find /tmp/vds_source/build -type f -name "vdsctl" -exec cp {} "${PKG_ROOT}/usr/bin/vdsctl" \; && \
             chmod 755 "${PKG_ROOT}/usr/bin/vdsd" "${PKG_ROOT}/usr/bin/vdsctl" && \
             echo "vds_hcd" > "${PKG_ROOT}/usr/lib/modules-load.d/vds.conf" && \
-            echo -e "[Service]\nExecStart=\nExecStart=/usr/libexec/bluetooth/bluetoothd --compat --noplugin=input,hog" > "${ROOT}/usr/lib/systemd/system/bluetooth.service.d/override.conf" && \
+            echo -e "[Service]\nExecStart=\nExecStart=/usr/libexec/bluetooth/bluetoothd --compat --noplugin=input,hog" > "${PKG_ROOT}/usr/lib/systemd/system/bluetooth.service.d/override.conf" && \
             echo -e "[Unit]\nDescription=Virtual DualSense Userspace Daemon\nAfter=bluetooth.service\nRequires=bluetooth.service\n\n[Service]\nType=simple\nExecStart=/usr/bin/vdsd\nRestart=always\nRestartSec=3\n\n[Install]\nWantedBy=multi-user.target" > "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service" && \
             echo -e "[Unit]\nDescription=Setze Berechtigungen für vDS SDP-Socket\nAfter=bluetooth.service\n\n[Service]\nType=oneshot\nExecStart=/usr/bin/chmod 0777 /run/sdp" > "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.service" && \
             echo -e "[Unit]\nDescription=Überwache vDS SDP-Socket Existenz\n\n[Path]\nPathChanged=/run/sdp\n\n[Install]\nWantedBy=multi-user.target" > "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.path" && \
