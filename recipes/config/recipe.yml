@@ -1,78 +1,93 @@
 # yaml-language-server: $schema=https://blue-build.org
 name: mein-bazzite-vds
-description: Mein persönliches Bazzite mit isoliertem Treiber-Build und sauberem Image.
+description: Mein persönliches Bazzite mit nativer Integration des vDS Treibers als RPM Paket.
 
 base-image: ghcr.io/ublue-os/bazzite
 image-version: latest
 
 modules:
-  # STAGE 1: Die isolierte Werkstatt (Hier installieren wir die Werkzeuge und bauen den Treiber)
+  - type: rpm-ostree
+    install:
+      - kernel-devel
+      - make
+      - gcc
+      - git
+      - ruby-devel
+      - rubygems
+      - rpm-build
+
   - type: script
     snippets:
       - |
         bash -c '
           set -e
-          echo "=== [Isolierte Werkstatt] Installiere Build-Tools ==="
-          # Diese Pakete landen NUR in der temporären Build-Umgebung und NIEMALS in deinem fertigen Bazzite!
-          rpm-ostree install kernel-devel make gcc git
 
-          echo "=== [Isolierte Werkstatt] Quellcode holen & kompilieren ==="
-          rm -rf /tmp/vds_build
-          git clone https://github.com/hurryman2212/vds.git /tmp/vds_build
-          cd /tmp/vds_build/module
+          echo "=== 1. Vorbereitungen für Paketierung ==="
+          gem install --no-document fpm
           
+          echo "=== 2. Quellcode holen ==="
+          rm -rf /tmp/vds_source
+          git clone https://github.com/hurryman2212/vds.git /tmp/vds_source
+          cd /tmp/vds_source/module
+          
+          # Kernel-Version über das installierte kernel-devel Verzeichnis ermitteln
           KERNEL_VERSION=$(ls -1 /usr/src/kernels/ | head -n 1)
+          
+          if [ -z "${KERNEL_VERSION}" ]; then
+            echo "FEHLER: Keine Kernel-Header in /usr/src/kernels/ gefunden!"
+            exit 1
+          fi
+          
+          echo "Ziel-Kernel für die Kompilierung ermittelt: ${KERNEL_VERSION}"
+          
+          # RPM-kompatible Iteration erstellen (Bindestriche durch Unterstriche ersetzen)
+          RPM_ITERATION=$(echo "${KERNEL_VERSION}" | tr "-" "_")
+          
+          # Kernel-Build-Pfad setzen
           KERNEL_BUILD_DIR="/usr/src/kernels/${KERNEL_VERSION}"
           
+          echo "=== 3. Treiber kompilieren ==="
           make KCFLAGS="-w" KERNELRELEASE="${KERNEL_VERSION}" KERNELDIR="${KERNEL_BUILD_DIR}"
           
-          echo "=== [Isolierte Werkstatt] Fertiges Modul sichern ==="
-          # Wir retten die kompilierte Datei kurz in ein sicheres, temporäres Verzeichnis
-          mkdir -p /tmp/vds_artifacts
-          cp vds_hcd.ko /tmp/vds_artifacts/
+          echo "=== 4. Installations-Struktur simulieren ==="
+          PKG_ROOT="/tmp/vds-pkg-root"
+          mkdir -p "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra"
+          mkdir -p "${PKG_ROOT}/usr/lib/modules-load.d"
+          mkdir -p "${PKG_ROOT}/usr/lib/systemd/system/bluetooth.service.d"
+          mkdir -p "${PKG_ROOT}/usr/lib/tmpfiles.d"
           
-          echo "=== [Isolierte Werkstatt] Werkzeuge rückstandslos entfernen ==="
-          # Wir löschen die Compiler-Tools wieder, BEVOR die Stage abgeschlossen wird
-          rpm-ostree uninstall kernel-devel make gcc git
-          rm -rf /tmp/vds_build
-        '
-
-  # STAGE 2: Die saubere Integration (Hier richten wir nur noch die Konfigurationen im echten Image ein)
-  - type: script
-    snippets:
-      - |
-        bash -c '
-          set -e
-          echo "=== [Echtes Image] Erstelle System-Strukturen ==="
-          KERNEL_VERSION=$(ls -1 /usr/lib/modules/ | head -n 1)
+          cp vds_hcd.ko "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra/"
+          chmod 644 "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra/vds_hcd.ko"
+          echo "vds_hcd" > "${PKG_ROOT}/usr/lib/modules-load.d/vds.conf"
           
-          mkdir -p "/usr/lib/modules/${KERNEL_VERSION}/extra"
-          mkdir -p "/usr/lib/modules-load.d"
-          mkdir -p "/usr/lib/systemd/system/bluetooth.service.d"
-          mkdir -p "/usr/lib/tmpfiles.d"
-          
-          echo "=== [Echtes Image] Platziere Treiber und Konfigurationen ==="
-          # Das sauber gebaute Modul an den finalen Platz legen
-          cp /tmp/vds_artifacts/vds_hcd.ko "/usr/lib/modules/${KERNEL_VERSION}/extra/"
-          chmod 644 "/usr/lib/modules/${KERNEL_VERSION}/extra/vds_hcd.ko"
-          
-          # Autoload für den Kernel aktivieren
-          echo "vds_hcd" > "/usr/lib/modules-load.d/vds.conf"
-          
-          # Bluetooth-Kompatibilitätsmodus einbrennen
-          cat << "EOF" > "/usr/lib/systemd/system/bluetooth.service.d/override.conf"
+          # ERGÄNZUNG 1: --compat hinzugefügt für den SDP-Socket
+          cat << "EOF" > "${PKG_ROOT}/usr/lib/systemd/system/bluetooth.service.d/override.conf"
         [Service]
         ExecStart=
         ExecStart=/usr/libexec/bluetooth/bluetoothd --compat --noplugin=input
         EOF
 
-          # Automatische 777-Rechte für /run/sdp bei jedem Systemstart
-          echo "z /run/sdp 0777 root root -" > "/usr/lib/tmpfiles.d/vds-bluetooth.conf"
+          # ERGÄNZUNG 2: tmpfiles.d sorgt bei JEDEM Boot für chmod 777 auf /run/sdp
+          echo "z /run/sdp 0777 root root -" > "${PKG_ROOT}/usr/lib/tmpfiles.d/vds-bluetooth.conf"
+
+          echo "=== 5. Echtes RPM Paket generieren ==="
+          cd /tmp
+          # usr/lib/tmpfiles.d am Ende zur Paketierung hinzugefügt
+          fpm -s dir -t rpm \
+            -n "kmod-vds" \
+            -v "1.0.0" \
+            --iteration "${RPM_ITERATION}" \
+            -C "${PKG_ROOT}" \
+            usr/lib/modules usr/lib/modules-load.d usr/lib/systemd usr/lib/tmpfiles.d
+            
+          echo "=== 6. Das generierte Paket installieren ==="
+          rpm -ivh kmod-vds-1.0.0-*.rpm
           
-          echo "=== [Echtes Image] Aktualisiere Kernel-Index ==="
+          # ERGÄNZUNG 3: Kernel-Modul-Index direkt nach der Installation neu aufbauen
+          echo "=== 6b. Kernel-Modul-Index aktualisieren ==="
           depmod -a "${KERNEL_VERSION}"
           
-          # Letzte Reste aus dem RAM/Temp löschen
-          rm -rf /tmp/vds_artifacts
-          echo "=== Build erfolgreich und spurlos sauber beendet! ==="
+          echo "=== 7. Bereinigung ==="
+          rm -rf /tmp/vds_source /tmp/vds-pkg-root /tmp/kmod-vds-*.rpm
+          echo "=== Build erfolgreich abgeschlossen! ==="
         '
