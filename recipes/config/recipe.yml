@@ -15,7 +15,6 @@ modules:
       - ruby-devel
       - rubygems
       - rpm-build
-      - bluez-deprecated # Liefert hciconfig/sdptool falls vdsd alte BlueZ-Befehle nutzt
 
   - type: script
     snippets:
@@ -74,7 +73,7 @@ modules:
         ExecStart=/usr/libexec/bluetooth/bluetoothd --compat --noplugin=input
         EOF
 
-          # NEU: Systemd-Service, der den Daemon steuert (wird nach Bluetooth ausgeführt)
+          # Systemd-Service für den vDS Daemon
           cat << "EOF" > "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service"
         [Unit]
         Description=Virtual DualSense Userspace Daemon
