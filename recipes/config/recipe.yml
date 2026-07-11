@@ -11,6 +11,8 @@ modules:
       - kernel-devel
       - make
       - gcc
+      - gcc-c++
+      - cmake
       - git
       - ruby-devel
       - rubygems
@@ -39,10 +41,15 @@ modules:
         KERNEL_BUILD_DIR="/usr/src/kernels/${KERNEL_VERSION}"
         
         echo "=== 3. Native Kompilierung ==="
+        # 3a. Kernel-Modul wie gewohnt bauen
         cd /tmp/vds_source/module
         make KCFLAGS="-w" KERNELRELEASE="${KERNEL_VERSION}" KERNELDIR="${KERNEL_BUILD_DIR}"
         
-        cd /tmp/vds_source/daemon
+        # 3b. Userspace-Daemon und vdsctl via CMake bauen
+        cd /tmp/vds_source
+        mkdir build
+        cd build
+        cmake .. -DCMAKE_BUILD_TYPE=Release
         make
         
         echo "=== 4. Installations-Struktur simulieren ==="
@@ -53,20 +60,22 @@ modules:
         mkdir -p "${PKG_ROOT}/usr/lib/systemd/system/bluetooth.service.d"
         mkdir -p "${PKG_ROOT}/usr/lib/systemd/system"
         
+        # Dateien kopieren (Modul & neue Binaries)
         cp /tmp/vds_source/module/vds_hcd.ko "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra/"
         chmod 644 "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra/vds_hcd.ko"
         
-        cp /tmp/vds_source/daemon/vdsd "${PKG_ROOT}/usr/bin/vdsd"
-        chmod 755 "${PKG_ROOT}/usr/bin/vdsd"
+        cp /tmp/vds_source/build/src/vdsd "${PKG_ROOT}/usr/bin/vdsd"
+        cp /tmp/vds_source/build/src/vdsctl "${PKG_ROOT}/usr/bin/vdsctl"
+        chmod 755 "${PKG_ROOT}/usr/bin/vdsd" "${PKG_ROOT}/usr/bin/vdsctl"
         
         echo "vds_hcd" > "${PKG_ROOT}/usr/lib/modules-load.d/vds.conf"
         
-        # Einzeilige Echos für Bluetooth Override
+        # Bluetooth Service-Override für den SDP-Socket (--compat)
         echo "[Service]" > "${PKG_ROOT}/usr/lib/systemd/system/bluetooth.service.d/override.conf"
         echo "ExecStart=" >> "${PKG_ROOT}/usr/lib/systemd/system/bluetooth.service.d/override.conf"
         echo "ExecStart=/usr/libexec/bluetooth/bluetoothd --compat --noplugin=input" >> "${PKG_ROOT}/usr/lib/systemd/system/bluetooth.service.d/override.conf"
 
-        # Einzeilige Echos für vDS Daemon Service
+        # Systemd-Service für den vDS Daemon
         echo "[Unit]" > "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service"
         echo "Description=Virtual DualSense Userspace Daemon" >> "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service"
         echo "After=bluetooth.service" >> "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service"
@@ -81,7 +90,7 @@ modules:
         echo "[Install]" >> "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service"
         echo "WantedBy=multi-user.target" >> "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service"
 
-        # Einzeilige Echos für chmod Service
+        # Systemd-Service für chmod auf /run/sdp
         echo "[Unit]" > "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.service"
         echo "Description=Setze Berechtigungen für vDS SDP-Socket" >> "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.service"
         echo "After=bluetooth.service" >> "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.service"
@@ -90,7 +99,7 @@ modules:
         echo "Type=oneshot" >> "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.service"
         echo "ExecStart=/usr/bin/chmod 0777 /run/sdp" >> "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.service"
 
-        # Einzeilige Echos für Path Unit
+        # Systemd-Path-Unit zur Überwachung von /run/sdp
         echo "[Unit]" > "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.path"
         echo "Description=Überwache vDS SDP-Socket Existenz" >> "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.path"
         echo "" >> "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.path"
