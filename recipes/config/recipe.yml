@@ -17,7 +17,7 @@ modules:
 
           echo "=== 2. vDS Quellcode frisch klonen ==="
           rm -rf /tmp/vds_source
-          git clone https://github.com /tmp/vds_source
+          git clone https://github.com/hurryman2212/vds.git /tmp/vds_source
           
           echo "=== 3. In den driver-Ordner wechseln und bauen ==="
           cd /tmp/vds_source/driver
