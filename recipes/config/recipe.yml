@@ -16,8 +16,8 @@ modules:
         echo "=== 2. vDS Quellcode klonen und in den Treiber-Ordner wechseln ==="
         git clone https://github.com/hurryman2212/vds.git /tmp/vds_source
         
-        # HIER REPARIEREN WIR DEN PFAD: Wir wechseln gezielt in den Kernel-Modul-Ordner
-        cd /tmp/vds_source/vds_hcd
+        # HIER WAR DER FEHLER: Der Ordner im Git heißt "driver"
+        cd /tmp/vds_source/driver
         
         # Jetzt existiert das Makefile und der Build funktioniert!
         make
