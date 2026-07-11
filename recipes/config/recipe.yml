@@ -1,16 +1,20 @@
-# yaml-language-server: $schema=https://blue-build.org
+# yaml-language-server: $schema=https://schema.blue-build.org/recipe-v1.json
 name: mein-bazzite-vds
 description: Mein persönliches Bazzite mit automatischer Aktivierung des vDS Treibers.
 
 base-image: ghcr.io/ublue-os/bazzite
 image-version: latest
 
-# Das lädt die Build-Tools direkt im GitHub-Container, sodass sie sofort einsatzbereit sind
-containerfiles:
-  build:
-    - RUN dnf install -y kernel-devel make gcc git
-
 modules:
+  # Schritt A: Blue-Build installiert die Tools nativ über sein eigenes Modul
+  - type: rpm-ostree
+    install:
+      - kernel-devel
+      - make
+      - gcc
+      - git
+
+  # Schritt B: Unser Skript baut nun den Treiber mit den bereits vorhandenen Tools
   - type: script
     snippets:
       - |
