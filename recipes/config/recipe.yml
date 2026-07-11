@@ -9,28 +9,34 @@ modules:
   - type: script
     snippets:
       - |
-        echo "=== 1. Benötigte Build-Tools im Image installieren ==="
-        # Werkzeuge für die Cloud-Kompilierung bereitstellen
-        rpm-ostree install kernel-devel make gcc git
+        # Wir verpacken alles in einen echten Bash-Aufruf, damit 'cd' funktioniert
+        bash -c '
+          echo "=== 1. Benötigte Build-Tools installieren ==="
+          rpm-ostree install kernel-devel make gcc git
 
-        echo "=== 2. vDS Quellcode klonen und in den Treiber-Ordner wechseln ==="
-        git clone https://github.com/hurryman2212/vds.git /tmp/vds_source
-        
-        # HIER WAR DER FEHLER: Der Ordner im Git heißt "driver"
-        cd /tmp/vds_source/driver
-        
-        # Jetzt existiert das Makefile und der Build funktioniert!
-        make
-        make install
+          echo "=== 2. vDS Quellcode frisch klonen ==="
+          # Falls der Ordner existiert, räumen wir ihn vorher leer
+          rm -rf /tmp/vds_source
+          git clone https://github.com/hurryman2212/vds.git /tmp/vds_source
+          
+          echo "=== 3. In den driver-Ordner wechseln und bauen ==="
+          cd /tmp/vds_source/driver
+          
+          # Hier listen wir den Inhalt zur Sicherheit im Log auf
+          ls -la
+          
+          make
+          make install
 
-        echo "=== 3. Kernel-Modul für den Systemstart registrieren ==="
-        mkdir -p /etc/modules-load.d
-        echo "vds_hcd" > /etc/modules-load.d/vds.conf
+          echo "=== 4. Kernel-Modul registrieren ==="
+          mkdir -p /etc/modules-load.d
+          echo "vds_hcd" > /etc/modules-load.d/vds.conf
 
-        echo "=== 4. Bluetooth-Anpassung aktivieren ==="
-        mkdir -p /etc/systemd/system/bluetooth.service.d
-        cat << 'EOF' > /etc/systemd/system/bluetooth.service.d/override.conf
+          echo "=== 5. Bluetooth-Anpassung aktivieren ==="
+          mkdir -p /etc/systemd/system/bluetooth.service.d
+          cat << "EOF" > /etc/systemd/system/bluetooth.service.d/override.conf
         [Service]
         ExecStart=
         ExecStart=/usr/libexec/bluetooth/bluetoothd --noplugin=input
         EOF
+        '
