@@ -10,35 +10,34 @@ modules:
     snippets:
       - |
         bash -c '
-          set -e # Bricht bei Fehlern sofort ab, damit Sie im GitHub-Log sehen, wo es klemmt
+          set -e # Bricht bei Fehlern sofort ab, damit wir das Log sehen
 
           echo "=== 1. Benötigte Build-Tools installieren ==="
           rpm-ostree install kernel-devel make gcc git
 
           echo "=== 2. vDS Quellcode frisch klonen ==="
           rm -rf /tmp/vds_source
-          git clone https://github.com/hurryman2212/vds.git /tmp/vds_source
+          git clone https://github.com /tmp/vds_source
           
           echo "=== 3. In den driver-Ordner wechseln und bauen ==="
           cd /tmp/vds_source/driver
           
-          # Ermittle die genaue Kernel-Version des Ziel-Images
+          # Ermittle die genaue Kernel-Version des Ziel-Images für das Suchen der Build-Header
           KERNEL_VERSION=$(rpm -q --qf "%{VERSION}-%{RELEASE}.%{ARCH}\n" kernel | head -n 1)
-          echo "Bauen für Kernel: ${KERNEL_VERSION}"
+          echo "Bauen für Kernel-Header in: ${KERNEL_VERSION}"
           
           # Bauvorgang starten
           make KERNELDIR=/usr/lib/modules/${KERNEL_VERSION}/build
           
-          echo "=== 4. Kernel-Modul manuell an den richtigen Ort kopieren ==="
-          MODULE_DEST="/usr/lib/modules/${KERNEL_VERSION}/extra"
+          echo "=== 4. Kernel-Modul an den ostree-konformen Ort kopieren ==="
+          # WICHTIG: Wir kopieren NICHT nach /usr/lib/modules/${KERNEL_VERSION}/ (schreibgeschützt!)
+          # Stattdessen nutzen wir das spezielle "extra" Verzeichnis, das ostree beim Booten merged.
+          MODULE_DEST="/usr/lib/modules/extra"
           mkdir -p "${MODULE_DEST}"
           cp vds_hcd.ko "${MODULE_DEST}/"
           
-          # Modul-Abhängigkeiten im Image aktualisieren
-          depmod -a "${KERNEL_VERSION}"
-
           echo "=== 5. Kernel-Modul für automatischen Start registrieren ==="
-          # In ublue/Bazzite nutzt man für dauerhafte Configs im Image oft /usr/etc/ oder /usr/lib/modules-load.d/
+          # Nutzen von /usr/lib statt /etc, da /etc im Build-Prozess flüchtig ist
           mkdir -p /usr/lib/modules-load.d
           echo "vds_hcd" > /usr/lib/modules-load.d/vds.conf
 
@@ -50,9 +49,9 @@ modules:
         ExecStart=/usr/libexec/bluetooth/bluetoothd --noplugin=input
         EOF
 
-          echo "=== 7. Initramfs neu bauen (WICHTIG FÜR TREIBER) ==="
-          # Dracut zwingt das System, das neue Modul in das Boot-Image aufzunehmen
-          dracut --force --kver "${KERNEL_VERSION}"
+          echo "=== 7. Initramfs für das finale Image aktualisieren ==="
+          # Hier sagen wir dracut, dass es das Modul aus dem globalen "extra"-Ordner mitnehmen soll
+          dracut --force --add-drivers vds_hcd --kver "${KERNEL_VERSION}"
           
           echo "=== Build erfolgreich abgeschlossen! ==="
         '
