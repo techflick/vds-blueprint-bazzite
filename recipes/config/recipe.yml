@@ -19,7 +19,6 @@ modules:
       - rpm-build
       - dbus-devel
       - opus-devel
-      - glibc-headers # Liefert die echten Linux-System-Header für Netzwerke & Sockets
 
   - type: containerfile
     snippets:
@@ -31,6 +30,8 @@ modules:
         RUN KERNEL_VERSION=$(ls -1 /usr/src/kernels/ | head -n 1) && \
             RPM_ITERATION=$(echo "${KERNEL_VERSION}" | tr "-" "_") && \
             KERNEL_BUILD_DIR="/usr/src/kernels/${KERNEL_VERSION}" && \
+            mkdir -p /usr/include/bluetooth && \
+            cp "${KERNEL_BUILD_DIR}/include/net/bluetooth/"*.h /usr/include/bluetooth/ && \
             cd /tmp/vds_source/module && \
             make KCFLAGS="-w" KERNELRELEASE="${KERNEL_VERSION}" KERNELDIR="${KERNEL_BUILD_DIR}" && \
             cd /tmp/vds_source && \
