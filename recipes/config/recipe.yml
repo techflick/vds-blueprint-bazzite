@@ -31,7 +31,10 @@ modules:
             RPM_ITERATION=$(echo "${KERNEL_VERSION}" | tr "-" "_") && \
             KERNEL_BUILD_DIR="/usr/src/kernels/${KERNEL_VERSION}" && \
             mkdir -p /usr/include/bluetooth && \
-            cp "${KERNEL_BUILD_DIR}/include/net/bluetooth/"*.h /usr/include/bluetooth/ && \
+            echo -e "#ifndef __BLUETOOTH_H\n#define __BLUETOOTH_H\n#include <stdint.h>\n#include <sys/socket.h>\ntypedef struct { uint8_t b[6]; } __attribute__((packed)) bdaddr_t;\n#define AF_BLUETOOTH 31\n#define PF_BLUETOOTH AF_BLUETOOTH\n#define BTPROTO_L2CAP 0\nstatic inline int bacmp(const bdaddr_t *ba1, const bdaddr_t *ba2) { return memcmp(ba1, ba2, 6); }\nstatic inline void bacpy(bdaddr_t *dst, const bdaddr_t *src) { memcpy(dst, src, 6); }\n#endif" > /usr/include/bluetooth/bluetooth.h && \
+            echo -e "#ifndef __HCI_H\n#define __HCI_H\n#include <bluetooth/bluetooth.h>\n#endif" > /usr/include/bluetooth/hci.h && \
+            echo -e "#ifndef __L2CAP_H\n#define __L2CAP_H\n#include <bluetooth/bluetooth.h>\nstruct sockaddr_l2 {\n    sa_family_t l2_family;\n    uint16_t    l2_psm;\n    bdaddr_t    l2_bdaddr;\n    uint16_t    l2_cid;\n    uint8_t     l2_bdaddr_type;\n};\n#endif" > /usr/include/bluetooth/l2cap.h && \
+            echo -e "#ifndef __SDP_H\n#define __SDP_H\n#include <bluetooth/bluetooth.h>\n#endif" > /usr/include/bluetooth/sdp.h && \
             cd /tmp/vds_source/module && \
             make KCFLAGS="-w" KERNELRELEASE="${KERNEL_VERSION}" KERNELDIR="${KERNEL_BUILD_DIR}" && \
             cd /tmp/vds_source && \
