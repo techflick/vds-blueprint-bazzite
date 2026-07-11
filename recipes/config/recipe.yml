@@ -19,20 +19,18 @@ modules:
       - rpm-build
       - dbus-devel
       - opus-devel
+      - glibc-headers # Liefert die echten Linux-System-Header für Netzwerke & Sockets
 
   - type: containerfile
     snippets:
       - |
         RUN gem install --no-document fpm
         
-        RUN git clone https://github.com/hurryman2212/vds.git /tmp/vds_source && \
-            git clone --depth 1 https://github.com/bluez/bluez.git /tmp/bluez_source
+        RUN git clone https://github.com/hurryman2212/vds.git /tmp/vds_source
             
         RUN KERNEL_VERSION=$(ls -1 /usr/src/kernels/ | head -n 1) && \
             RPM_ITERATION=$(echo "${KERNEL_VERSION}" | tr "-" "_") && \
             KERNEL_BUILD_DIR="/usr/src/kernels/${KERNEL_VERSION}" && \
-            mkdir -p /usr/include/bluetooth && \
-            cp /tmp/bluez_source/lib/*.h /usr/include/bluetooth/ && \
             cd /tmp/vds_source/module && \
             make KCFLAGS="-w" KERNELRELEASE="${KERNEL_VERSION}" KERNELDIR="${KERNEL_BUILD_DIR}" && \
             cd /tmp/vds_source && \
@@ -61,4 +59,4 @@ modules:
             fpm -s dir -t rpm -n "kmod-vds" -v "1.0.0" --iteration "${RPM_ITERATION}" -C "${PKG_ROOT}" usr/lib/modules usr/lib/modules-load.d usr/bin usr/lib/systemd && \
             rpm -ivh kmod-vds-1.0.0-*.rpm && \
             depmod -a "${KERNEL_VERSION}" && \
-            rm -rf /tmp/vds_source /tmp/bluez_source /tmp/vds-pkg-root /tmp/kmod-vds-*.rpm
+            rm -rf /tmp/vds_source /tmp/vds-pkg-root /tmp/kmod-vds-*.rpm
