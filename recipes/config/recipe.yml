@@ -19,62 +19,61 @@ modules:
   - type: script
     snippets:
       - |
-        bash -c '
-          set -e
+        set -e
 
-          echo "=== 1. Vorbereitungen für Paketierung ==="
-          gem install --no-document fpm
-          
-          echo "=== 2. Quellcode holen ==="
-          rm -rf /tmp/vds_source
-          git clone https://github.com/hurryman2212/vds.git /tmp/vds_source
-          
-          # Kernel-Version über das installierte kernel-devel Verzeichnis ermitteln
-          KERNEL_VERSION=$(ls -1 /usr/src/kernels/ | head -n 1)
-          if [ -z "${KERNEL_VERSION}" ]; then
-            echo "FEHLER: Keine Kernel-Header in /usr/src/kernels/ gefunden!"
-            exit 1
-          fi
-          echo "Ziel-Kernel für die Kompilierung: ${KERNEL_VERSION}"
-          
-          RPM_ITERATION=$(echo "${KERNEL_VERSION}" | tr "-" "_")
-          KERNEL_BUILD_DIR="/usr/src/kernels/${KERNEL_VERSION}"
-          
-          echo "=== 3. Native Kompilierung ==="
-          # 3a. Kernel-Modul kompilieren
-          cd /tmp/vds_source/module
-          make KCFLAGS="-w" KERNELRELEASE="${KERNEL_VERSION}" KERNELDIR="${KERNEL_BUILD_DIR}"
-          
-          # 3b. Userspace-Daemon nativ für Fedora/Bazzite kompilieren
-          cd /tmp/vds_source/daemon
-          make
-          
-          echo "=== 4. Installations-Struktur simulieren ==="
-          PKG_ROOT="/tmp/vds-pkg-root"
-          mkdir -p "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra"
-          mkdir -p "${PKG_ROOT}/usr/lib/modules-load.d"
-          mkdir -p "${PKG_ROOT}/usr/bin"
-          mkdir -p "${PKG_ROOT}/usr/lib/systemd/system/bluetooth.service.d"
-          mkdir -p "${PKG_ROOT}/usr/lib/systemd/system"
-          
-          # Dateien kopieren (Modul & Daemon)
-          cp /tmp/vds_source/module/vds_hcd.ko "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra/"
-          chmod 644 "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra/vds_hcd.ko"
-          
-          cp /tmp/vds_source/daemon/vdsd "${PKG_ROOT}/usr/bin/vdsd"
-          chmod 755 "${PKG_ROOT}/usr/bin/vdsd"
-          
-          echo "vds_hcd" > "${PKG_ROOT}/usr/lib/modules-load.d/vds.conf"
-          
-          # Bluetooth Service-Override für den SDP-Socket (--compat)
-          cat << "EOF" > "${PKG_ROOT}/usr/lib/systemd/system/bluetooth.service.d/override.conf"
+        echo "=== 1. Vorbereitungen für Paketierung ==="
+        gem install --no-document fpm
+        
+        echo "=== 2. Quellcode holen ==="
+        rm -rf /tmp/vds_source
+        git clone https://github.com/hurryman2212/vds.git /tmp/vds_source
+        
+        # Kernel-Version über das installierte kernel-devel Verzeichnis ermitteln
+        KERNEL_VERSION=$(ls -1 /usr/src/kernels/ | head -n 1)
+        if [ -z "${KERNEL_VERSION}" ]; then
+          echo "FEHLER: Keine Kernel-Header in /usr/src/kernels/ gefunden!"
+          exit 1
+        fi
+        echo "Ziel-Kernel für die Kompilierung: ${KERNEL_VERSION}"
+        
+        RPM_ITERATION=$(echo "${KERNEL_VERSION}" | tr "-" "_")
+        KERNEL_BUILD_DIR="/usr/src/kernels/${KERNEL_VERSION}"
+        
+        echo "=== 3. Native Kompilierung ==="
+        # 3a. Kernel-Modul kompilieren
+        cd /tmp/vds_source/module
+        make KCFLAGS="-w" KERNELRELEASE="${KERNEL_VERSION}" KERNELDIR="${KERNEL_BUILD_DIR}"
+        
+        # 3b. Userspace-Daemon nativ für Fedora/Bazzite kompilieren
+        cd /tmp/vds_source/daemon
+        make
+        
+        echo "=== 4. Installations-Struktur simulieren ==="
+        PKG_ROOT="/tmp/vds-pkg-root"
+        mkdir -p "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra"
+        mkdir -p "${PKG_ROOT}/usr/lib/modules-load.d"
+        mkdir -p "${PKG_ROOT}/usr/bin"
+        mkdir -p "${PKG_ROOT}/usr/lib/systemd/system/bluetooth.service.d"
+        mkdir -p "${PKG_ROOT}/usr/lib/systemd/system"
+        
+        # Dateien kopieren (Modul & Daemon)
+        cp /tmp/vds_source/module/vds_hcd.ko "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra/"
+        chmod 644 "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra/vds_hcd.ko"
+        
+        cp /tmp/vds_source/daemon/vdsd "${PKG_ROOT}/usr/bin/vdsd"
+        chmod 755 "${PKG_ROOT}/usr/bin/vdsd"
+        
+        echo "vds_hcd" > "${PKG_ROOT}/usr/lib/modules-load.d/vds.conf"
+        
+        # Bluetooth Service-Override für den SDP-Socket (--compat)
+        cat << "EOF" > "${PKG_ROOT}/usr/lib/systemd/system/bluetooth.service.d/override.conf"
         [Service]
         ExecStart=
         ExecStart=/usr/libexec/bluetooth/bluetoothd --compat --noplugin=input
         EOF
 
-          # Systemd-Service für den vDS Daemon
-          cat << "EOF" > "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service"
+        # Systemd-Service für den vDS Daemon
+        cat << "EOF" > "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service"
         [Unit]
         Description=Virtual DualSense Userspace Daemon
         After=bluetooth.service
@@ -90,8 +89,8 @@ modules:
         WantedBy=multi-user.target
         EOF
 
-          # Systemd-Service für chmod auf /run/sdp
-          cat << "EOF" > "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.service"
+        # Systemd-Service für chmod auf /run/sdp
+        cat << "EOF" > "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.service"
         [Unit]
         Description=Setze Berechtigungen für vDS SDP-Socket
         After=bluetooth.service
@@ -101,8 +100,8 @@ modules:
         ExecStart=/usr/bin/chmod 0777 /run/sdp
         EOF
 
-          # Systemd-Path-Unit zur Überwachung von /run/sdp
-          cat << "EOF" > "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.path"
+        # Systemd-Path-Unit zur Überwachung von /run/sdp
+        cat << "EOF" > "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.path"
         [Unit]
         Description=Überwache vDS SDP-Socket Existenz
 
@@ -113,22 +112,21 @@ modules:
         WantedBy=multi-user.target
         EOF
 
-          echo "=== 5. Echtes RPM Paket generieren ==="
-          cd /tmp
-          fpm -s dir -t rpm \
-            -n "kmod-vds" \
-            -v "1.0.0" \
-            --iteration "${RPM_ITERATION}" \
-            -C "${PKG_ROOT}" \
-            usr/lib/modules usr/lib/modules-load.d usr/bin usr/lib/systemd
-            
-          echo "=== 6. Das generierte Paket installieren ==="
-          rpm -ivh kmod-vds-1.0.0-*.rpm
+        echo "=== 5. Echtes RPM Paket generieren ==="
+        cd /tmp
+        fpm -s dir -t rpm \
+          -n "kmod-vds" \
+          -v "1.0.0" \
+          --iteration "${RPM_ITERATION}" \
+          -C "${PKG_ROOT}" \
+          usr/lib/modules usr/lib/modules-load.d usr/bin usr/lib/systemd
           
-          echo "=== 6b. Kernel-Modul-Index aktualisieren ==="
-          depmod -a "${KERNEL_VERSION}"
-          
-          echo "=== 7. Bereinigung ==="
-          rm -rf /tmp/vds_source /tmp/vds-pkg-root /tmp/kmod-vds-*.rpm
-          echo "=== Build erfolgreich abgeschlossen! ==="
-        '
+        echo "=== 6. Das generierte Paket installieren ==="
+        rpm -ivh kmod-vds-1.0.0-*.rpm
+        
+        echo "=== 6b. Kernel-Modul-Index aktualisieren ==="
+        depmod -a "${KERNEL_VERSION}"
+        
+        echo "=== 7. Bereinigung ==="
+        rm -rf /tmp/vds_source /tmp/vds-pkg-root /tmp/kmod-vds-*.rpm
+        echo "=== Build erfolgreich abgeschlossen! ==="
