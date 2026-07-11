@@ -31,8 +31,6 @@ modules:
         echo "=== 2. Quellcode holen ==="
         rm -rf /tmp/vds_source /tmp/bluez_source
         git clone https://github.com/hurryman2212/vds.git /tmp/vds_source
-        
-        # NEU: Wir klonen das offizielle BlueZ-Repository, um an ALLE echten Header-Dateien zu kommen
         git clone --depth 1 https://github.com /tmp/bluez_source
         
         KERNEL_VERSION=$(ls -1 /usr/src/kernels/ | head -n 1)
@@ -46,22 +44,15 @@ modules:
         KERNEL_BUILD_DIR="/usr/src/kernels/${KERNEL_VERSION}"
         
         echo "=== 2b. Echte BlueZ-Header in das System kopieren ==="
-        # Wir kopieren die vollständigen lib-Header von BlueZ direkt nach /usr/include/bluetooth
         mkdir -p /usr/include/bluetooth
         cp /tmp/bluez_source/lib/*.h /usr/include/bluetooth/
 
         echo "=== 3. Native Kompilierung ==="
-        # 3a. Kernel-Modul bauen
         cd /tmp/vds_source/module
         make KCFLAGS="-w" KERNELRELEASE="${KERNEL_VERSION}" KERNELDIR="${KERNEL_BUILD_DIR}"
         
-        # 3b. Userspace-Daemon via CMake bauen
         cd /tmp/vds_source
-        
-        # Den alten BlueZ pkg-config Check weiterhin überspringen
         sed -i '/pkg_check_modules.*bluez/c\set(bluez_FOUND TRUE)' CMakeLists.txt
-        
-        # Die fehlerhafte Verknüpfung entfernen
         sed -i 's/PkgConfig::BLUEZ//g' CMakeLists.txt
         
         mkdir -p build
@@ -77,7 +68,6 @@ modules:
         mkdir -p "${PKG_ROOT}/usr/lib/systemd/system/bluetooth.service.d"
         mkdir -p "${PKG_ROOT}/usr/lib/systemd/system"
         
-        # Dateien kopieren (Modul & neue Binaries)
         cp /tmp/vds_source/module/vds_hcd.ko "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra/"
         chmod 644 "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra/vds_hcd.ko"
         
@@ -87,12 +77,10 @@ modules:
         
         echo "vds_hcd" > "${PKG_ROOT}/usr/lib/modules-load.d/vds.conf"
         
-        # Bluetooth Service-Override für den SDP-Socket (--compat)
         echo "[Service]" > "${PKG_ROOT}/usr/lib/systemd/system/bluetooth.service.d/override.conf"
         echo "ExecStart=" >> "${PKG_ROOT}/usr/lib/systemd/system/bluetooth.service.d/override.conf"
         echo "ExecStart=/usr/libexec/bluetooth/bluetoothd --compat --noplugin=input" >> "${PKG_ROOT}/usr/lib/systemd/system/bluetooth.service.d/override.conf"
 
-        # Systemd-Service für den vDS Daemon
         echo "[Unit]" > "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service"
         echo "Description=Virtual DualSense Userspace Daemon" >> "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service"
         echo "After=bluetooth.service" >> "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service"
@@ -107,7 +95,6 @@ modules:
         echo "[Install]" >> "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service"
         echo "WantedBy=multi-user.target" >> "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service"
 
-        # Systemd-Service für chmod auf /run/sdp
         echo "[Unit]" > "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.service"
         echo "Description=Setze Berechtigungen für vDS SDP-Socket" >> "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.service"
         echo "After=bluetooth.service" >> "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.service"
@@ -116,7 +103,6 @@ modules:
         echo "Type=oneshot" >> "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.service"
         echo "ExecStart=/usr/bin/chmod 0777 /run/sdp" >> "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.service"
 
-        # Systemd-Path-Unit zur Überwachung von /run/sdp
         echo "[Unit]" > "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.path"
         echo "Description=Überwache vDS SDP-Socket Existenz" >> "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.path"
         echo "" >> "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.path"
