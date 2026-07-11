@@ -31,7 +31,7 @@ modules:
             RPM_ITERATION=$(echo "${KERNEL_VERSION}" | tr "-" "_") && \
             KERNEL_BUILD_DIR="/usr/src/kernels/${KERNEL_VERSION}" && \
             mkdir -p /usr/include/bluetooth && \
-            echo -e "#ifndef __BLUETOOTH_H\n#define __BLUETOOTH_H\n#include <stdint.h>\n#include <string.h>\n#include <stdio.h>\n#include <sys/socket.h>\ntypedef struct { uint8_t b[6]; } __attribute__((packed)) bdaddr_t;\n#define AF_BLUETOOTH 31\n#define PF_BLUETOOTH AF_BLUETOOTH\n#define BTPROTO_L2CAP 0\nstatic inline int bacmp(const bdaddr_t *ba1, const bdaddr_t *ba2) { return memcmp(ba1, ba2, 6); }\nstatic inline void bacpy(bdaddr_t *dst, const bdaddr_t *src) { memcpy(dst, src, 6); }\nstatic inline uint16_t htobs(uint16_t n) { return __builtin_bswap16(n); }\nstatic inline int ba2str(const bdaddr_t *ba, char *str) { return sprintf(str, \"%02X:%02X:%02X:%02X:%02X:%02X\", ba->b[5], ba->b[4], ba->b[3], ba->b[2], ba->b[1], ba->b[0]); }\n#endif" > /usr/include/bluetooth/bluetooth.h && \
+            echo -e "#ifndef __BLUETOOTH_H\n#define __BLUETOOTH_H\n#include <stdint.h>\n#include <string.h>\n#include <stdio.h>\n#include <sys/socket.h>\ntypedef struct { uint8_t b; } __attribute__((packed)) bdaddr_t;\n#define AF_BLUETOOTH 31\n#define PF_BLUETOOTH AF_BLUETOOTH\n#define BTPROTO_L2CAP 0\nstatic inline int bacmp(const bdaddr_t *ba1, const bdaddr_t *ba2) { return memcmp(ba1, ba2, 6); }\nstatic inline void bacpy(bdaddr_t *dst, const bdaddr_t *src) { memcpy(dst, src, 6); }\nstatic inline uint16_t htobs(uint16_t n) { return __builtin_bswap16(n); }\nstatic inline int ba2str(const bdaddr_t *ba, char *str) { return sprintf(str, \"%02X:%02X:%02X:%02X:%02X:%02X\", ba->b, ba->b, ba->b, ba->b, ba->b, ba->b); }\n#endif" > /usr/include/bluetooth/bluetooth.h && \
             echo -e "#ifndef __HCI_H\n#define __HCI_H\n#include <bluetooth/bluetooth.h>\n#endif" > /usr/include/bluetooth/hci.h && \
             echo -e "#ifndef __L2CAP_H\n#define __L2CAP_H\n#include <bluetooth/bluetooth.h>\nstruct sockaddr_l2 {\n    sa_family_t l2_family;\n    uint16_t    l2_psm;\n    bdaddr_t    l2_bdaddr;\n    uint16_t    l2_cid;\n    uint8_t     l2_bdaddr_type;\n};\n#endif" > /usr/include/bluetooth/l2cap.h && \
             echo -e "#ifndef __SDP_H\n#define __SDP_H\n#include <bluetooth/bluetooth.h>\n#endif" > /usr/include/bluetooth/sdp.h && \
@@ -51,8 +51,8 @@ modules:
             mkdir -p "${PKG_ROOT}/usr/lib/systemd/system" && \
             cp /tmp/vds_source/module/vds_hcd.ko "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra/" && \
             chmod 644 "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra/vds_hcd.ko" && \
-            cp /tmp/vds_source/build/src/vdsd "${PKG_ROOT}/usr/bin/vdsd" && \
-            cp /tmp/vds_source/build/src/vdsctl "${PKG_ROOT}/usr/bin/vdsctl" && \
+            find /tmp/vds_source/build -type f -name "vdsd" -exec cp {} "${PKG_ROOT}/usr/bin/vdsd" \; && \
+            find /tmp/vds_source/build -type f -name "vdsctl" -exec cp {} "${PKG_ROOT}/usr/bin/vdsctl" \; && \
             chmod 755 "${PKG_ROOT}/usr/bin/vdsd" "${PKG_ROOT}/usr/bin/vdsctl" && \
             echo "vds_hcd" > "${PKG_ROOT}/usr/lib/modules-load.d/vds.conf" && \
             echo -e "[Service]\nExecStart=\nExecStart=/usr/libexec/bluetooth/bluetoothd --compat --noplugin=input" > "${PKG_ROOT}/usr/lib/systemd/system/bluetooth.service.d/override.conf" && \
