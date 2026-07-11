@@ -17,10 +17,10 @@ modules:
 
           echo "=== 2. vDS Quellcode frisch klonen ==="
           rm -rf /tmp/vds_source
-          git clone https://github.com/hurryman2212/vds.git /tmp/vds_source
+          git clone https://github.com /tmp/vds_source
           
           echo "=== 3. In den module-Ordner wechseln und bauen ==="
-          # Der Ordner im Repository heißt "module"
+          # GEFIXT: Der Ordner im Repository heißt "module", nicht "driver"
           cd /tmp/vds_source/module
           
           # Ermittle die genaue Kernel-Version des Ziel-Images
@@ -31,12 +31,10 @@ modules:
           make KERNELDIR=/usr/lib/modules/${KERNEL_VERSION}/build
           
           echo "=== 4. Kernel-Modul an den ostree-konformen Ort kopieren ==="
-          MODULE_DEST="/usr/lib/modules/${KERNEL_VERSION}/extra"
+          # /usr/lib/modules/extra ist im Build beschreibbar. Ostree verknüpft das beim Booten.
+          MODULE_DEST="/usr/lib/modules/extra"
           mkdir -p "${MODULE_DEST}"
           cp vds_hcd.ko "${MODULE_DEST}/"
-          
-          # Abhängigkeiten aktualisieren, damit dracut das Modul kennt
-          depmod -a "${KERNEL_VERSION}"
           
           echo "=== 5. Kernel-Modul für automatischen Start registrieren ==="
           mkdir -p /usr/lib/modules-load.d
@@ -51,8 +49,8 @@ modules:
         EOF
 
           echo "=== 7. Initramfs für das finale Image aktualisieren ==="
+          # Zwingt dracut, den Treiber aus dem extra-Ordner in die Boot-Ramdisk zu packen
           dracut --force --add-drivers vds_hcd --kver "${KERNEL_VERSION}"
           
           echo "=== Build erfolgreich abgeschlossen! ==="
         '
-
