@@ -20,113 +20,45 @@ modules:
       - dbus-devel
       - opus-devel
 
-  - type: script
+  - type: containerfile
     snippets:
       - |
-        set -e
-
-        echo "=== 1. Vorbereitungen für Paketierung ==="
-        gem install --no-document fpm
+        RUN gem install --no-document fpm
         
-        echo "=== 2. Quellcode holen ==="
-        rm -rf /tmp/vds_source /tmp/bluez_source
-        git clone https://github.com/hurryman2212/vds.git /tmp/vds_source
-        git clone --depth 1 https://github.com /tmp/bluez_source
-        
-        KERNEL_VERSION=$(ls -1 /usr/src/kernels/ | head -n 1)
-        if [ -z "${KERNEL_VERSION}" ]; then
-          echo "FEHLER: Keine Kernel-Header in /usr/src/kernels/ gefunden!"
-          exit 1
-        fi
-        echo "Ziel-Kernel für die Kompilierung: ${KERNEL_VERSION}"
-        
-        RPM_ITERATION=$(echo "${KERNEL_VERSION}" | tr "-" "_")
-        KERNEL_BUILD_DIR="/usr/src/kernels/${KERNEL_VERSION}"
-        
-        echo "=== 2b. Echte BlueZ-Header in das System kopieren ==="
-        mkdir -p /usr/include/bluetooth
-        cp /tmp/bluez_source/lib/*.h /usr/include/bluetooth/
-
-        echo "=== 3. Native Kompilierung ==="
-        cd /tmp/vds_source/module
-        make KCFLAGS="-w" KERNELRELEASE="${KERNEL_VERSION}" KERNELDIR="${KERNEL_BUILD_DIR}"
-        
-        cd /tmp/vds_source
-        sed -i '/pkg_check_modules.*bluez/c\set(bluez_FOUND TRUE)' CMakeLists.txt
-        sed -i 's/PkgConfig::BLUEZ//g' CMakeLists.txt
-        
-        mkdir -p build
-        cd build
-        cmake .. -DCMAKE_BUILD_TYPE=Release
-        make
-        
-        echo "=== 4. Installations-Struktur simulieren ==="
-        PKG_ROOT="/tmp/vds-pkg-root"
-        mkdir -p "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra"
-        mkdir -p "${PKG_ROOT}/usr/lib/modules-load.d"
-        mkdir -p "${PKG_ROOT}/usr/bin"
-        mkdir -p "${PKG_ROOT}/usr/lib/systemd/system/bluetooth.service.d"
-        mkdir -p "${PKG_ROOT}/usr/lib/systemd/system"
-        
-        cp /tmp/vds_source/module/vds_hcd.ko "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra/"
-        chmod 644 "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra/vds_hcd.ko"
-        
-        cp /tmp/vds_source/build/src/vdsd "${PKG_ROOT}/usr/bin/vdsd"
-        cp /tmp/vds_source/build/src/vdsctl "${PKG_ROOT}/usr/bin/vdsctl"
-        chmod 755 "${PKG_ROOT}/usr/bin/vdsd" "${PKG_ROOT}/usr/bin/vdsctl"
-        
-        echo "vds_hcd" > "${PKG_ROOT}/usr/lib/modules-load.d/vds.conf"
-        
-        echo "[Service]" > "${PKG_ROOT}/usr/lib/systemd/system/bluetooth.service.d/override.conf"
-        echo "ExecStart=" >> "${PKG_ROOT}/usr/lib/systemd/system/bluetooth.service.d/override.conf"
-        echo "ExecStart=/usr/libexec/bluetooth/bluetoothd --compat --noplugin=input" >> "${PKG_ROOT}/usr/lib/systemd/system/bluetooth.service.d/override.conf"
-
-        echo "[Unit]" > "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service"
-        echo "Description=Virtual DualSense Userspace Daemon" >> "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service"
-        echo "After=bluetooth.service" >> "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service"
-        echo "Requires=bluetooth.service" >> "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service"
-        echo "" >> "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service"
-        echo "[Service]" >> "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service"
-        echo "Type=simple" >> "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service"
-        echo "ExecStart=/usr/bin/vdsd" >> "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service"
-        echo "Restart=always" >> "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service"
-        echo "RestartSec=3" >> "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service"
-        echo "" >> "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service"
-        echo "[Install]" >> "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service"
-        echo "WantedBy=multi-user.target" >> "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service"
-
-        echo "[Unit]" > "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.service"
-        echo "Description=Setze Berechtigungen für vDS SDP-Socket" >> "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.service"
-        echo "After=bluetooth.service" >> "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.service"
-        echo "" >> "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.service"
-        echo "[Service]" >> "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.service"
-        echo "Type=oneshot" >> "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.service"
-        echo "ExecStart=/usr/bin/chmod 0777 /run/sdp" >> "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.service"
-
-        echo "[Unit]" > "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.path"
-        echo "Description=Überwache vDS SDP-Socket Existenz" >> "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.path"
-        echo "" >> "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.path"
-        echo "[Path]" >> "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.path"
-        echo "PathChanged=/run/sdp" >> "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.path"
-        echo "" >> "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.path"
-        echo "[Install]" >> "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.path"
-        echo "WantedBy=multi-user.target" >> "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.path"
-
-        echo "=== 5. Echtes RPM Paket generieren ==="
-        cd /tmp
-        fpm -s dir -t rpm \
-          -n "kmod-vds" \
-          -v "1.0.0" \
-          --iteration "${RPM_ITERATION}" \
-          -C "${PKG_ROOT}" \
-          usr/lib/modules usr/lib/modules-load.d usr/bin usr/lib/systemd
-          
-        echo "=== 6. Das generierte Paket installieren ==="
-        rpm -ivh kmod-vds-1.0.0-*.rpm
-        
-        echo "=== 6b. Kernel-Modul-Index aktualisieren ==="
-        depmod -a "${KERNEL_VERSION}"
-        
-        echo "=== 7. Bereinigung ==="
-        rm -rf /tmp/vds_source /tmp/bluez_source /tmp/vds-pkg-root /tmp/kmod-vds-*.rpm
-        echo "=== Build erfolgreich abgeschlossen! ==="
+        RUN git clone https://github.com/hurryman2212/vds.git /tmp/vds_source && \
+            git clone --depth 1 https://github.com/bluez/bluez.git /tmp/bluez_source
+            
+        RUN KERNEL_VERSION=$(ls -1 /usr/src/kernels/ | head -n 1) && \
+            RPM_ITERATION=$(echo "${KERNEL_VERSION}" | tr "-" "_") && \
+            KERNEL_BUILD_DIR="/usr/src/kernels/${KERNEL_VERSION}" && \
+            mkdir -p /usr/include/bluetooth && \
+            cp /tmp/bluez_source/lib/*.h /usr/include/bluetooth/ && \
+            cd /tmp/vds_source/module && \
+            make KCFLAGS="-w" KERNELRELEASE="${KERNEL_VERSION}" KERNELDIR="${KERNEL_BUILD_DIR}" && \
+            cd /tmp/vds_source && \
+            sed -i '/pkg_check_modules.*bluez/c\set(bluez_FOUND TRUE)' CMakeLists.txt && \
+            sed -i 's/PkgConfig::BLUEZ//g' CMakeLists.txt && \
+            mkdir -p build && cd build && \
+            cmake .. -DCMAKE_BUILD_TYPE=Release && \
+            make && \
+            PKG_ROOT="/tmp/vds-pkg-root" && \
+            mkdir -p "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra" && \
+            mkdir -p "${PKG_ROOT}/usr/lib/modules-load.d" && \
+            mkdir -p "${PKG_ROOT}/usr/bin" && \
+            mkdir -p "${PKG_ROOT}/usr/lib/systemd/system/bluetooth.service.d" && \
+            mkdir -p "${PKG_ROOT}/usr/lib/systemd/system" && \
+            cp /tmp/vds_source/module/vds_hcd.ko "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra/" && \
+            chmod 644 "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra/vds_hcd.ko" && \
+            cp /tmp/vds_source/build/src/vdsd "${PKG_ROOT}/usr/bin/vdsd" && \
+            cp /tmp/vds_source/build/src/vdsctl "${PKG_ROOT}/usr/bin/vdsctl" && \
+            chmod 755 "${PKG_ROOT}/usr/bin/vdsd" "${PKG_ROOT}/usr/bin/vdsctl" && \
+            echo "vds_hcd" > "${PKG_ROOT}/usr/lib/modules-load.d/vds.conf" && \
+            echo -e "[Service]\nExecStart=\nExecStart=/usr/libexec/bluetooth/bluetoothd --compat --noplugin=input" > "${PKG_ROOT}/usr/lib/systemd/system/bluetooth.service.d/override.conf" && \
+            echo -e "[Unit]\nDescription=Virtual DualSense Userspace Daemon\nAfter=bluetooth.service\nRequires=bluetooth.service\n\n[Service]\nType=simple\nExecStart=/usr/bin/vdsd\nRestart=always\nRestartSec=3\n\n[Install]\nWantedBy=multi-user.target" > "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service" && \
+            echo -e "[Unit]\nDescription=Setze Berechtigungen für vDS SDP-Socket\nAfter=bluetooth.service\n\n[Service]\nType=oneshot\nExecStart=/usr/bin/chmod 0777 /run/sdp" > "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.service" && \
+            echo -e "[Unit]\nDescription=Überwache vDS SDP-Socket Existenz\n\n[Path]\nPathChanged=/run/sdp\n\n[Install]\nWantedBy=multi-user.target" > "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.path" && \
+            cd /tmp && \
+            fpm -s dir -t rpm -n "kmod-vds" -v "1.0.0" --iteration "${RPM_ITERATION}" -C "${PKG_ROOT}" usr/lib/modules usr/lib/modules-load.d usr/bin usr/lib/systemd && \
+            rpm -ivh kmod-vds-1.0.0-*.rpm && \
+            depmod -a "${KERNEL_VERSION}" && \
+            rm -rf /tmp/vds_source /tmp/bluez_source /tmp/vds-pkg-root /tmp/kmod-vds-*.rpm
