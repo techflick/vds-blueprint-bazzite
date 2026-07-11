@@ -1,4 +1,4 @@
-# yaml-language-server: $schema=https://schema.blue-build.org/recipe-v1.json
+# yaml-language-server: $schema=https://blue-build.org
 name: mein-bazzite-vds
 description: Mein persönliches Bazzite mit automatischer Aktivierung des vDS Treibers.
 
@@ -6,7 +6,6 @@ base-image: ghcr.io/ublue-os/bazzite
 image-version: latest
 
 modules:
-  # Schritt A: Blue-Build installiert die Tools nativ über sein eigenes Modul
   - type: rpm-ostree
     install:
       - kernel-devel
@@ -14,7 +13,6 @@ modules:
       - gcc
       - git
 
-  # Schritt B: Unser Skript baut nun den Treiber mit den bereits vorhandenen Tools
   - type: script
     snippets:
       - |
@@ -23,29 +21,38 @@ modules:
 
           echo "=== 1. vDS Quellcode frisch klonen ==="
           rm -rf /tmp/vds_source
-          git clone https://github.com/hurryman2212/vds.git /tmp/vds_source
+          git clone https://github.com /tmp/vds_source
           
-          echo "=== 2. In den module-Ordner wechseln und bauen ==="
+          echo "=== 2. In den module-Ordner wechseln ==="
           cd /tmp/vds_source/module
           
           # Ermittle die genaue Kernel-Version des Ziel-Images
           KERNEL_VERSION=$(rpm -q --qf "%{VERSION}-%{RELEASE}.%{ARCH}\n" kernel | head -n 1)
-          echo "Bauen für Kernel-Header in: ${KERNEL_VERSION}"
+          echo "Ziel-Kernel Version: ${KERNEL_VERSION}"
           
-          # Bauvorgang starten
+          echo "=== 3. Kernel-Build-Verzeichnis reparieren ==="
+          # Falls der symbolische Link /build ins Leere zeigt oder fehlt, biegen wir ihn 
+          # direkt auf den realen Speicherort unter /usr/src/kernels/ um.
+          REAL_KERNEL_DIR=$(ls -d /usr/src/kernels/${KERNEL_VERSION}* | head -n 1)
+          echo "Echte Kernel-Header gefunden in: ${REAL_KERNEL_DIR}"
+          
+          # Wir löschen den kaputten Link und setzen ihn neu auf den echten Ordner
+          rm -f /usr/lib/modules/${KERNEL_VERSION}/build
+          ln -s "${REAL_KERNEL_DIR}" /usr/lib/modules/${KERNEL_VERSION}/build
+          
+          echo "=== 4. Bauvorgang starten ==="
           make KCFLAGS="-w" KERNELDIR=/usr/lib/modules/${KERNEL_VERSION}/build
           
-          echo "=== 3. Kernel-Modul an einen sicheren Ort kopieren ==="
-          # Der Ordner "updates" bleibt beim Verpacken des Images garantiert erhalten
+          echo "=== 5. Kernel-Modul an einen sicheren Ort kopieren ==="
           MODULE_DEST="/usr/lib/modules/${KERNEL_VERSION}/updates"
           mkdir -p "${MODULE_DEST}"
           cp vds_hcd.ko "${MODULE_DEST}/"
           
-          echo "=== 4. Kernel-Modul für automatischen Start registrieren ==="
+          echo "=== 6. Kernel-Modul für automatischen Start registrieren ==="
           mkdir -p /usr/lib/modules-load.d
           echo "vds_hcd" > /usr/lib/modules-load.d/vds.conf
 
-          echo "=== 5. Bluetooth-Anpassung aktivieren ==="
+          echo "=== 7. Bluetooth-Anpassung aktivieren ==="
           mkdir -p /usr/lib/systemd/system/bluetooth.service.d
           cat << "EOF" > /usr/lib/systemd/system/bluetooth.service.d/override.conf
         [Service]
@@ -53,7 +60,7 @@ modules:
         ExecStart=/usr/libexec/bluetooth/bluetoothd --noplugin=input
         EOF
 
-          echo "=== 6. Berechtigungen sicherstellen ==="
+          echo "=== 8. Berechtigungen sicherstellen ==="
           chmod 644 "${MODULE_DEST}/vds_hcd.ko"
           
           echo "=== Build im Skript abgeschlossen. Blue-Build übernimmt den Rest! ==="
