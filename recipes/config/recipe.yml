@@ -1,10 +1,3 @@
-# yaml-language-server: $schema=https://blue-build.org
-name: mein-bazzite-vds
-description: Mein persönliches Bazzite mit nativer Integration des vDS Treibers und Daemons ohne Distrobox.
-
-base-image: ghcr.io/ublue-os/bazzite
-image-version: latest
-
 modules:
   - type: rpm-ostree
     install:
@@ -33,7 +26,7 @@ modules:
             mkdir -p /usr/include/bluetooth && \
             echo -e "#ifndef __BLUETOOTH_H\n#define __BLUETOOTH_H\n#include <stdint.h>\n#include <string.h>\n#include <stdio.h>\n#include <sys/socket.h>\ntypedef struct { uint8_t b[6]; } __attribute__((packed)) bdaddr_t;\n#define AF_BLUETOOTH 31\n#define PF_BLUETOOTH AF_BLUETOOTH\n#define BTPROTO_L2CAP 0\nstatic inline int bacmp(const bdaddr_t *ba1, const bdaddr_t *ba2) { return memcmp(ba1, ba2, 6); }\nstatic inline void bacpy(bdaddr_t *dst, const bdaddr_t *src) { memcpy(dst, src, 6); }\nstatic inline uint16_t htobs(uint16_t n) { return __builtin_bswap16(n); }\nstatic inline int ba2str(const bdaddr_t *ba, char *str) { return sprintf(str, \"%02X:%02X:%02X:%02X:%02X:%02X\", ba->b[0], ba->b[1], ba->b[2], ba->b[3], ba->b[4], ba->b[5]); }\n#endif" > /usr/include/bluetooth/bluetooth.h && \
             echo -e "#ifndef __HCI_H\n#define __HCI_H\n#include <bluetooth/bluetooth.h>\n#endif" > /usr/include/bluetooth/hci.h && \
-            echo -e "#ifndef __L2CAP_H\n#define __L2CAP_H\n#include <bluetooth/bluetooth.h>\nstruct sockaddr_l2 {\n    sa_family_t l2_family;\n    unsigned short l2_psm;\n    bdaddr_t    l2_bdaddr;\n    unsigned short l2_cid;\n    uint8_t     l2_bdaddr_type;\n};\n#endif" > /usr/include/bluetooth/l2cap.h && \
+            echo -e "#ifndef __L2CAP_H\n#define __L2CAP_H\n#include <bluetooth/bluetooth.h>\nstruct sockaddr_l2 {\n    sa_family_t l2_family;\n    uint16_t    l2_psm;\n    bdaddr_t    l2_bdaddr;\n    uint16_t    l2_cid;\n    uint8_t     l2_bdaddr_type;\n};\n#define L2CAP_OPTIONS 0x01\nstruct l2cap_options {\n    uint16_t    omtu;\n    uint16_t    imtu;\n    uint16_t    flush_to;\n    uint8_t     mode;\n    uint8_t     fcs;\n    uint8_t     max_tx;\n    uint16_t    txwin_size;\n};\n#endif" > /usr/include/bluetooth/l2cap.h && \
             echo -e "#ifndef __SDP_H\n#define __SDP_H\n#include <bluetooth/bluetooth.h>\n#endif" > /usr/include/bluetooth/sdp.h && \
             cd /tmp/vds_source/module && \
             make KCFLAGS="-w" KERNELRELEASE="${KERNEL_VERSION}" KERNELDIR="${KERNEL_BUILD_DIR}" && \
@@ -55,7 +48,7 @@ modules:
             find /tmp/vds_source/build -type f -name "vdsctl" -exec cp {} "${PKG_ROOT}/usr/bin/vdsctl" \; && \
             chmod 755 "${PKG_ROOT}/usr/bin/vdsd" "${PKG_ROOT}/usr/bin/vdsctl" && \
             echo "vds_hcd" > "${PKG_ROOT}/usr/lib/modules-load.d/vds.conf" && \
-            echo -e "[Service]\nExecStart=\nExecStart=/usr/libexec/bluetooth/bluetoothd --compat --noplugin=input" > "${PKG_ROOT}/usr/lib/systemd/system/bluetooth.service.d/override.conf" && \
+            echo -e "[Service]\nExecStart=\nExecStart=/usr/libexec/bluetooth/bluetoothd --compat --noplugin=input,hog" > "${ROOT}/usr/lib/systemd/system/bluetooth.service.d/override.conf" && \
             echo -e "[Unit]\nDescription=Virtual DualSense Userspace Daemon\nAfter=bluetooth.service\nRequires=bluetooth.service\n\n[Service]\nType=simple\nExecStart=/usr/bin/vdsd\nRestart=always\nRestartSec=3\n\n[Install]\nWantedBy=multi-user.target" > "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service" && \
             echo -e "[Unit]\nDescription=Setze Berechtigungen für vDS SDP-Socket\nAfter=bluetooth.service\n\n[Service]\nType=oneshot\nExecStart=/usr/bin/chmod 0777 /run/sdp" > "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.service" && \
             echo -e "[Unit]\nDescription=Überwache vDS SDP-Socket Existenz\n\n[Path]\nPathChanged=/run/sdp\n\n[Install]\nWantedBy=multi-user.target" > "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.path" && \
