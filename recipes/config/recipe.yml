@@ -49,6 +49,8 @@ modules:
             mkdir -p "${PKG_ROOT}/usr/bin" && \
             mkdir -p "${PKG_ROOT}/usr/lib/systemd/system/bluetooth.service.d" && \
             mkdir -p "${PKG_ROOT}/usr/lib/systemd/system" && \
+            mkdir -p "${PKG_ROOT}/usr/share/dbus-1/system.d" && \
+            mkdir -p "${PKG_ROOT}/usr/lib/udev/rules.d" && \
             cp /tmp/vds_source/module/vds_hcd.ko "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra/" && \
             chmod 644 "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra/vds_hcd.ko" && \
             find /tmp/vds_source/build -type f -name "vdsd" -exec cp {} "${PKG_ROOT}/usr/bin/vdsd" \; && \
@@ -59,8 +61,10 @@ modules:
             echo -e "[Unit]\nDescription=Virtual DualSense Userspace Daemon\nAfter=bluetooth.service\nRequires=bluetooth.service\n\n[Service]\nType=simple\nExecStart=/usr/bin/vdsd\nRestart=always\nRestartSec=3\n\n[Install]\nWantedBy=multi-user.target" > "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service" && \
             echo -e "[Unit]\nDescription=Setze Berechtigungen für vDS SDP-Socket\nAfter=bluetooth.service\n\n[Service]\nType=oneshot\nExecStart=/usr/bin/chmod 0777 /run/sdp" > "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.service" && \
             echo -e "[Unit]\nDescription=Überwache vDS SDP-Socket Existenz\n\n[Path]\nPathChanged=/run/sdp\n\n[Install]\nWantedBy=multi-user.target" > "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.path" && \
+            echo -e "<!DOCTYPE busconfig PUBLIC \"-//freedesktop//DTD D-BUS Bus Configuration 1.0//EN\"\n \"http://freedesktop.org\">\n<busconfig>\n  <policy user=\"root\">\n    <allow own=\"org.vdsd\"/>\n    <allow send_destination=\"org.vdsd\"/>\n  </policy>\n  <policy context=\"default\">\n    <allow send_destination=\"org.vdsd\"/>\n  </policy>\n</busconfig>" > "${PKG_ROOT}/usr/share/dbus-1/system.d/org.vdsd.conf" && \
+            echo 'KERNEL=="uinput", MODE="0660", GROUP="input", OPTIONS+="static_node=uinput"' > "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-uinput.rules" && \
             cd /tmp && \
-            fpm -s dir -t rpm -n "kmod-vds" -v "1.0.0" --iteration "${RPM_ITERATION}" -C "${PKG_ROOT}" usr/lib/modules usr/lib/modules-load.d usr/bin usr/lib/systemd && \
+            fpm -s dir -t rpm -n "kmod-vds" -v "1.0.0" --iteration "${RPM_ITERATION}" -C "${PKG_ROOT}" usr/lib/modules usr/lib/modules-load.d usr/bin usr/lib/systemd usr/share/dbus-1 usr/lib/udev && \
             rpm -ivh kmod-vds-1.0.0-*.rpm && \
             depmod -a "${KERNEL_VERSION}" && \
             rm -rf /tmp/vds_source /tmp/vds-pkg-root /tmp/kmod-vds-*.rpm
