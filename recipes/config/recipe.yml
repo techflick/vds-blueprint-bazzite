@@ -25,27 +25,26 @@ modules:
       - |
         RUN gem install --no-document fpm
         
-        # 1. Repositories klonen
+        # 1. Repositories klonen & Header SOFORT an sichere Orte kopieren (bevor /tmp gelöscht wird)
         RUN git clone https://github.com/hurryman2212/vds.git /tmp/vds_source && \
-            git clone --depth 1 https://github.com/bluez/bluez.git /tmp/bluez_source
-            
-        # 2. Echte Bluetooth-Header an Ort und Stelle kopieren
-        RUN mkdir -p /usr/include/bluetooth && \
+            git clone --depth 1 https://github.com/bluez/bluez.git /tmp/bluez_source && \
+            mkdir -p /usr/include/bluetooth && \
             cp /tmp/bluez_source/lib/bluetooth.h /usr/include/bluetooth/bluetooth.h && \
             cp /tmp/bluez_source/lib/hci.h /usr/include/bluetooth/hci.h && \
             cp /tmp/bluez_source/lib/l2cap.h /usr/include/bluetooth/l2cap.h && \
-            cp /tmp/bluez_source/lib/sdp.h /usr/include/bluetooth/sdp.h
+            cp /tmp/bluez_source/lib/sdp.h /usr/include/bluetooth/sdp.h && \
+            cp /tmp/bluez_source/lib/bluetooth.c /tmp/vds_source/src/bluetooth.c && \
+            cp /tmp/bluez_source/lib/sdp.c /tmp/vds_source/src/sdp.c && \
+            mv /tmp/vds_source /vds_build_dir
             
-        # 3. Kernel-Modul kompilieren
+        # 2. Kernel-Modul kompilieren
         RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
             KERNEL_BUILD_DIR="/usr/src/kernels/${KERNEL_VERSION}" && \
-            cd /tmp/vds_source/module && \
+            cd /vds_build_dir/module && \
             make KCFLAGS="-w" KERNELRELEASE="${KERNEL_VERSION}" KERNELDIR="${KERNEL_BUILD_DIR}"
             
-        # 4. BlueZ-Bibliotheksdateien lokal in VDS einspeisen und Daemon kompilieren
-        RUN cp /tmp/bluez_source/lib/bluetooth.c /tmp/vds_source/src/ && \
-            cp /tmp/bluez_source/lib/sdp.c /tmp/vds_source/src/ && \
-            cd /tmp/vds_source && \
+        # 3. Daemon kompilieren (Inklusive der BlueZ-C-Dateien)
+        RUN cd /vds_build_dir && \
             sed -i '/pkg_check_modules.*bluez/c\set(bluez_FOUND TRUE)' CMakeLists.txt && \
             sed -i 's/PkgConfig::BLUEZ//g' CMakeLists.txt && \
             sed -i 's/add_executable(vdsd/add_executable(vdsd src\/bluetooth.c src\/sdp.c/g' CMakeLists.txt && \
@@ -53,7 +52,7 @@ modules:
             cmake .. -DCMAKE_BUILD_TYPE=Release && \
             make
             
-        # 5. Paketstruktur (PKG_ROOT) bauen, RPM generieren und installieren
+        # 4. Paketstruktur bauen, RPM generieren und installieren
         RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
             RPM_ITERATION=$(echo "${KERNEL_VERSION}" | tr "-" "_") && \
             PKG_ROOT="/tmp/vds-pkg-root" && \
@@ -64,20 +63,20 @@ modules:
             mkdir -p "${PKG_ROOT}/usr/lib/systemd/system" && \
             mkdir -p "${PKG_ROOT}/usr/share/dbus-1/system.d" && \
             mkdir -p "${PKG_ROOT}/usr/lib/udev/rules.d" && \
-            cp /tmp/vds_source/module/vds_hcd.ko "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra/" && \
+            cp /vds_build_dir/module/vds_hcd.ko "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra/" && \
             chmod 644 "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra/vds_hcd.ko" && \
-            find /tmp/vds_source/build -type f -name "vdsd" -exec cp {} "${PKG_ROOT}/usr/bin/vdsd" \; && \
-            find /tmp/vds_source/build -type f -name "vdsctl" -exec cp {} "${PKG_ROOT}/usr/bin/vdsctl" \; && \
+            find /vds_build_dir/build -type f -name "vdsd" -exec cp {} "${PKG_ROOT}/usr/bin/vdsd" \; && \
+            find /vds_build_dir/build -type f -name "vdsctl" -exec cp {} "${PKG_ROOT}/usr/bin/vdsctl" \; && \
             chmod 755 "${PKG_ROOT}/usr/bin/vdsd" "${PKG_ROOT}/usr/bin/vdsctl" && \
             echo "vds_hcd" > "${PKG_ROOT}/usr/lib/modules-load.d/vds.conf" && \
             echo -e "[Service]\nExecStart=\nExecStart=/usr/libexec/bluetooth/bluetoothd --compat" > "${PKG_ROOT}/usr/lib/systemd/system/bluetooth.service.d/override.conf" && \
             echo -e "[Unit]\nDescription=Virtual DualSense Userspace Daemon\nAfter=bluetooth.service vds-chmod-sdp.service\nRequires=bluetooth.service vds-chmod-sdp.service\n\n[Service]\nType=simple\nExecStart=/usr/bin/vdsd\nRestart=always\nRestartSec=5\n\n[Install]\nWantedBy=multi-user.target" > "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service" && \
             echo -e "[Unit]\nDescription=Setze Berechtigungen für vDS SDP-Socket\nAfter=bluetooth.service\nRequisite=bluetooth.service\n\n[Service]\nType=oneshot\nExecStart=/usr/bin/chmod 0777 /run/sdp" > "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.service" && \
             echo -e "<!DOCTYPE busconfig PUBLIC \"-//freedesktop//DTD D-BUS Bus Configuration 1.0//EN\"\n \"http://freedesktop.org\">\n<busconfig>\n  <policy user=\"root\">\n    <allow own=\"org.vdsd\"/>\n    <allow send_destination=\"org.vdsd\"/>\n  </policy>\n  <policy context=\"default\">\n    <allow send_destination=\"org.vdsd\"/>\n  </policy>\n</busconfig>" > "${PKG_ROOT}/usr/share/dbus-1/system.d/org.vdsd.conf" && \
-            cp /tmp/vds_source/99-vds-dualsense-udev.rules "${PKG_ROOT}/usr/lib/udev/rules.d/" && \
+            cp /vds_build_dir/99-vds-dualsense-udev.rules "${PKG_ROOT}/usr/lib/udev/rules.d/" && \
             echo 'KERNEL=="uinput", MODE="0660", SECLABEL{selinux}="system_u:object_r:input_device_t:s0", OPTIONS+="static_node=uinput"' > "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-uinput.rules" && \
             cd /tmp && \
             fpm -s dir -t rpm -n "kmod-vds" -v "1.0.0" --iteration "${RPM_ITERATION}" -C "${PKG_ROOT}" usr/lib/modules usr/lib/modules-load.d usr/bin usr/lib/systemd usr/share/dbus-1 usr/lib/udev && \
             rpm -ivh kmod-vds-1.0.0-*.rpm && \
             depmod -a -b / "${KERNEL_VERSION}" && \
-            rm -rf /tmp/vds_source /tmp/bluez_source /tmp/vds-pkg-root /tmp/kmod-vds-*.rpm
+            rm -rf /vds_build_dir /tmp/bluez_source /tmp/vds-pkg-root /tmp/kmod-vds-*.rpm
