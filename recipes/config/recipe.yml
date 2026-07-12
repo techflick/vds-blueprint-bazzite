@@ -25,16 +25,21 @@ modules:
       - |
         RUN gem install --no-document fpm
         
-        RUN git clone https://github.com/hurryman2212/vds.git /tmp/vds_source
+        # Wir klonen sowohl VDS als auch das offizielle BlueZ-Repository für die Header
+        RUN git clone https://github.com/hurryman2212/vds.git /tmp/vds_source && \
+            git clone --depth 1 https://github.com/bluez/bluez.git /tmp/bluez_source
             
         RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
             RPM_ITERATION=$(echo "${KERNEL_VERSION}" | tr "-" "_") && \
             KERNEL_BUILD_DIR="/usr/src/kernels/${KERNEL_VERSION}" && \
+            \
+            # Erstelle das Zielverzeichnis und kopiere die echten Header lokal herüber
             mkdir -p /usr/include/bluetooth && \
-            curl -sL https://githubusercontent.com -o /usr/include/bluetooth/bluetooth.h && \
-            curl -sL https://githubusercontent.com -o /usr/include/bluetooth/hci.h && \
-            curl -sL https://githubusercontent.com -o /usr/include/bluetooth/l2cap.h && \
-            curl -sL https://githubusercontent.com -o /usr/include/bluetooth/sdp.h && \
+            cp /tmp/bluez_source/lib/bluetooth.h /usr/include/bluetooth/bluetooth.h && \
+            cp /tmp/bluez_source/lib/hci.h /usr/include/bluetooth/hci.h && \
+            cp /tmp/bluez_source/lib/l2cap.h /usr/include/bluetooth/l2cap.h && \
+            cp /tmp/bluez_source/lib/sdp.h /usr/include/bluetooth/sdp.h && \
+            \
             cd /tmp/vds_source/module && \
             make KCFLAGS="-w" KERNELRELEASE="${KERNEL_VERSION}" KERNELDIR="${KERNEL_BUILD_DIR}" && \
             cd /tmp/vds_source && \
@@ -67,4 +72,4 @@ modules:
             fpm -s dir -t rpm -n "kmod-vds" -v "1.0.0" --iteration "${RPM_ITERATION}" -C "${PKG_ROOT}" usr/lib/modules usr/lib/modules-load.d usr/bin usr/lib/systemd usr/share/dbus-1 usr/lib/udev && \
             rpm -ivh kmod-vds-1.0.0-*.rpm && \
             depmod -a -b / "${KERNEL_VERSION}" && \
-            rm -rf /tmp/vds_source /tmp/vds-pkg-root /tmp/kmod-vds-*.rpm
+            rm -rf /tmp/vds_source /tmp/bluez_source /tmp/vds-pkg-root /tmp/kmod-vds-*.rpm
