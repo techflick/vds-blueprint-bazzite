@@ -25,7 +25,7 @@ modules:
       - |
         RUN gem install --no-document fpm
         
-        RUN git clone https://github.com /tmp/vds_source
+        RUN git clone https://github.com/hurryman2212/vds.git /tmp/vds_source
             
         RUN KERNEL_VERSION=$(ls -1 /usr/src/kernels/ | head -n 1) && \
             RPM_ITERATION=$(echo "${KERNEL_VERSION}" | tr "-" "_") && \
