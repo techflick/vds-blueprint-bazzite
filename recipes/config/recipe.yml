@@ -26,8 +26,8 @@ modules:
         RUN gem install --no-document fpm
         
         # 1. Repositories klonen
-        RUN git clone https://github.com /tmp/vds_source && \
-            git clone --depth 1 https://github.com /tmp/bluez_source
+        RUN git clone https://github.com/hurryman2212/vds.git /tmp/vds_source && \
+            git clone --depth 1 https://github.com/bluez/bluez.git /tmp/bluez_source
             
         # 2. Echte Bluetooth-Header an Ort und Stelle kopieren
         RUN mkdir -p /usr/include/bluetooth && \
