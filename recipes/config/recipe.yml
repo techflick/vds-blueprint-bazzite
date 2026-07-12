@@ -25,29 +25,37 @@ modules:
       - |
         RUN gem install --no-document fpm
         
-        # Wir klonen sowohl VDS als auch das offizielle BlueZ-Repository für die Header
-        RUN git clone https://github.com/hurryman2212/vds.git /tmp/vds_source && \
-            git clone --depth 1 https://github.com/bluez/bluez.git /tmp/bluez_source
+        # 1. Repositories klonen
+        RUN git clone https://github.com /tmp/vds_source && \
+            git clone --depth 1 https://github.com /tmp/bluez_source
             
-        RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
-            RPM_ITERATION=$(echo "${KERNEL_VERSION}" | tr "-" "_") && \
-            KERNEL_BUILD_DIR="/usr/src/kernels/${KERNEL_VERSION}" && \
-            \
-            # Erstelle das Zielverzeichnis und kopiere die echten Header lokal herüber
-            mkdir -p /usr/include/bluetooth && \
+        # 2. Echte Bluetooth-Header an Ort und Stelle kopieren
+        RUN mkdir -p /usr/include/bluetooth && \
             cp /tmp/bluez_source/lib/bluetooth.h /usr/include/bluetooth/bluetooth.h && \
             cp /tmp/bluez_source/lib/hci.h /usr/include/bluetooth/hci.h && \
             cp /tmp/bluez_source/lib/l2cap.h /usr/include/bluetooth/l2cap.h && \
-            cp /tmp/bluez_source/lib/sdp.h /usr/include/bluetooth/sdp.h && \
-            \
+            cp /tmp/bluez_source/lib/sdp.h /usr/include/bluetooth/sdp.h
+            
+        # 3. Kernel-Modul kompilieren
+        RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
+            KERNEL_BUILD_DIR="/usr/src/kernels/${KERNEL_VERSION}" && \
             cd /tmp/vds_source/module && \
-            make KCFLAGS="-w" KERNELRELEASE="${KERNEL_VERSION}" KERNELDIR="${KERNEL_BUILD_DIR}" && \
+            make KCFLAGS="-w" KERNELRELEASE="${KERNEL_VERSION}" KERNELDIR="${KERNEL_BUILD_DIR}"
+            
+        # 4. BlueZ-Bibliotheksdateien lokal in VDS einspeisen und Daemon kompilieren
+        RUN cp /tmp/bluez_source/lib/bluetooth.c /tmp/vds_source/src/ && \
+            cp /tmp/bluez_source/lib/sdp.c /tmp/vds_source/src/ && \
             cd /tmp/vds_source && \
             sed -i '/pkg_check_modules.*bluez/c\set(bluez_FOUND TRUE)' CMakeLists.txt && \
             sed -i 's/PkgConfig::BLUEZ//g' CMakeLists.txt && \
+            sed -i 's/add_executable(vdsd/add_executable(vdsd src\/bluetooth.c src\/sdp.c/g' CMakeLists.txt && \
             mkdir -p build && cd build && \
             cmake .. -DCMAKE_BUILD_TYPE=Release && \
-            make && \
+            make
+            
+        # 5. Paketstruktur (PKG_ROOT) bauen, RPM generieren und installieren
+        RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
+            RPM_ITERATION=$(echo "${KERNEL_VERSION}" | tr "-" "_") && \
             PKG_ROOT="/tmp/vds-pkg-root" && \
             mkdir -p "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra" && \
             mkdir -p "${PKG_ROOT}/usr/lib/modules-load.d" && \
