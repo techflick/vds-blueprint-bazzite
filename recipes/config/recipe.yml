@@ -27,14 +27,14 @@ modules:
         
         RUN git clone https://github.com/hurryman2212/vds.git /tmp/vds_source
             
-        RUN KERNEL_VERSION=$(ls -1 /usr/src/kernels/ | head -n 1) && \
+        RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
             RPM_ITERATION=$(echo "${KERNEL_VERSION}" | tr "-" "_") && \
             KERNEL_BUILD_DIR="/usr/src/kernels/${KERNEL_VERSION}" && \
             mkdir -p /usr/include/bluetooth && \
-            echo -e "#ifndef __BLUETOOTH_H\n#define __BLUETOOTH_H\n#include <stdint.h>\n#include <string.h>\n#include <stdio.h>\n#include <sys/socket.h>\ntypedef struct { uint8_t b[6]; } __attribute__((packed)) bdaddr_t;\n#define AF_BLUETOOTH 31\n#define PF_BLUETOOTH AF_BLUETOOTH\n#define BTPROTO_L2CAP 0\nstatic inline int bacmp(const bdaddr_t *ba1, const bdaddr_t *ba2) { return memcmp(ba1, ba2, 6); }\nstatic inline void bacpy(bdaddr_t *dst, const bdaddr_t *src) { memcpy(dst, src, 6); }\nstatic inline uint16_t htobs(uint16_t n) { return __builtin_bswap16(n); }\nstatic inline int ba2str(const bdaddr_t *ba, char *str) { return sprintf(str, \"%02X:%02X:%02X:%02X:%02X:%02X\", ba->b[0], ba->b[1], ba->b[2], ba->b[3], ba->b[4], ba->b[5]); }\n#endif" > /usr/include/bluetooth/bluetooth.h && \
-            echo -e "#ifndef __HCI_H\n#define __HCI_H\n#include <bluetooth/bluetooth.h>\n#endif" > /usr/include/bluetooth/hci.h && \
-            echo -e "#ifndef __L2CAP_H\n#define __L2CAP_H\n#include <bluetooth/bluetooth.h>\nstruct sockaddr_l2 {\n    sa_family_t l2_family;\n    uint16_t    l2_psm;\n    bdaddr_t    l2_bdaddr;\n    uint16_t    l2_cid;\n    uint8_t     l2_bdaddr_type;\n};\n#define L2CAP_OPTIONS 0x01\nstruct l2cap_options {\n    uint16_t    omtu;\n    uint16_t    imtu;\n    uint16_t    flush_to;\n    uint8_t     mode;\n    uint8_t     fcs;\n    uint8_t     max_tx;\n    uint16_t    txwin_size;\n};\n#endif" > /usr/include/bluetooth/l2cap.h && \
-            echo -e "#ifndef __SDP_H\n#define __SDP_H\n#include <bluetooth/bluetooth.h>\n#endif" > /usr/include/bluetooth/sdp.h && \
+            curl -sL https://githubusercontent.com -o /usr/include/bluetooth/bluetooth.h && \
+            curl -sL https://githubusercontent.com -o /usr/include/bluetooth/hci.h && \
+            curl -sL https://githubusercontent.com -o /usr/include/bluetooth/l2cap.h && \
+            curl -sL https://githubusercontent.com -o /usr/include/bluetooth/sdp.h && \
             cd /tmp/vds_source/module && \
             make KCFLAGS="-w" KERNELRELEASE="${KERNEL_VERSION}" KERNELDIR="${KERNEL_BUILD_DIR}" && \
             cd /tmp/vds_source && \
@@ -62,9 +62,9 @@ modules:
             echo -e "[Unit]\nDescription=Setze Berechtigungen für vDS SDP-Socket\nAfter=bluetooth.service\nRequisite=bluetooth.service\n\n[Service]\nType=oneshot\nExecStart=/usr/bin/chmod 0777 /run/sdp" > "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.service" && \
             echo -e "<!DOCTYPE busconfig PUBLIC \"-//freedesktop//DTD D-BUS Bus Configuration 1.0//EN\"\n \"http://freedesktop.org\">\n<busconfig>\n  <policy user=\"root\">\n    <allow own=\"org.vdsd\"/>\n    <allow send_destination=\"org.vdsd\"/>\n  </policy>\n  <policy context=\"default\">\n    <allow send_destination=\"org.vdsd\"/>\n  </policy>\n</busconfig>" > "${PKG_ROOT}/usr/share/dbus-1/system.d/org.vdsd.conf" && \
             cp /tmp/vds_source/99-vds-dualsense-udev.rules "${PKG_ROOT}/usr/lib/udev/rules.d/" && \
-            echo 'KERNEL=="uinput", MODE="0660", GROUP="input", OPTIONS+="static_node=uinput"' > "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-uinput.rules" && \
+            echo 'KERNEL=="uinput", MODE="0660", SECLABEL{selinux}="system_u:object_r:input_device_t:s0", OPTIONS+="static_node=uinput"' > "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-uinput.rules" && \
             cd /tmp && \
             fpm -s dir -t rpm -n "kmod-vds" -v "1.0.0" --iteration "${RPM_ITERATION}" -C "${PKG_ROOT}" usr/lib/modules usr/lib/modules-load.d usr/bin usr/lib/systemd usr/share/dbus-1 usr/lib/udev && \
             rpm -ivh kmod-vds-1.0.0-*.rpm && \
-            depmod -a "${KERNEL_VERSION}" && \
+            depmod -a -b / "${KERNEL_VERSION}" && \
             rm -rf /tmp/vds_source /tmp/vds-pkg-root /tmp/kmod-vds-*.rpm
