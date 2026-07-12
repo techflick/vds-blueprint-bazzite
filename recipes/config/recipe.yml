@@ -57,10 +57,9 @@ modules:
             find /tmp/vds_source/build -type f -name "vdsctl" -exec cp {} "${PKG_ROOT}/usr/bin/vdsctl" \; && \
             chmod 755 "${PKG_ROOT}/usr/bin/vdsd" "${PKG_ROOT}/usr/bin/vdsctl" && \
             echo "vds_hcd" > "${PKG_ROOT}/usr/lib/modules-load.d/vds.conf" && \
-            echo -e "[Service]\nExecStart=\nExecStart=/usr/libexec/bluetooth/bluetoothd --compat --noplugin=input,hog" > "${PKG_ROOT}/usr/lib/systemd/system/bluetooth.service.d/override.conf" && \
-            echo -e "[Unit]\nDescription=Virtual DualSense Userspace Daemon\nAfter=bluetooth.service\nRequires=bluetooth.service\n\n[Service]\nType=simple\nExecStart=/usr/bin/vdsd\nRestart=always\nRestartSec=3\n\n[Install]\nWantedBy=multi-user.target" > "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service" && \
-            echo -e "[Unit]\nDescription=Setze Berechtigungen für vDS SDP-Socket\nAfter=bluetooth.service\n\n[Service]\nType=oneshot\nExecStart=/usr/bin/chmod 0777 /run/sdp" > "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.service" && \
-            echo -e "[Unit]\nDescription=Überwache vDS SDP-Socket Existenz\n\n[Path]\nPathChanged=/run/sdp\n\n[Install]\nWantedBy=multi-user.target" > "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.path" && \
+            echo -e "[Service]\nExecStart=\nExecStart=/usr/libexec/bluetooth/bluetoothd --compat" > "${PKG_ROOT}/usr/lib/systemd/system/bluetooth.service.d/override.conf" && \
+            echo -e "[Unit]\nDescription=Virtual DualSense Userspace Daemon\nAfter=bluetooth.service vds-chmod-sdp.service\nRequires=bluetooth.service vds-chmod-sdp.service\n\n[Service]\nType=simple\nExecStart=/usr/bin/vdsd\nExecStartPost=/usr/bin/vdsctl bind\nRestart=always\nRestartSec=5\n\n[Install]\nWantedBy=multi-user.target" > "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service" && \
+            echo -e "[Unit]\nDescription=Setze Berechtigungen für vDS SDP-Socket\nAfter=bluetooth.service\nRequisite=bluetooth.service\n\n[Service]\nType=oneshot\nExecStart=/usr/bin/chmod 0777 /run/sdp" > "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.service" && \
             echo -e "<!DOCTYPE busconfig PUBLIC \"-//freedesktop//DTD D-BUS Bus Configuration 1.0//EN\"\n \"http://freedesktop.org\">\n<busconfig>\n  <policy user=\"root\">\n    <allow own=\"org.vdsd\"/>\n    <allow send_destination=\"org.vdsd\"/>\n  </policy>\n  <policy context=\"default\">\n    <allow send_destination=\"org.vdsd\"/>\n  </policy>\n</busconfig>" > "${PKG_ROOT}/usr/share/dbus-1/system.d/org.vdsd.conf" && \
             echo 'KERNEL=="uinput", MODE="0660", GROUP="input", OPTIONS+="static_node=uinput"' > "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-uinput.rules" && \
             cd /tmp && \
