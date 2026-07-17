@@ -16,16 +16,16 @@ modules:
       - git
       - dbus-devel
       - opus-devel
-      - rpm-build # <-- Nativer RPM-Builder ohne FPM-Abhängigkeit
+      - rpm-build
 
   - type: containerfile
     snippets:
       - |
-        # 1. Erstellen der EXAKTEN originalen BlueZ-Header-Strukturen (Offline)
+        # 1. Erstellen der vollständigen BlueZ-Header-Strukturen für fehlerfreie Kompilation (Offline)
         RUN mkdir -p /usr/include/bluetooth && \
-            printf '#ifndef __BLUETOOTH_H\n#define __BLUETOOTH_H\n#include <stdint.h>\n#include <sys/socket.h>\ntypedef struct { uint8_t b; } __attribute__((packed)) bdaddr_t;\n#define AF_BLUETOOTH 31\n#define PF_BLUETOOTH AF_BLUETOOTH\n#define BTPROTO_L2CAP 0\n#endif\n' > /usr/include/bluetooth/bluetooth.h && \
+            printf '#ifndef __BLUETOOTH_H\n#define __BLUETOOTH_H\n#include <stdint.h>\n#include <string.h>\n#include <sys/socket.h>\ntypedef struct { uint8_t b[6]; } __attribute__((packed)) bdaddr_t;\n#define AF_BLUETOOTH 31\n#define PF_BLUETOOTH AF_BLUETOOTH\n#define BTPROTO_L2CAP 0\nstatic inline int bacmp(const bdaddr_t *ba1, const bdaddr_t *ba2) { return memcmp(ba1, ba2, 6); }\nstatic inline void bacpy(bdaddr_t *dst, const bdaddr_t *src) { memcpy(dst, src, 6); }\n#endif\n' > /usr/include/bluetooth/bluetooth.h && \
             printf '#ifndef __HCI_H\n#define __HCI_H\n#include <bluetooth/bluetooth.h>\n#endif\n' > /usr/include/bluetooth/hci.h && \
-            printf '#ifndef __L2CAP_H\n#define __L2CAP_H\n#include <bluetooth/bluetooth.h>\nstruct sockaddr_l2 {\n sa_family_t l2_family;\n uint16_t l2_psm;\n bdaddr_t l2_bdaddr;\n uint16_t l2_cid;\n uint8_t l2_bdaddr_type;\n};\n#endif\n' > /usr/include/bluetooth/l2cap.h && \
+            printf '#ifndef __L2CAP_H\n#define __L2CAP_H\n#include <bluetooth/bluetooth.h>\nstruct sockaddr_l2 {\n sa_family_t l2_family;\n uint16_t l2_psm;\n bdaddr_t l2_bdaddr;\n uint16_t l2_cid;\n uint8_t l2_bdaddr_type;\n};\n#define L2CAP_OPTIONS 0x01\nstruct l2cap_options {\n uint16_t omtu;\n uint16_t imtu;\n uint16_t flush_to;\n uint8_t mode;\n uint8_t fcs;\n uint8_t max_tx;\n uint16_t txwin_size;\n};\n#endif\n' > /usr/include/bluetooth/l2cap.h && \
             printf '#ifndef __SDP_H\n#define __SDP_H\n#include <bluetooth/bluetooth.h>\n#endif\n' > /usr/include/bluetooth/sdp.h
 
         # 2. vDS-Repository klonen
@@ -68,7 +68,7 @@ modules:
             cp /vds_build_dir/99-vds-dualsense-udev.rules "${PKG_ROOT}/usr/lib/udev/rules.d/" && \
             printf 'KERNEL=="uinput", MODE="0660", SECLABEL{selinux}="system_u:object_r:input_device_t:s0", OPTIONS+="static_node=uinput"\n' > "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-uinput.rules"
 
-        # 6. Natives RPM via rpmbuild generieren und installieren (Komplett offline)
+        # 6. Natives RPM via rpmbuild generieren und installieren
         RUN mkdir -p /root/rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS} && \
             printf "Name: kmod-vds\nVersion: 1.0.0\nRelease: 1\nSummary: Virtual DualSense Driver\nLicense: GPL\n%%description\nVirtual DualSense\n%%files\n/usr/lib/modules/\n/usr/lib/modules-load.d/\n/usr/bin/\n/usr/lib/systemd/\n/usr/share/dbus-1/\n/usr/lib/udev/\n" > /root/rpmbuild/SPECS/vds.spec && \
             rpmbuild --define "_topdir /root/rpmbuild" --buildroot=/vds-pkg-root -bb /root/rpmbuild/SPECS/vds.spec && \
