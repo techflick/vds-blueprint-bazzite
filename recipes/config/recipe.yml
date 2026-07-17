@@ -1,14 +1,6 @@
 # yaml-language-server: $schema=https://blue-build.org
 name: mein-bazzite-vds
-description: Mein persönliches Bazzite mit nativer Integration des vDS Treibers und Daemons ohne Distrobox.
-
-base-image: ghcr.io/ublue-os/bazzite
-image-version: latest
-
-modules:
-  - type: rpm-ostree# yaml-language-server: $schema=https://blue-build.org
-name: mein-bazzite-vds
-description: Mein persönliches Bazzite mit nativer Integration des vDS Treibers und Daemons ohne Distrobox.
+description: "Mein persönliches Bazzite mit nativer Integration des vDS Treibers und Daemons ohne Distrobox."
 
 base-image: ghcr.io/ublue-os/bazzite
 image-version: latest
@@ -34,10 +26,10 @@ modules:
       - |
         RUN gem install --no-document fpm
         
-        # 1. Offizielle BlueZ-Header einzeln via curl laden (Garantiert fehlerfrei)
+        # 1. Offizielle BlueZ-Header einzeln via curl laden
         RUN mkdir -p /usr/include/bluetooth && \
             curl -sSL https://github.com/bluez/bluez.git -o /usr/include/bluetooth/bluetooth.h && \
-            curl -sSL https://github.com/bluez/bluez.git -o /usr/include/bluetooth/hci.h && \
+            curl -sSL hhttps://github.com/bluez/bluez.git -o /usr/include/bluetooth/hci.h && \
             curl -sSL https://github.com/bluez/bluez.git -o /usr/include/bluetooth/l2cap.h && \
             curl -sSL https://github.com/bluez/bluez.git -o /usr/include/bluetooth/sdp.h
 
@@ -81,81 +73,6 @@ modules:
             printf "<!DOCTYPE busconfig PUBLIC \"-//freedesktop//DTD D-BUS Bus Configuration 1.0//EN\"\n \"http://freedesktop.org\">\n<busconfig>\n  <policy user=\"root\">\n    <allow own=\"org.vdsd\"/>\n    <allow send_destination=\"org.vdsd\"/>\n  </policy>\n  <policy context=\"default\">\n    <allow send_destination=\"org.vdsd\"/>\n  </policy>\n</busconfig>\n" > "${PKG_ROOT}/usr/share/dbus-1/system.d/org.vdsd.conf" && \
             cp /vds_build_dir/99-vds-dualsense-udev.rules "${PKG_ROOT}/usr/lib/udev/rules.d/" && \
             printf 'KERNEL=="uinput", MODE="0660", SECLABEL{selinux}="system_u:object_r:input_device_t:s0", OPTIONS+="static_node=uinput"\n' > "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-uinput.rules" && \
-            cd /tmp && \
-            fpm -s dir -t rpm -n "kmod-vds" -v "1.0.0" --iteration "${RPM_ITERATION}" -C "${PKG_ROOT}" usr/lib/modules usr/lib/modules-load.d usr/bin usr/lib/systemd usr/share/dbus-1 usr/lib/udev && \
-            rpm -ivh kmod-vds-1.0.0-*.rpm && \
-            depmod -a -b / "${KERNEL_VERSION}" && \
-            rm -rf /vds_build_dir /vds-pkg-root /tmp/kmod-vds-*.rpm
-
-    install:
-      - kernel-devel
-      - make
-      - gcc
-      - gcc-c++
-      - cmake
-      - git
-      - ruby-devel
-      - rubygems
-      - rpm-build
-      - dbus-devel
-      - opus-devel
-      - libuuid-devel
-
-  - type: containerfile
-    snippets:
-      - |
-        RUN gem install --no-document fpm
-        
-        # 1. Korrekte BlueZ-Header-Pfade direkt aus dem Quellcode-Root kopieren
-        RUN mkdir -p /tmp/bluez_src && \
-            git clone --depth 1 https://github.com/bluez/bluez.git /tmp/bluez_src && \
-            mkdir -p /usr/include/bluetooth && \
-            cp /tmp/bluez_src/bluetooth.h /usr/include/bluetooth/ && \
-            cp /tmp/bluez_src/hci.h /usr/include/bluetooth/ && \
-            cp /tmp/bluez_src/l2cap.h /usr/include/bluetooth/ && \
-            cp /tmp/bluez_src/sdp.h /usr/include/bluetooth/ && \
-            rm -rf /tmp/bluez_src
-
-        # 2. vDS-Repository klonen
-        RUN git clone https://github.com/hurryman2212/vds.git /vds_build_dir
-            
-        # 3. Kernel-Modul kompilieren
-        RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
-            KERNEL_BUILD_DIR="/usr/src/kernels/${KERNEL_VERSION}" && \
-            cd /vds_build_dir/module && \
-            make KCFLAGS="-w" KERNELRELEASE="${KERNEL_VERSION}" KERNELDIR="${KERNEL_BUILD_DIR}"
-            
-        # 4. Daemon kompilieren
-        RUN cd /vds_build_dir && \
-            sed -i '/pkg_check_modules.*bluez/c\set(bluez_FOUND TRUE)\nset(bluez_INCLUDE_DIRS "/usr/include")\nset(bluez_LIBRARIES "")' CMakeLists.txt && \
-            sed -i 's/PkgConfig::BLUEZ//g' CMakeLists.txt && \
-            mkdir -p build && cd build && \
-            cmake .. -DCMAKE_BUILD_TYPE=Release && \
-            make
-            
-        # 5. Paketstruktur bauen, Konfigurationsdateien via printf schreiben und RPM installieren
-        RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
-            RPM_ITERATION=$(echo "${KERNEL_VERSION}" | tr "-" "_") && \
-            PKG_ROOT="/vds-pkg-root" && \
-            mkdir -p "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra" && \
-            mkdir -p "${PKG_ROOT}/usr/lib/modules-load.d" && \
-            mkdir -p "${PKG_ROOT}/usr/bin" && \
-            mkdir -p "${PKG_ROOT}/usr/lib/systemd/system/bluetooth.service.d" && \
-            mkdir -p "${PKG_ROOT}/usr/lib/systemd/system" && \
-            mkdir -p "${PKG_ROOT}/usr/share/dbus-1/system.d" && \
-            mkdir -p "${PKG_ROOT}/usr/lib/udev/rules.d" && \
-            cp /vds_build_dir/module/vds_hcd.ko "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra/" && \
-            chmod 644 "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra/vds_hcd.ko" && \
-            find /vds_build_dir/build -type f -name "vdsd" -exec cp {} "${PKG_ROOT}/usr/bin/vdsd" \; && \
-            find /vds_build_dir/build -type f -name "vdsctl" -exec cp {} "${PKG_ROOT}/usr/bin/vdsctl" \; && \
-            chmod 755 "${PKG_ROOT}/usr/bin/vdsd" "${PKG_ROOT}/usr/bin/vdsctl" && \
-            printf "vds_hcd\n" > "${PKG_ROOT}/usr/lib/modules-load.d/vds.conf" && \
-            printf "[Service]\nExecStart=\nExecStart=/usr/libexec/bluetooth/bluetoothd --compat\n" > "${PKG_ROOT}/usr/lib/systemd/system/bluetooth.service.d/override.conf" && \
-            printf "[Unit]\nDescription=Virtual DualSense Userspace Daemon\nAfter=bluetooth.service vds-chmod-sdp.service\nRequires=bluetooth.service vds-chmod-sdp.service\n\n[Service]\nType=simple\nExecStart=/usr/bin/vdsd\nRestart=always\nRestartSec=5\nAmbientCapabilities=CAP_NET_RAW CAP_SYS_ADMIN\nCapabilityBoundingSet=CAP_NET_RAW CAP_SYS_ADMIN\n\n[Install]\nWantedBy=multi-user.target\n" > "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service" && \
-            printf "[Unit]\nDescription=Setze Berechtigungen für vDS SDP-Socket\nAfter=bluetooth.service\nRequisite=bluetooth.service\n\n[Service]\nType=oneshot\nExecStart=/usr/bin/chmod 0777 /run/sdp\n" > "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.service" && \
-            printf "<!DOCTYPE busconfig PUBLIC \"-//freedesktop//DTD D-BUS Bus Configuration 1.0//EN\"\n \"http://freedesktop.org\">\n<busconfig>\n  <policy user=\"root\">\n    <allow own=\"org.vdsd\"/>\n    <allow send_destination=\"org.vdsd\"/>\n  </policy>\n  <policy context=\"default\">\n    <allow send_destination=\"org.vdsd\"/>\n  </policy>\n</busconfig>\n" > "${PKG_ROOT}/usr/share/dbus-1/system.d/org.vdsd.conf" && \
-            cp /vds_build_dir/99-vds-dualsense-udev.rules "${PKG_ROOT}/usr/lib/udev/rules.d/" && \
-            printf "KERNEL==\"uinput\", MODE=\"0660\", SECLABEL{selinux}=\"system_u:object_r:input_device_t:s0\", OPTIONS+=\"static_node=uinput\"\n" > "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-uinput.rules" && \
             cd /tmp && \
             fpm -s dir -t rpm -n "kmod-vds" -v "1.0.0" --iteration "${RPM_ITERATION}" -C "${PKG_ROOT}" usr/lib/modules usr/lib/modules-load.d usr/bin usr/lib/systemd usr/share/dbus-1 usr/lib/udev && \
             rpm -ivh kmod-vds-1.0.0-*.rpm && \
