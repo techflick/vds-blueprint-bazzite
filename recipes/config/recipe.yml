@@ -53,7 +53,7 @@ modules:
             cmake .. -DCMAKE_BUILD_TYPE=Release && \
             make
             
-        # 5. Paketstruktur bauen und RPM generieren (Verwendung von EOF verhindert Doppelpunkt-Fehler)
+        # 5. Paketstruktur bauen, Konfigurationsdateien via printf schreiben und RPM installieren
         RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
             RPM_ITERATION=$(echo "${KERNEL_VERSION}" | tr "-" "_") && \
             PKG_ROOT="/vds-pkg-root" && \
@@ -69,54 +69,13 @@ modules:
             find /vds_build_dir/build -type f -name "vdsd" -exec cp {} "${PKG_ROOT}/usr/bin/vdsd" \; && \
             find /vds_build_dir/build -type f -name "vdsctl" -exec cp {} "${PKG_ROOT}/usr/bin/vdsctl" \; && \
             chmod 755 "${PKG_ROOT}/usr/bin/vdsd" "${PKG_ROOT}/usr/bin/vdsctl" && \
-            echo "vds_hcd" > "${PKG_ROOT}/usr/lib/modules-load.d/vds.conf" && \
-            cat << 'EOF' > "${PKG_ROOT}/usr/lib/systemd/system/bluetooth.service.d/override.conf" && \
-        [Service]
-        ExecStart=
-        ExecStart=/usr/libexec/bluetooth/bluetoothd --compat
-        EOF
-            cat << 'EOF' > "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service" && \
-        [Unit]
-        Description=Virtual DualSense Userspace Daemon
-        After=bluetooth.service vds-chmod-sdp.service
-        Requires=bluetooth.service vds-chmod-sdp.service
-        
-        [Service]
-        Type=simple
-        ExecStart=/usr/bin/vdsd
-        Restart=always
-        RestartSec=5
-        AmbientCapabilities=CAP_NET_RAW CAP_SYS_ADMIN
-        CapabilityBoundingSet=CAP_NET_RAW CAP_SYS_ADMIN
-        
-        [Install]
-        WantedBy=multi-user.target
-        EOF
-            cat << 'EOF' > "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.service" && \
-        [Unit]
-        Description=Setze Berechtigungen für vDS SDP-Socket
-        After=bluetooth.service
-        Requisite=bluetooth.service
-        
-        [Service]
-        Type=oneshot
-        ExecStart=/usr/bin/chmod 0777 /run/sdp
-        EOF
-            cat << 'EOF' > "${PKG_ROOT}/usr/share/dbus-1/system.d/org.vdsd.conf" && \
-        <!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-BUS Bus Configuration 1.0//EN"
-         "http://freedesktop.org">
-        <busconfig>
-          <policy user="root">
-            <allow own="org.vdsd"/>
-            <allow send_destination="org.vdsd"/>
-          </policy>
-          <policy context="default">
-            <allow send_destination="org.vdsd"/>
-          </policy>
-        </busconfig>
-        EOF
+            printf "vds_hcd\n" > "${PKG_ROOT}/usr/lib/modules-load.d/vds.conf" && \
+            printf "[Service]\nExecStart=\nExecStart=/usr/libexec/bluetooth/bluetoothd --compat\n" > "${PKG_ROOT}/usr/lib/systemd/system/bluetooth.service.d/override.conf" && \
+            printf "[Unit]\nDescription=Virtual DualSense Userspace Daemon\nAfter=bluetooth.service vds-chmod-sdp.service\nRequires=bluetooth.service vds-chmod-sdp.service\n\n[Service]\nType=simple\nExecStart=/usr/bin/vdsd\nRestart=always\nRestartSec=5\nAmbientCapabilities=CAP_NET_RAW CAP_SYS_ADMIN\nCapabilityBoundingSet=CAP_NET_RAW CAP_SYS_ADMIN\n\n[Install]\nWantedBy=multi-user.target\n" > "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service" && \
+            printf "[Unit]\nDescription=Setze Berechtigungen für vDS SDP-Socket\nAfter=bluetooth.service\nRequisite=bluetooth.service\n\n[Service]\nType=oneshot\nExecStart=/usr/bin/chmod 0777 /run/sdp\n" > "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.service" && \
+            printf "<!DOCTYPE busconfig PUBLIC \"-//freedesktop//DTD D-BUS Bus Configuration 1.0//EN\"\n \"http://freedesktop.org\">\n<busconfig>\n  <policy user=\"root\">\n    <allow own=\"org.vdsd\"/>\n    <allow send_destination=\"org.vdsd\"/>\n  </policy>\n  <policy context=\"default\">\n    <allow send_destination=\"org.vdsd\"/>\n  </policy>\n</busconfig>\n" > "${PKG_ROOT}/usr/share/dbus-1/system.d/org.vdsd.conf" && \
             cp /vds_build_dir/99-vds-dualsense-udev.rules "${PKG_ROOT}/usr/lib/udev/rules.d/" && \
-            echo 'KERNEL=="uinput", MODE="0660", SECLABEL{selinux}="system_u:object_r:input_device_t:s0", OPTIONS+="static_node=uinput"' > "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-uinput.rules" && \
+            printf "KERNEL==\"uinput\", MODE=\"0660\", SECLABEL{selinux}=\"system_u:object_r:input_device_t:s0\", OPTIONS+=\"static_node=uinput\"\n" > "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-uinput.rules" && \
             cd /tmp && \
             fpm -s dir -t rpm -n "kmod-vds" -v "1.0.0" --iteration "${RPM_ITERATION}" -C "${PKG_ROOT}" usr/lib/modules usr/lib/modules-load.d usr/bin usr/lib/systemd usr/share/dbus-1 usr/lib/udev && \
             rpm -ivh kmod-vds-1.0.0-*.rpm && \
