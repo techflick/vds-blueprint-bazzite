@@ -6,21 +6,6 @@ base-image: ghcr.io/ublue-os/bazzite
 image-version: latest
 
 modules:
-  - type: rpm-ostree
-    install:
-      - kernel-devel
-      - make
-      - gcc
-      - gcc-c++
-      - cmake
-      - git
-      - ruby-devel
-      - rubygems
-      - rpm-build
-      - dbus-devel
-      - opus-devel
-      - libuuid-devel
-
   - type: containerfile
     snippets:
       - |
@@ -40,9 +25,27 @@ modules:
             find /tmp/bluez_repo -type f -name "sdp.h" -exec cp {} /tmp/headers/ \;
 
         # =========================================================================
-        # HAUPTSTUFE: Expliziter Wechsel zum Bazzite-Basis-Image
+        # HAUPTSTUFE: Wechsel zum Bazzite-Basis-Image & Paketinstallation
         # =========================================================================
         FROM ghcr.io/ublue-os/bazzite:latest
+
+        # Abhängigkeiten direkt in der Stufe via dnf installieren (Garantiert vorhanden)
+        RUN dnf install -y \
+            kernel-devel \
+            make \
+            gcc \
+            gcc-c++ \
+            cmake \
+            git \
+            ruby-devel \
+            rubygems \
+            rpm-build \
+            dbus-devel \
+            opus-devel \
+            libuuid-devel && \
+            dnf clean all
+
+        # Ruby FPM installieren
         RUN gem install --no-document fpm
 
         # Verzeichnisse anlegen und herbeigeschaffte Quellcodes lokal einspielen
