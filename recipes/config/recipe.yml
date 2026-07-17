@@ -1,19 +1,9 @@
-# yaml-language-server: $schema=https://blue-build.org
+# yaml-language-server: $schema=https://schema.blue-build.org/recipe-v1.json
 name: mein-bazzite-vds
 description: "Mein persönliches Bazzite mit nativer Integration des vDS Treibers und Daemons ohne Distrobox."
 
 base-image: ghcr.io/ublue-os/bazzite
 image-version: latest
-
-# Hier deklarieren wir die externen Repositories für den Blue-Build Manager,
-# damit sie VOR der Netzwerk-Sandbox heruntergeladen werden:
-sources:
-  - name: bluez_src
-    url: https://github.com/bluez/bluez.git
-    ref: master
-  - name: vds_src
-    url: https://github.com/hurryman2212/vds.git
-    ref: master
 
 modules:
   - type: rpm-ostree
@@ -34,26 +24,36 @@ modules:
   - type: containerfile
     snippets:
       - |
-        RUN gem install --no-document fpm
+        # =========================================================================
+        # VORSTUFE: GitHub-Schnittstelle im internetfähigen Alpine-Image abfragen
+        # =========================================================================
+        FROM alpine:latest AS github_downloader
+        RUN apk add --no-cache git
         
-        # 1. Header aus den lokal bereitgestellten BlueZ-Quellen kopieren (Kein Internet nötig)
-        RUN mkdir -p /usr/include/bluetooth && \
-            cp /tmp/sources/bluez_src/lib/bluetooth.h /usr/include/bluetooth/ && \
-            cp /tmp/sources/bluez_src/lib/hci.h /usr/include/bluetooth/ && \
-            cp /tmp/sources/bluez_src/lib/l2cap.h /usr/include/bluetooth/ && \
-            cp /tmp/sources/bluez_src/lib/sdp.h /usr/include/bluetooth/
+        # Repositories direkt im unbeschränkten Build-Kontext klonen
+        RUN git clone --depth 1 https://github.com/bluez/bluez.git /tmp/bluez_repo && \
+            git clone --depth 1 https://github.com/hurryman2212/vds.git /tmp/vds_repo
 
-        # 2. Lokale vDS-Quellen in das Build-Verzeichnis übertragen
-        RUN mkdir -p /vds_build_dir && \
-            cp -r /tmp/sources/vds_src/* /vds_build_dir/
+        # =========================================================================
+        # HAUPTSTUFE: Zurück zum atomaren Bazzite-Basis-Image wechseln
+        # =========================================================================
+        FROM CURRENT_IMAGE
+        RUN gem install --no-document fpm
+
+        # Heruntergeladene Ordner offline aus der Vorstufe kopieren
+        COPY --from=github_downloader /tmp/bluez_repo/lib/bluetooth.h /usr/include/bluetooth/
+        COPY --from=github_downloader /tmp/bluez_repo/lib/hci.h /usr/include/bluetooth/
+        COPY --from=github_downloader /tmp/bluez_repo/lib/l2cap.h /usr/include/bluetooth/
+        COPY --from=github_downloader /tmp/bluez_repo/lib/sdp.h /usr/include/bluetooth/
+        COPY --from=github_downloader /tmp/vds_repo /vds_build_dir
             
-        # 3. Kernel-Modul offline kompilieren
+        # Kernel-Modul kompilieren
         RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
             KERNEL_BUILD_DIR="/usr/src/kernels/${KERNEL_VERSION}" && \
             cd /vds_build_dir/module && \
             make KCFLAGS="-w" KERNELRELEASE="${KERNEL_VERSION}" KERNELDIR="${KERNEL_BUILD_DIR}"
             
-        # 4. Daemon offline kompilieren
+        # Daemon kompilieren
         RUN cd /vds_build_dir && \
             sed -i '/pkg_check_modules.*bluez/c\set(bluez_FOUND TRUE)\nset(bluez_INCLUDE_DIRS "/usr/include")\nset(bluez_LIBRARIES "")' CMakeLists.txt && \
             sed -i 's/PkgConfig::BLUEZ//g' CMakeLists.txt && \
@@ -61,7 +61,7 @@ modules:
             cmake .. -DCMAKE_BUILD_TYPE=Release && \
             make
             
-        # 5. Paketstruktur bauen, Konfigurationsdateien schreiben und RPM installieren
+        # Paketstruktur bauen, Konfigurationsdateien schreiben und RPM installieren
         RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
             RPM_ITERATION=$(echo "${KERNEL_VERSION}" | tr "-" "_") && \
             PKG_ROOT="/vds-pkg-root" && \
