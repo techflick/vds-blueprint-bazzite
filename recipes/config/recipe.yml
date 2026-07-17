@@ -30,9 +30,14 @@ modules:
         FROM alpine:latest AS github_downloader
         RUN apk add --no-cache git
         
-        # Repositories direkt im unbeschränkten Build-Kontext klonen
+        # Repositories klonen und alle Header-Optionen sammeln
         RUN git clone --depth 1 https://github.com/bluez/bluez.git /tmp/bluez_repo && \
-            git clone --depth 1 https://github.com/hurryman2212/vds.git /tmp/vds_repo
+            git clone --depth 1 https://github.com/hurryman2212/vds.git /tmp/vds_repo && \
+            mkdir -p /tmp/headers && \
+            find /tmp/bluez_repo -type f -name "bluetooth.h" -exec cp {} /tmp/headers/ \; && \
+            find /tmp/bluez_repo -type f -name "hci.h" -exec cp {} /tmp/headers/ \; && \
+            find /tmp/bluez_repo -type f -name "l2cap.h" -exec cp {} /tmp/headers/ \; && \
+            find /tmp/bluez_repo -type f -name "sdp.h" -exec cp {} /tmp/headers/ \;
 
         # =========================================================================
         # HAUPTSTUFE: Expliziter Wechsel zum Bazzite-Basis-Image
@@ -42,10 +47,7 @@ modules:
 
         # Verzeichnisse anlegen und herbeigeschaffte Quellcodes lokal einspielen
         RUN mkdir -p /usr/include/bluetooth /vds_build_dir
-        COPY --from=github_downloader /tmp/bluez_repo/lib/bluetooth.h /usr/include/bluetooth/
-        COPY --from=github_downloader /tmp/bluez_repo/lib/hci.h /usr/include/bluetooth/
-        COPY --from=github_downloader /tmp/bluez_repo/lib/l2cap.h /usr/include/bluetooth/
-        COPY --from=github_downloader /tmp/bluez_repo/lib/sdp.h /usr/include/bluetooth/
+        COPY --from=github_downloader /tmp/headers/* /usr/include/bluetooth/
         COPY --from=github_downloader /tmp/vds_repo/ /vds_build_dir/
             
         # Kernel-Modul kompilieren
