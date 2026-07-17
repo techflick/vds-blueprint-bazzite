@@ -6,7 +6,21 @@ base-image: ghcr.io/ublue-os/bazzite
 image-version: latest
 
 modules:
-    - type: containerfile
+  - type: rpm-ostree
+    install:
+      - kernel-devel
+      - make
+      - gcc
+      - gcc-c++
+      - cmake
+      - git
+      - ruby-devel
+      - rubygems
+      - rpm-build
+      - dbus-devel
+      - opus-devel
+
+  - type: containerfile
     snippets:
       - |
         RUN gem install --no-document fpm
@@ -66,4 +80,3 @@ modules:
             rpm -ivh kmod-vds-1.0.0-*.rpm && \
             depmod -a -b / "${KERNEL_VERSION}" && \
             rm -rf /vds_build_dir /vds-pkg-root /tmp/kmod-vds-*.rpm
-
