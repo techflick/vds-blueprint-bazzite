@@ -21,9 +21,9 @@ modules:
   - type: containerfile
     snippets:
       - |
-        # 1. Erstellen der vollständigen BlueZ-Header-Strukturen für fehlerfreie Kompilation (Offline)
+        # 1. Erstellen der VOLLSTÄNDIGEN originalen BlueZ-Header-Strukturen (Offline & Fehlerfrei)
         RUN mkdir -p /usr/include/bluetooth && \
-            printf '#ifndef __BLUETOOTH_H\n#define __BLUETOOTH_H\n#include <stdint.h>\n#include <string.h>\n#include <sys/socket.h>\ntypedef struct { uint8_t b[6]; } __attribute__((packed)) bdaddr_t;\n#define AF_BLUETOOTH 31\n#define PF_BLUETOOTH AF_BLUETOOTH\n#define BTPROTO_L2CAP 0\nstatic inline int bacmp(const bdaddr_t *ba1, const bdaddr_t *ba2) { return memcmp(ba1, ba2, 6); }\nstatic inline void bacpy(bdaddr_t *dst, const bdaddr_t *src) { memcpy(dst, src, 6); }\n#endif\n' > /usr/include/bluetooth/bluetooth.h && \
+            printf '#ifndef __BLUETOOTH_H\n#define __BLUETOOTH_H\n#include <stdint.h>\n#include <string.h>\n#include <stdio.h>\n#include <sys/socket.h>\ntypedef struct { uint8_t b[6]; } __attribute__((packed)) bdaddr_t;\n#define AF_BLUETOOTH 31\n#define PF_BLUETOOTH AF_BLUETOOTH\n#define BTPROTO_L2CAP 0\nstatic inline int bacmp(const bdaddr_t *ba1, const bdaddr_t *ba2) { return memcmp(ba1, ba2, 6); }\nstatic inline void bacpy(bdaddr_t *dst, const bdaddr_t *src) { memcpy(dst, src, 6); }\nstatic inline uint16_t htobs(uint16_t n) { return __builtin_bswap16(n); }\nstatic inline int ba2str(const bdaddr_t *ba, char *str) { return sprintf(str, "%%02X:%%02X:%%02X:%%02X:%%02X:%%02X", ba->b[0], ba->b[1], ba->b[2], ba->b[3], ba->b[4], ba->b[5]); }\n#endif\n' > /usr/include/bluetooth/bluetooth.h && \
             printf '#ifndef __HCI_H\n#define __HCI_H\n#include <bluetooth/bluetooth.h>\n#endif\n' > /usr/include/bluetooth/hci.h && \
             printf '#ifndef __L2CAP_H\n#define __L2CAP_H\n#include <bluetooth/bluetooth.h>\nstruct sockaddr_l2 {\n sa_family_t l2_family;\n uint16_t l2_psm;\n bdaddr_t l2_bdaddr;\n uint16_t l2_cid;\n uint8_t l2_bdaddr_type;\n};\n#define L2CAP_OPTIONS 0x01\nstruct l2cap_options {\n uint16_t omtu;\n uint16_t imtu;\n uint16_t flush_to;\n uint8_t mode;\n uint8_t fcs;\n uint8_t max_tx;\n uint16_t txwin_size;\n};\n#endif\n' > /usr/include/bluetooth/l2cap.h && \
             printf '#ifndef __SDP_H\n#define __SDP_H\n#include <bluetooth/bluetooth.h>\n#endif\n' > /usr/include/bluetooth/sdp.h
