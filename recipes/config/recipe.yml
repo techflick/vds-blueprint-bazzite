@@ -19,20 +19,21 @@ modules:
       - rpm-build
       - dbus-devel
       - opus-devel
+      - libuuid-devel # <-- WICHTIG: Stellt uuid/uuid.h für den Daemon bereit
 
   - type: containerfile
     snippets:
       - |
         RUN gem install --no-document fpm
         
-        # 1. Offizielle BlueZ-Header direkt aus dem Quellcode laden (Keine RPM-Konflikte, kein Fake-Code)
+        # 1. Korrekte BlueZ-Header-Pfade direkt aus dem Quellcode-Root kopieren
         RUN mkdir -p /tmp/bluez_src && \
             git clone --depth 1 https://github.com/bluez/bluez.git /tmp/bluez_src && \
             mkdir -p /usr/include/bluetooth && \
-            cp /tmp/bluez_src/lib/bluetooth.h /usr/include/bluetooth/ && \
-            cp /tmp/bluez_src/lib/hci.h /usr/include/bluetooth/ && \
-            cp /tmp/bluez_src/lib/l2cap.h /usr/include/bluetooth/ && \
-            cp /tmp/bluez_src/lib/sdp.h /usr/include/bluetooth/ && \
+            cp /tmp/bluez_src/bluetooth.h /usr/include/bluetooth/ && \
+            cp /tmp/bluez_src/hci.h /usr/include/bluetooth/ && \
+            cp /tmp/bluez_src/l2cap.h /usr/include/bluetooth/ && \
+            cp /tmp/bluez_src/sdp.h /usr/include/bluetooth/ && \
             rm -rf /tmp/bluez_src
 
         # 2. vDS-Repository klonen
@@ -44,7 +45,7 @@ modules:
             cd /vds_build_dir/module && \
             make KCFLAGS="-w" KERNELRELEASE="${KERNEL_VERSION}" KERNELDIR="${KERNEL_BUILD_DIR}"
             
-        # 4. Daemon kompilieren (Wir täuschen PkgConfig, damit CMake ohne die .so-Bibliothek baut)
+        # 4. Daemon kompilieren (CMake-Zwangskonfiguration ohne System-BlueZ)
         RUN cd /vds_build_dir && \
             sed -i '/pkg_check_modules.*bluez/c\set(bluez_FOUND TRUE)\nset(bluez_INCLUDE_DIRS "/usr/include")\nset(bluez_LIBRARIES "")' CMakeLists.txt && \
             sed -i 's/PkgConfig::BLUEZ//g' CMakeLists.txt && \
@@ -80,3 +81,4 @@ modules:
             rpm -ivh kmod-vds-1.0.0-*.rpm && \
             depmod -a -b / "${KERNEL_VERSION}" && \
             rm -rf /vds_build_dir /vds-pkg-root /tmp/kmod-vds-*.rpm
+sh
