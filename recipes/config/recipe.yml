@@ -1,4 +1,4 @@
-# yaml-language-server: $schema=https://schema.blue-build.org/recipe-v1.json
+# yaml-language-server: $schema=https://blue-build.org
 name: mein-bazzite-vds
 description: "Mein persönliches Bazzite mit nativer Integration des vDS Treibers und Daemons ohne Distrobox."
 
@@ -35,17 +35,18 @@ modules:
             git clone --depth 1 https://github.com/hurryman2212/vds.git /tmp/vds_repo
 
         # =========================================================================
-        # HAUPTSTUFE: Zurück zum atomaren Bazzite-Basis-Image wechseln
+        # HAUPTSTUFE: Expliziter Wechsel zum Bazzite-Basis-Image
         # =========================================================================
-        FROM CURRENT_IMAGE
+        FROM ghcr.io/ublue-os/bazzite:latest
         RUN gem install --no-document fpm
 
-        # Heruntergeladene Ordner offline aus der Vorstufe kopieren
+        # Verzeichnisse anlegen und herbeigeschaffte Quellcodes lokal einspielen
+        RUN mkdir -p /usr/include/bluetooth /vds_build_dir
         COPY --from=github_downloader /tmp/bluez_repo/lib/bluetooth.h /usr/include/bluetooth/
         COPY --from=github_downloader /tmp/bluez_repo/lib/hci.h /usr/include/bluetooth/
         COPY --from=github_downloader /tmp/bluez_repo/lib/l2cap.h /usr/include/bluetooth/
         COPY --from=github_downloader /tmp/bluez_repo/lib/sdp.h /usr/include/bluetooth/
-        COPY --from=github_downloader /tmp/vds_repo /vds_build_dir
+        COPY --from=github_downloader /tmp/vds_repo/ /vds_build_dir/
             
         # Kernel-Modul kompilieren
         RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
