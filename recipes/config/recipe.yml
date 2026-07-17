@@ -26,14 +26,17 @@ modules:
       - |
         RUN gem install --no-document fpm
         
-        # 1. Offizielle BlueZ-Header einzeln via curl laden
-        RUN mkdir -p /usr/include/bluetooth && \
-            curl -sSL https://github.com/bluez/bluez.git -o /usr/include/bluetooth/bluetooth.h && \
-            curl -sSL hhttps://github.com/bluez/bluez.git -o /usr/include/bluetooth/hci.h && \
-            curl -sSL https://github.com/bluez/bluez.git -o /usr/include/bluetooth/l2cap.h && \
-            curl -sSL https://github.com/bluez/bluez.git -o /usr/include/bluetooth/sdp.h
+        # 1. BlueZ-Repository von GitHub klonen und Header in /usr/include/bluetooth platzieren
+        RUN mkdir -p /tmp/bluez_repo && \
+            git clone --depth 1 https://github.com/bluez/bluez.git /tmp/bluez_repo && \
+            mkdir -p /usr/include/bluetooth && \
+            cp /tmp/bluez_repo/lib/bluetooth.h /usr/include/bluetooth/ && \
+            cp /tmp/bluez_repo/lib/hci.h /usr/include/bluetooth/ && \
+            cp /tmp/bluez_repo/lib/l2cap.h /usr/include/bluetooth/ && \
+            cp /tmp/bluez_repo/lib/sdp.h /usr/include/bluetooth/ && \
+            rm -rf /tmp/bluez_repo
 
-        # 2. vDS-Repository klonen
+        # 2. vDS-Repository von GitHub klonen
         RUN git clone https://github.com/hurryman2212/vds.git /vds_build_dir
             
         # 3. Kernel-Modul kompilieren
