@@ -80,7 +80,35 @@ modules:
         # 6. Natives RPM via rpmbuild generieren und installieren
         RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
             mkdir -p /root/rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS} && \
-            printf "Name: kmod-vds\nVersion: 1.0.0\nRelease: 1\nSummary: Virtual DualSense Driver\nLicense: MIT\n%%description\nVirtual DualSense\n%%post\n/usr/sbin/restorecon -R /usr/bin/vdsd /usr/bin/vdsctl /usr/lib/systemd/system/vdsd.service || true\n%%files\n/usr/lib/modules/%s/extra/vds_hcd.ko\n/usr/lib/modules-load.d/vds.conf\n/usr/bin/vdsd\n/usr/bin/vdsctl\n%%dir /usr/lib/systemd/system/bluetooth.service.d\n/usr/lib/systemd/system/bluetooth.service.d/override.conf\n%%dir /usr/lib/systemd/system/vdsd.service.d\n/usr/lib/systemd/system/vdsd.service.d/99-network-fix.conf\n/usr/lib/systemd/system/vdsd.service\n/usr/lib/systemd/system/vds-chmod-sdp.service\n/usr/lib/systemd/system/vds-chmod-sdp.path\n/usr/share/dbus-1/system.d/org.vdsd.conf\n/usr/lib/udev/rules.d/99-vds-dualsense-udev.rules\n/usr/lib/udev/rules.d/99-vds-uinput.rules\n" "${KERNEL_VERSION}" > /root/root/rpmbuild/SPECS/vds.spec && \
+            cat << EOF > /root/rpmbuild/SPECS/vds.spec
+Name: kmod-vds
+Version: 1.0.0
+Release: 1
+Summary: Virtual DualSense Driver
+License: MIT
+
+%description
+Virtual DualSense Driver und Daemon für Bazzite.
+
+%post
+/usr/sbin/restorecon -R /usr/bin/vdsd /usr/bin/vdsctl /usr/lib/systemd/system/vdsd.service || true
+
+%files
+/usr/lib/modules/${KERNEL_VERSION}/extra/vds_hcd.ko
+/usr/lib/modules-load.d/vds.conf
+/usr/bin/vdsd
+/usr/bin/vdsctl
+%dir /usr/lib/systemd/system/bluetooth.service.d
+/usr/lib/systemd/system/bluetooth.service.d/override.conf
+%dir /usr/lib/systemd/system/vdsd.service.d
+/usr/lib/systemd/system/vdsd.service.d/99-network-fix.conf
+/usr/lib/systemd/system/vdsd.service
+/usr/lib/systemd/system/vds-chmod-sdp.service
+/usr/lib/systemd/system/vds-chmod-sdp.path
+/usr/share/dbus-1/system.d/org.vdsd.conf
+/usr/lib/udev/rules.d/99-vds-dualsense-udev.rules
+/usr/lib/udev/rules.d/99-vds-uinput.rules
+EOF
             rpmbuild --define "_topdir /root/rpmbuild" --buildroot=/vds-pkg-root -bb /root/rpmbuild/SPECS/vds.spec && \
             rpm -ivh --nodeps /root/rpmbuild/RPMS/x86_64/kmod-vds-1.0.0-1.x86_64.rpm
 
