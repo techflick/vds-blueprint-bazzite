@@ -6,7 +6,19 @@ base-image: ghcr.io/ublue-os/bazzite
 image-version: latest
 
 modules:
-    - type: containerfile
+  - type: rpm-ostree
+    install:
+      - kernel-devel
+      - make
+      - gcc
+      - gcc-c++
+      - cmake
+      - git
+      - dbus-devel
+      - opus-devel
+      - rpm-build
+
+  - type: containerfile
     snippets:
       - |
         # 1. vDS-Repository frisch klonen
