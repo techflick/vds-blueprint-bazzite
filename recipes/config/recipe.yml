@@ -46,7 +46,7 @@ modules:
         RUN printf '#ifndef __SDP_H\n#define __SDP_H\n#include <bluetooth/bluetooth.h>\n#endif\n' > /usr/include/bluetooth/sdp.h
             
         # 2. vDS-Repository klonen
-        RUN git clone --depth 1 https://github.com /vds_build_dir
+        RUN git clone --depth 1 https://github.com/hurryman2212/vds.git /vds_build_dir
             
         # 3. Kernel-Modul kompilieren
         RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
