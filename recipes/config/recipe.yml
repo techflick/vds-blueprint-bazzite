@@ -30,14 +30,11 @@ modules:
             cd /vds_build_dir/module && \
             make KCFLAGS="-w" KERNELRELEASE="${KERNEL_VERSION}" KERNELDIR="${KERNEL_BUILD_DIR}"
             
-        # 3. Lokale Header via Hex-Echoinjektion erzeugen & Code über unzerstörbares 16-Byte-Array patchen
+        # 3. Lokale Header via Hex-Echoinjektion erzeugen mit erzwungenem 14-Byte-Padding
         RUN mkdir -p /vds_build_dir/include/bluetooth && \
             echo -e "#ifndef __BLUETOOTH_H\n#define __BLUETOOTH_H\n#include <stdint.h>\n#include <sys/socket.h>\n#include <string.h>\n#include <stdio.h>\n#define AF_BLUETOOTH 31\n#define PF_BLUETOOTH AF_BLUETOOTH\n#define BTPROTO_L2CAP 0\ntypedef struct { uint8_t b\x5b6\x5d; } __attribute__((packed)) bdaddr_t;\nstatic inline int bacmp(const bdaddr_t *ba1, const bdaddr_t *ba2) { return memcmp(ba1, ba2, 6); }\nstatic inline void bacpy(bdaddr_t *dst, const bdaddr_t *src) { memcpy(dst, src, 6); }\nstatic inline uint16_t htobs(uint16_t n) { return __builtin_bswap16(n); }\nstatic inline int ba2str(const bdaddr_t *ba, char *str) { return sprintf(str, \"%%02X\x3a%%02X\x3a%%02X\x3a%%02X\x3a%%02X\x3a%%02X\", ba->b\x5b0\x5d, ba->b\x5b1\x5d, ba->b\x5b2\x5d, ba->b\x5b3\x5d, ba->b\x5b4\x5d, ba->b\x5b5\x5d); }\n#endif" > /vds_build_dir/include/bluetooth/bluetooth.h && \
-            echo -e "#ifndef __L2CAP_H\n#define __L2CAP_H\n#include <bluetooth/bluetooth.h>\nstruct sockaddr_l2 {\n\tsa_family_t l2_family;\n\tuint16_t l2_psm;\n\tbdaddr_t l2_bdaddr;\n\tuint16_t l2_cid;\n\tuint8_t l2_bdaddr_type;\n} __attribute__((packed));\n#endif" > /vds_build_dir/include/bluetooth/l2cap.h && \
-            cd /vds_build_dir && \
-            TARGET_FILE=$(grep -rl "l2_family = AF_BLUETOOTH" .) && \
-            echo "Patche Socket-Bindung in: ${TARGET_FILE}" && \
-            python3 -c "import re; f=open('${TARGET_FILE}','r'); c=f.read(); f.close(); s=re.search(r'struct\s+sockaddr_l2\s+[A-Za-z0-9_]+\s*;',c); e=re.search(r'if\s*\(\s*bind\s*\(\s*[A-Za-z0-9_]+\s*,\s*\(\s*struct\s+sockaddr\s*\*\s*\)\s*&\s*[A-Za-z0-9_]+\s*,\s*sizeof\s*\(\s*[A-Za-z0-9_]+\s*\)\s*\)\s*<\s*0\s*\)',c); (print('Fehler beim Match') if not (s and e) else [open('${TARGET_FILE}','w').write(c[:s.start()] + 'uint8_t raw_sockaddr\x5b16\x5d = {0}; raw_sockaddr\x5b0\x5d = 31; raw_sockaddr\x5b1\x5d = 0; raw_sockaddr\x5b2\x5d = 0; raw_sockaddr\x5b3\x5d = 0x11; if (bind(' + (re.search(r'bind\s*\(\s*([A-Za-z0-9_]+)\s*,',c[s.start():e.end()]).group(1) if re.search(r'bind\s*\(\s*([A-Za-z0-9_]+)\s*,',c[s.start():e.end()]) else 'vds_socket') + ', (struct sockaddr*)raw_sockaddr, 16) < 0)' + c[e.end():]), print('Erfolgreich injiziert')])"
+            echo -e "#ifndef __L2CAP_H\n#define __L2CAP_H\n#include <bluetooth/bluetooth.h>\nstruct sockaddr_l2 {\n\tsa_family_t l2_family;\n\tuint16_t l2_psm;\n\tbdaddr_t l2_bdaddr;\n\tuint16_t l2_cid;\n\tuint8_t l2_bdaddr_type;\n\tuint8_t padding\x5b1\x5d;\n} __attribute__((packed));\n#endif" > /vds_build_dir/include/bluetooth/l2cap.h && \
+            echo "Header erfolgreich mit 14-Byte-Padding injiziert"
 
         # 4. Daemon kompilieren (Verknüpfung über unseren perfekt befüllten, lokalen Pfad)
         RUN cd /vds_build_dir && \
