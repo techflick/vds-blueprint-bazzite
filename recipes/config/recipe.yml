@@ -51,16 +51,14 @@ modules:
             make KCFLAGS="-w" KERNELRELEASE="${KERNEL_VERSION}" KERNELDIR="${KERNEL_BUILD_DIR}"
             
         # 4. Daemon kompilieren
-        RUN cd /vds_build_dir && \
+       RUN cd /vds_build_dir && \
             sed -i '/pkg_check_modules.*bluez/c\set(bluez_FOUND TRUE)\nset(bluez_INCLUDE_DIRS "/usr/include")\nset(bluez_LIBRARIES "")' CMakeLists.txt && \
             sed -i 's/PkgConfig::BLUEZ//g' CMakeLists.txt && \
-            # Quellcode-Patch: Sicherstellen, dass die Struktur genullt und der Typ sauber gesetzt ist
-            sed -i '/struct sockaddr_l2/i \    memset(&addr, 0, sizeof(addr));' src/daemon.c || true && \
-            sed -i '/addr.l2_psm =/a \    addr.l2_bdaddr_type = 0;' src/daemon.c || true && \
             mkdir -p build && cd build && \
+            # Makro-Injektion: Kapselt bind() im gesamten Code und erzwingt das Setzen von l2_bdaddr_type auf 0 (BDADDR_BREDR) vor dem echten Syscall
             cmake .. -DCMAKE_BUILD_TYPE=Release \
-                     -DCMAKE_C_FLAGS="-I/usr/include -Wno-address-of-packed-member" \
-                     -DCMAKE_CXX_FLAGS="-I/usr/include -Wno-address-of-packed-member" && \
+                     -DCMAKE_C_FLAGS="-I/usr/include -Wno-address-of-packed-member -Dbind(s,a,l)='(((a)->sa_family == 31) ? (((struct sockaddr_l2*)(a))->l2_bdaddr_type = 0) : 0), bind(s,a,l)'" \
+                     -DCMAKE_CXX_FLAGS="-I/usr/include -Wno-address-of-packed-member -Dbind(s,a,l)='(((a)->sa_family == 31) ? (((struct sockaddr_l2*)(a))->l2_bdaddr_type = 0) : 0), bind(s,a,l)'" && \
             make
             
         # 5. RPM-Paketstruktur vorbereiten (PKG_ROOT) inklusive Systemd- & SELinux-Härtung
