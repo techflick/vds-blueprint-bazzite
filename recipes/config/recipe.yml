@@ -21,7 +21,7 @@ modules:
   - type: containerfile
     snippets:
       - |
-        # 1. Bluetooth Header-Mocking
+        # 1. Bluetooth Header-Mocking inklusive transparentem EINVAL-Fix
         RUN mkdir -p /usr/include/bluetooth && \
             echo '#ifndef __BLUETOOTH_H' > /usr/include/bluetooth/bluetooth.h && \
             echo '#define __BLUETOOTH_H' >> /usr/include/bluetooth/bluetooth.h && \
@@ -41,7 +41,7 @@ modules:
 
         RUN printf '#ifndef __HCI_H\n#define __HCI_H\n#include <bluetooth/bluetooth.h>\n#endif\n' > /usr/include/bluetooth/hci.h
 
-        RUN printf '#ifndef __L2CAP_H\n#define __L2CAP_H\n#include <bluetooth/bluetooth.h>\nstruct sockaddr_l2 {\n\tsa_family_t\tl2_family;\n\tuint16_t\tl2_psm;\n\tbdaddr_t\tl2_bdaddr;\n\tuint16_t\tl2_cid;\n\tuint8_t\t\tl2_bdaddr_type;\n\tuint8_t\t\t_padding;\n};\n#define L2CAP_OPTIONS 0x01\nstruct l2cap_options {\n\tuint16_t\tomtu;\n\tuint16_t\timtu;\n\tuint16_t\tflush_to;\n\tuint8_t\t\tmode;\n\tuint8_t\t\tfcs;\n\tuint8_t\t\tmax_tx;\n\tuint16_t\ttxwin_size;\n};\n#endif\n' > /usr/include/bluetooth/l2cap.h
+        RUN printf '#ifndef __L2CAP_H\n#define __L2CAP_H\n#include <bluetooth/bluetooth.h>\nstruct sockaddr_l2 {\n\tsa_family_t\tl2_family;\n\tuint16_t\tl2_psm;\n\tbdaddr_t\tl2_bdaddr;\n\tuint16_t\tl2_cid;\n\tuint8_t\t\tl2_bdaddr_type;\n\tuint8_t\t\t_padding;\n};\n#define L2CAP_OPTIONS 0x01\nstruct l2cap_options {\n\tuint16_t\tomtu;\n\tuint16_t\timtu;\n\tuint16_t\tflush_to;\n\tuint8_t\t\tmode;\n\tuint8_t\t\tfcs;\n\tuint8_t\t\tmax_tx;\n\tuint16_t\ttxwin_size;\n};\n\n/* Kernel EINVAL Fix via Syscall-Interception */\n#include <sys/socket.h>\n#undef bind\n#define bind(s,a,l) ((((a)->sa_family == 31) ? (((struct sockaddr_l2*)(a))->l2_bdaddr_type = 0) : 0), bind(s,a,l))\n#endif\n' > /usr/include/bluetooth/l2cap.h
 
         RUN printf '#ifndef __SDP_H\n#define __SDP_H\n#include <bluetooth/bluetooth.h>\n#endif\n' > /usr/include/bluetooth/sdp.h
             
@@ -54,14 +54,14 @@ modules:
             cd /vds_build_dir/module && \
             make KCFLAGS="-w" KERNELRELEASE="${KERNEL_VERSION}" KERNELDIR="${KERNEL_BUILD_DIR}"
             
-        # 4. Daemon kompilieren (Mit Macro-Injektion gegen den EINVAL bind() Fehler)
+        # 4. Daemon kompilieren
         RUN cd /vds_build_dir && \
             sed -i '/pkg_check_modules.*bluez/c\set(bluez_FOUND TRUE)\nset(bluez_INCLUDE_DIRS "/usr/include")\nset(bluez_LIBRARIES "")' CMakeLists.txt && \
             sed -i 's/PkgConfig::BLUEZ//g' CMakeLists.txt && \
             mkdir -p build && cd build && \
             cmake .. -DCMAKE_BUILD_TYPE=Release \
-                     -DCMAKE_C_FLAGS="-I/usr/include -Wno-address-of-packed-member -Dbind(s,a,l)='(((a)->sa_family == 31) ? (((struct sockaddr_l2*)(a))->l2_bdaddr_type = 0) : 0), bind(s,a,l)'" \
-                     -DCMAKE_CXX_FLAGS="-I/usr/include -Wno-address-of-packed-member -Dbind(s,a,l)='(((a)->sa_family == 31) ? (((struct sockaddr_l2*)(a))->l2_bdaddr_type = 0) : 0), bind(s,a,l)'" && \
+                     -DCMAKE_C_FLAGS="-I/usr/include -Wno-address-of-packed-member" \
+                     -DCMAKE_CXX_FLAGS="-I/usr/include -Wno-address-of-packed-member" && \
             make
             
         # 5. RPM-Paketstruktur vorbereiten (PKG_ROOT) inklusive Systemd- & SELinux-Härtung
