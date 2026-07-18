@@ -32,14 +32,41 @@ modules:
             
         # 3. Lokale, valide Userspace-Header im Projekt erzeugen & Code programmatisch patchen
         RUN mkdir -p /vds_build_dir/include/bluetooth && \
-            printf '#ifndef __BLUETOOTH_H\n#define __BLUETOOTH_H\n#include <stdint.h>\n#include <sys/socket.h>\n#include <string.h>\n#include <stdio.h>\n#define AF_BLUETOOTH 31\n#define PF_BLUETOOTH AF_BLUETOOTH\n#define BTPROTO_L2CAP 0\ntypedef struct { uint8_t b; } __attribute__((packed)) bdaddr_t;\nstatic inline int bacmp(const bdaddr_t *ba1, const bdaddr_t *ba2) { return memcmp(ba1, ba2, 6); }\nstatic inline void bacpy(bdaddr_t *dst, const bdaddr_t *src) { memcpy(dst, src, 6); }\nstatic inline uint16_t htobs(uint16_t n) { return __builtin_bswap16(n); }\nstatic inline int ba2str(const bdaddr_t *ba, char *str) { return sprintf(str, "%%02X:%%02X:%%02X:%%02X:%%02X:%%02X", ba->b, ba->b, ba->b, ba->b, ba->b, ba->b); }\n#endif\n' > /vds_build_dir/include/bluetooth/bluetooth.h && \
-            printf '#ifndef __L2CAP_H\n#define __L2CAP_H\n#include <bluetooth/bluetooth.h>\nstruct sockaddr_l2 {\n\tsa_family_t\tl2_family;\n\tuint16_t\tl2_psm;\n\tbdaddr_t\tl2_bdaddr;\n\tuint16_t\tl2_cid;\n\tuint8_t\t\tl2_bdaddr_type;\n} __attribute__((packed));\n#endif\n' > /vds_build_dir/include/bluetooth/l2cap.h && \
+            cat << 'EOF' > /vds_build_dir/include/bluetooth/bluetooth.h
+#ifndef __BLUETOOTH_H
+#define __BLUETOOTH_H
+#include <stdint.h>
+#include <sys/socket.h>
+#include <string.h>
+#include <stdio.h>
+#define AF_BLUETOOTH 31
+#define PF_BLUETOOTH AF_BLUETOOTH
+#define BTPROTO_L2CAP 0
+typedef struct { uint8_t b[6]; } __attribute__((packed)) bdaddr_t;
+static inline int bacmp(const bdaddr_t *ba1, const bdaddr_t *ba2) { return memcmp(ba1, ba2, 6); }
+static inline void bacpy(bdaddr_t *dst, const bdaddr_t *src) { memcpy(dst, src, 6); }
+static inline uint16_t htobs(uint16_t n) { return __builtin_bswap16(n); }
+static inline int ba2str(const bdaddr_t *ba, char *str) { return sprintf(str, "%02X:%02X:%02X:%02X:%02X:%02X", ba->b[0], ba->b[1], ba->b[2], ba->b[3], ba->b[4], ba->b[5]); }
+#endif
+EOF
+            cat << 'EOF' > /vds_build_dir/include/bluetooth/l2cap.h
+#ifndef __L2CAP_H
+#define __L2CAP_H
+#include <bluetooth/bluetooth.h>
+struct sockaddr_l2 {
+	sa_family_t	l2_family;
+	uint16_t	l2_psm;
+	bdaddr_t	l2_bdaddr;
+	uint16_t	l2_cid;
+	uint8_t		l2_bdaddr_type;
+} __attribute__((packed));
+#endif
+EOF
             cd /vds_build_dir && \
             TARGET_FILE=$(grep -rl "l2_family = AF_BLUETOOTH" .) && \
             echo "Patche Datei: ${TARGET_FILE}" && \
-            sed -i '/sockaddr_l2 sockaddr;/a \  memset(&sockaddr, 0, sizeof(sockaddr));' "${TARGET_FILE}" && \
-            sed -i '/sockaddr.l2_psm = /a \  sockaddr.l2_bdaddr_type = 0;' "${TARGET_FILE}" && \
-            sed -i -E 's/bind\(([^,]+),\s*\(struct sockaddr\s*\*\)\s*&sockaddr,\s*sizeof\(sockaddr\)\)/bind(\1, (struct sockaddr*)\&sockaddr, 16)/g' "${TARGET_FILE}"
+            sed -i -E 's/([A-Za-z0-9_]+)\.l2_family\s*=\s*AF_BLUETOOTH;/memset(\&\1, 0, sizeof(\1)); \1.l2_family = AF_BLUETOOTH; \1.l2_bdaddr_type = 0;/' "${TARGET_FILE}" && \
+            sed -i -E 's/bind\(([^,]+),\s*\(struct sockaddr\s*\*\)\s*&([A-Za-z0-9_]+),\s*sizeof\([^)]+\)\)/bind(\1, (struct sockaddr*)\&\2, 16)/g' "${TARGET_FILE}"
 
         # 4. Daemon kompilieren (Verknüpfung über den lokalen Header-Pfad)
         RUN cd /vds_build_dir && \
