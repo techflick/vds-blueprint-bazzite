@@ -32,7 +32,7 @@ modules:
             
         # 3. Lokale, valide Userspace-Header im Projekt erzeugen & Code programmatisch patchen
         RUN mkdir -p /vds_build_dir/include/bluetooth && \
-            printf '#ifndef __BLUETOOTH_H\n#define __BLUETOOTH_H\n#include <stdint.h>\n#include <sys/socket.h>\n#include <string.h>\n#include <stdio.h>\n#define AF_BLUETOOTH 31\n#define PF_BLUETOOTH AF_BLUETOOTH\n#define BTPROTO_L2CAP 0\ntypedef struct { uint8_t b[6]; } __attribute__((packed)) bdaddr_t;\nstatic inline int bacmp(const bdaddr_t *ba1, const bdaddr_t *ba2) { return memcmp(ba1, ba2, 6); }\nstatic inline void bacpy(bdaddr_t *dst, const bdaddr_t *src) { memcpy(dst, src, 6); }\nstatic inline uint16_t htobs(uint16_t n) { return __builtin_bswap16(n); }\nstatic inline int ba2str(const bdaddr_t *ba, char *str) { return sprintf(str, "%%02X:%%02X:%%02X:%%02X:%%02X:%%02X", ba->b[0], ba->b[1], ba->b[2], ba->b[3], ba->b[4], ba->b[5]); }\n#endif\n' > /vds_build_dir/include/bluetooth/bluetooth.h && \
+            printf '#ifndef __BLUETOOTH_H\n#define __BLUETOOTH_H\n#include <stdint.h>\n#include <sys/socket.h>\n#include <string.h>\n#include <stdio.h>\n#define AF_BLUETOOTH 31\n#define PF_BLUETOOTH AF_BLUETOOTH\n#define BTPROTO_L2CAP 0\ntypedef struct { uint8_t b; } __attribute__((packed)) bdaddr_t;\nstatic inline int bacmp(const bdaddr_t *ba1, const bdaddr_t *ba2) { return memcmp(ba1, ba2, 6); }\nstatic inline void bacpy(bdaddr_t *dst, const bdaddr_t *src) { memcpy(dst, src, 6); }\nstatic inline uint16_t htobs(uint16_t n) { return __builtin_bswap16(n); }\nstatic inline int ba2str(const bdaddr_t *ba, char *str) { return sprintf(str, "%%02X:%%02X:%%02X:%%02X:%%02X:%%02X", ba->b, ba->b, ba->b, ba->b, ba->b, ba->b); }\n#endif\n' > /vds_build_dir/include/bluetooth/bluetooth.h && \
             printf '#ifndef __L2CAP_H\n#define __L2CAP_H\n#include <bluetooth/bluetooth.h>\nstruct sockaddr_l2 {\n\tsa_family_t\tl2_family;\n\tuint16_t\tl2_psm;\n\tbdaddr_t\tl2_bdaddr;\n\tuint16_t\tl2_cid;\n\tuint8_t\t\tl2_bdaddr_type;\n} __attribute__((packed));\n#endif\n' > /vds_build_dir/include/bluetooth/l2cap.h && \
             cd /vds_build_dir && \
             TARGET_FILE=$(grep -rl "l2_family = AF_BLUETOOTH" .) && \
@@ -77,46 +77,33 @@ modules:
             printf 'KERNEL=="uinput", MODE="0660", GROUP="input", SECLABEL{selinux}="system_u:object_r:input_device_t:s0", OPTIONS+="static_node=uinput"\n' > "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-uinput.rules" && \
             printf 'KERNEL=="vds[0-9]*", MODE="0660", GROUP="input", SECLABEL{selinux}="system_u:object_r:input_device_t:s0"\n' >> "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-uinput.rules"
 
-                # 6. Natives RPM via rpmbuild generieren und installieren
+        # 6. Natives RPM via rpmbuild generieren und installieren
         RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
             mkdir -p /root/rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS} && \
-            cat << 'EOF' > /root/rpmbuild/SPECS/vds.spec
-Name: kmod-vds
-Version: 1.0.0
-Release: 1
-Summary: Virtual DualSense Driver
-License: MIT
-
-%description
-Virtual DualSense Driver und Daemon für Bazzite.
-
-%post
-/usr/sbin/restorecon -R /usr/bin/vdsd /usr/bin/vdsctl /usr/lib/systemd/system/vdsd.service || true
-
-%files
-/usr/lib/modules/%{nil}
-/usr/lib/modules-load.d/vds.conf
-/usr/bin/vdsd
-/usr/bin/vdsctl
-%dir /usr/lib/systemd/system/bluetooth.service.d
-/usr/lib/systemd/system/bluetooth.service.d/override.conf
-%dir /usr/lib/systemd/system/vdsd.service.d
-/usr/lib/systemd/system/vdsd.service.d/99-network-fix.conf
-/usr/lib/systemd/system/vdsd.service
-/usr/lib/systemd/system/vds-chmod-sdp.service
-/usr/lib/systemd/system/vds-chmod-sdp.path
-/usr/share/dbus-1/system.d/org.vdsd.conf
-/usr/lib/udev/rules.d/99-vds-dualsense-udev.rules
-/usr/lib/udev/rules.d/99-vds-uinput.rules
-EOF
-            sed -i "s|/usr/lib/modules/%{nil}|/usr/lib/modules/${KERNEL_VERSION}/extra/vds_hcd.ko|g" /root/rpmbuild/SPECS/vds.spec && \
+            echo "Name: kmod-vds" > /root/rpmbuild/SPECS/vds.spec && \
+            echo "Version: 1.0.0" >> /root/rpmbuild/SPECS/vds.spec && \
+            echo "Release: 1" >> /root/rpmbuild/SPECS/vds.spec && \
+            echo "Summary: Virtual DualSense Driver" >> /root/rpmbuild/SPECS/vds.spec && \
+            echo "License: MIT" >> /root/rpmbuild/SPECS/vds.spec && \
+            echo "%description" >> /root/rpmbuild/SPECS/vds.spec && \
+            echo "Virtual DualSense Driver und Daemon für Bazzite." >> /root/rpmbuild/SPECS/vds.spec && \
+            echo "%post" >> /root/rpmbuild/SPECS/vds.spec && \
+            echo "/usr/sbin/restorecon -R /usr/bin/vdsd /usr/bin/vdsctl /usr/lib/systemd/system/vdsd.service || true" >> /root/rpmbuild/SPECS/vds.spec && \
+            echo "%files" >> /root/rpmbuild/SPECS/vds.spec && \
+            echo "/usr/lib/modules/${KERNEL_VERSION}/extra/vds_hcd.ko" >> /root/rpmbuild/SPECS/vds.spec && \
+            echo "/usr/lib/modules-load.d/vds.conf" >> /root/rpmbuild/SPECS/vds.spec && \
+            echo "/usr/bin/vdsd" >> /root/rpmbuild/SPECS/vds.spec && \
+            echo "/usr/bin/vdsctl" >> /root/rpmbuild/SPECS/vds.spec && \
+            echo "%dir /usr/lib/systemd/system/bluetooth.service.d" >> /root/rpmbuild/SPECS/vds.spec && \
+            echo "/usr/lib/modules/%{nil}" >> /root/rpmbuild/SPECS/vds.spec && \
+            echo "/usr/lib/systemd/system/bluetooth.service.d/override.conf" >> /root/rpmbuild/SPECS/vds.spec && \
+            echo "%dir /usr/lib/systemd/system/vdsd.service.d" >> /root/rpmbuild/SPECS/vds.spec && \
+            echo "/usr/lib/systemd/system/vdsd.service.d/99-network-fix.conf" >> /root/rpmbuild/SPECS/vds.spec && \
+            echo "/usr/lib/systemd/system/vdsd.service" >> /root/rpmbuild/SPECS/vds.spec && \
+            echo "/usr/lib/systemd/system/vds-chmod-sdp.service" >> /root/rpmbuild/SPECS/vds.spec && \
+            echo "/usr/lib/systemd/system/vds-chmod-sdp.path" >> /root/rpmbuild/SPECS/vds.spec && \
+            echo "/usr/share/dbus-1/system.d/org.vdsd.conf" >> /root/rpmbuild/SPECS/vds.spec && \
+            echo "/usr/lib/udev/rules.d/99-vds-dualsense-udev.rules" >> /root/rpmbuild/SPECS/vds.spec && \
+            echo "/usr/lib/udev/rules.d/99-vds-uinput.rules" >> /root/rpmbuild/SPECS/vds.spec && \
+            sed -i "s|/usr/lib/modules/%{nil}||g" /root/rpmbuild/SPECS/vds.spec && \
             rpmbuild --define "_topdir /root/rpmbuild" --buildroot=/vds-pkg-root -bb /root/rpmbuild/SPECS/vds.spec && \
-            rpm -ivh --nodeps /root/rpmbuild/RPMS/x86_64/kmod-vds-1.0.0-1.x86_64.rpm
-
-        # 7. Atomares Aufräumen & Depmod-Triggering
-        RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
-            depmod -a -b / "${KERNEL_VERSION}" && \
-            systemctl enable vdsd.service && \
-            systemctl enable vds-chmod-sdp.path && \
-            rm -rf /vds_build_dir /vds-pkg-root /root/rpmbuild
-
