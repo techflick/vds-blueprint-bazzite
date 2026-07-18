@@ -21,50 +21,33 @@ modules:
   - type: containerfile
     snippets:
       - |
-        # 1. Bluetooth Header-Mocking (Typ-korrigiert)
-        RUN mkdir -p /usr/include/bluetooth && \
-            echo '#ifndef __BLUETOOTH_H' > /usr/include/bluetooth/bluetooth.h && \
-            echo '#define __BLUETOOTH_H' >> /usr/include/bluetooth/bluetooth.h && \
-            echo '#include <stdint.h>' >> /usr/include/bluetooth/bluetooth.h && \
-            echo '#include <string.h>' >> /usr/include/bluetooth/bluetooth.h && \
-            echo '#include <stdio.h>' >> /usr/include/bluetooth/bluetooth.h && \
-            echo '#include <sys/socket.h>' >> /usr/include/bluetooth/bluetooth.h && \
-            echo 'typedef struct { uint8_t b[6]; } __attribute__((packed)) bdaddr_t;' >> /usr/include/bluetooth/bluetooth.h && \
-            echo '#define AF_BLUETOOTH 31' >> /usr/include/bluetooth/bluetooth.h && \
-            echo '#define PF_BLUETOOTH AF_BLUETOOTH' >> /usr/include/bluetooth/bluetooth.h && \
-            echo '#define BTPROTO_L2CAP 0' >> /usr/include/bluetooth/bluetooth.h && \
-            echo 'static inline int bacmp(const bdaddr_t *ba1, const bdaddr_t *ba2) { return memcmp(ba1, ba2, 6); }' >> /usr/include/bluetooth/bluetooth.h && \
-            echo 'static inline void bacpy(bdaddr_t *dst, const bdaddr_t *src) { memcpy(dst, src, 6); }' >> /usr/include/bluetooth/bluetooth.h && \
-            echo 'static inline uint16_t htobs(uint16_t n) { return __builtin_bswap16(n); }' >> /usr/include/bluetooth/bluetooth.h && \
-            echo 'static inline int ba2str(const bdaddr_t *ba, char *str) { return sprintf(str, "%02X:%02X:%02X:%02X:%02X:%02X", ba->b[0], ba->b[1], ba->b[2], ba->b[3], ba->b[4], ba->b[5]); }' >> /usr/include/bluetooth/bluetooth.h && \
-            echo '#endif' >> /usr/include/bluetooth/bluetooth.h
-
-        RUN printf '#ifndef __HCI_H\n#define __HCI_H\n#include <bluetooth/bluetooth.h>\n#endif\n' > /usr/include/bluetooth/hci.h
-
-        RUN printf '#ifndef __L2CAP_H\n#define __L2CAP_H\n#include <bluetooth/bluetooth.h>\nstruct sockaddr_l2 {\n\tsa_family_t\tl2_family;\n\tuint16_t\tl2_psm;\n\tbdaddr_t\tl2_bdaddr;\n\tuint16_t\tl2_cid;\n\tuint8_t\t\tl2_bdaddr_type;\n\tuint8_t\t\t_padding;\n};\n#define L2CAP_OPTIONS 0x01\nstruct l2cap_options {\n\tuint16_t\tomtu;\n\tuint16_t\timtu;\n\tuint16_t\tflush_to;\n\tuint8_t\t\tmode;\n\tuint8_t\t\tfcs;\n\tuint8_t\t\tmax_tx;\n\tuint16_t\ttxwin_size;\n};\n\n/* Kernel EINVAL Fix via Syscall-Interception */\n#include <sys/socket.h>\n#undef bind\n#define bind(s,a,l) ((((a) && ((const struct sockaddr*)(a))->sa_family == 31)) ? (((struct sockaddr_l2*)(a))->l2_bdaddr_type = 0) : 0, bind(s,a,l))\n#endif\n' > /usr/include/bluetooth/l2cap.h
-
-        RUN printf '#ifndef __SDP_H\n#define __SDP_H\n#include <bluetooth/bluetooth.h>\n#endif\n' > /usr/include/bluetooth/sdp.h
-            
-        # 2. vDS-Repository klonen
+        # 1. vDS-Repository klonen
         RUN git clone --depth 1 https://github.com/hurryman2212/vds.git /vds_build_dir
             
-        # 3. Kernel-Modul kompilieren
+        # 2. Kernel-Modul kompilieren
         RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
             KERNEL_BUILD_DIR="/usr/src/kernels/${KERNEL_VERSION}" && \
             cd /vds_build_dir/module && \
             make KCFLAGS="-w" KERNELRELEASE="${KERNEL_VERSION}" KERNELDIR="${KERNEL_BUILD_DIR}"
             
-        # 4. Daemon kompilieren
+        # 3. Daemon von BlueZ entkoppeln und EINVAL-Fix injizieren
         RUN cd /vds_build_dir && \
-            sed -i '/pkg_check_modules.*bluez/c\set(bluez_FOUND TRUE)\nset(bluez_INCLUDE_DIRS "/usr/include")\nset(bluez_LIBRARIES "")' CMakeLists.txt && \
+            # Entferne BlueZ komplett aus CMake
+            sed -i '/pkg_check_modules.*bluez/d' CMakeLists.txt && \
             sed -i 's/PkgConfig::BLUEZ//g' CMakeLists.txt && \
+            # Injiziere die minimal notwendigen Linux-Bluetooth-Strukturen direkt oben in src/daemon.c
+            sed -i '1i #include <stdint.h>\n#include <sys/socket.h>\ntypedef struct { uint8_t b[6]; } __attribute__((packed)) bdaddr_t;\nstruct sockaddr_l2 {\n    sa_family_t l2_family;\n    uint16_t l2_psm;\n    bdaddr_t l2_bdaddr;\n    uint16_t l2_cid;\n    uint8_t l2_bdaddr_type;\n    uint8_t _padding;\n};' src/daemon.c && \
+            # Neutralisiere BlueZ SDP-Funktionsaufrufe im Quellcode
+            sed -i 's/sdp_session_t/void/g' src/daemon.c || true && \
+            sed -i 's/sdp_connect/nullptr; \/\/ sdp_connect/g' src/daemon.c || true && \
+            sed -i 's/sdp_record_register/0; \/\/ sdp_record_register/g' src/daemon.c || true && \
+            # Der eigentliche Kernel-Fix: Setze das Speicherlayout vor dem bind() sauber auf 0
+            sed -i '/bind(/i \    ((struct sockaddr_l2 *)&addr)->l2_bdaddr_type = 0;' src/daemon.c || true && \
             mkdir -p build && cd build && \
-            cmake .. -DCMAKE_BUILD_TYPE=Release \
-                     -DCMAKE_C_FLAGS="-I/usr/include -Wno-address-of-packed-member" \
-                     -DCMAKE_CXX_FLAGS="-I/usr/include -Wno-address-of-packed-member" && \
+            cmake .. -DCMAKE_BUILD_TYPE=Release && \
             make
             
-        # 5. RPM-Paketstruktur vorbereiten (PKG_ROOT) inklusive Systemd- & SELinux-Härtung
+        # 4. RPM-Paketstruktur vorbereiten (PKG_ROOT) inklusive Systemd- & SELinux-Härtung
         RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
             PKG_ROOT="/vds-pkg-root" && \
             mkdir -p "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra" && \
@@ -90,7 +73,7 @@ modules:
             printf 'KERNEL=="uinput", MODE="0660", GROUP="input", SECLABEL{selinux}="system_u:object_r:input_device_t:s0", OPTIONS+="static_node=uinput"\n' > "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-uinput.rules" && \
             printf 'KERNEL=="vds[0-9]*", MODE="0660", GROUP="input", SECLABEL{selinux}="system_u:object_r:input_device_t:s0"\n' >> "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-uinput.rules"
 
-        # 5. RPM-Paketstruktur vorbereiten (PKG_ROOT) und installieren
+        # 5. Natives RPM via rpmbuild generieren und installieren
         RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
             mkdir -p /root/rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS} && \
             printf "Name: kmod-vds\nVersion: 1.0.0\nRelease: 1\nSummary: Virtual DualSense Driver\nLicense: MIT\n%%description\nVirtual DualSense\n%%post\n/usr/sbin/restorecon -R /usr/bin/vdsd /usr/bin/vdsctl /usr/lib/systemd/system/vdsd.service || true\n%%files\n/usr/lib/modules/%s/extra/vds_hcd.ko\n/usr/lib/modules-load.d/vds.conf\n/usr/bin/vdsd\n/usr/bin/vdsctl\n%%dir /usr/lib/systemd/system/bluetooth.service.d\n/usr/lib/systemd/system/bluetooth.service.d/override.conf\n%%dir /usr/lib/systemd/system/vdsd.service.d\n/usr/lib/systemd/system/vdsd.service.d/99-network-fix.conf\n/usr/lib/systemd/system/vdsd.service\n/usr/lib/systemd/system/vds-chmod-sdp.service\n/usr/lib/systemd/system/vds-chmod-sdp.path\n/usr/share/dbus-1/system.d/org.vdsd.conf\n/usr/lib/udev/rules.d/99-vds-dualsense-udev.rules\n/usr/lib/udev/rules.d/99-vds-uinput.rules\n" "${KERNEL_VERSION}" > /root/rpmbuild/SPECS/vds.spec && \
