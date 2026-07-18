@@ -22,7 +22,7 @@ modules:
     snippets:
       - |
         # 1. vDS-Repository frisch klonen
-        RUN git clone --depth 1 https://github.com /vds_build_dir
+        RUN git clone --depth 1 https://github.com/hurryman2212/vds.git /vds_build_dir
 
         # 2. Kernel-Modul kompilieren
         RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
