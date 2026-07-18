@@ -81,16 +81,22 @@ modules:
             printf 'KERNEL=="uinput", MODE="0660", GROUP="input", SECLABEL{selinux}="system_u:object_r:input_device_t:s0", OPTIONS+="static_node=uinput"\n' > "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-uinput.rules" && \
             printf 'KERNEL=="vds[0-9]*", MODE="0660", GROUP="input", SECLABEL{selinux}="system_u:object_r:input_device_t:s0"\n' >> "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-uinput.rules"
 
-        # 6. Natives RPM via rpmbuild generieren und installieren
+        # 6. QUELLCODE-PATCH: RAM-Müll eliminieren & l2_bdaddr_type zwingen vor dem Build
+        RUN cd /vds_build_dir && \
+            TARGET_FILE=$(find . -name "*l2cap.cpp" | head -n 1) && \
+            echo "Patche Datei: ${TARGET_FILE}" && \
+            sed -i '/void fill_l2cap_sockaddr/,/^}/c\void fill_l2cap_sockaddr(sockaddr_l2 \&sockaddr, std::uint16_t psm, std::span<const std::uint8_t, 6> address) {\n  std::memset(\&sockaddr, 0, sizeof(sockaddr));\n  sockaddr.l2_family = AF_BLUETOOTH;\n  sockaddr.l2_psm = htobs(psm);\n  sockaddr.l2_bdaddr_type = 0;\n  bdaddr_t bdaddr{};\n  std::copy(address.begin(), address.end(), bdaddr.b);\n  ::bacpy(\&sockaddr.l2_bdaddr, \&bdaddr);\n}' "${TARGET_FILE}"
+
+        # 7. Natives RPM via rpmbuild generieren und installieren (Dein Original mit Fix)
         RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
             mkdir -p /root/rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS} && \
             printf "Name: kmod-vds\nVersion: 1.0.0\nRelease: 1\nSummary: Virtual DualSense Driver\nLicense: MIT\n%%description\nVirtual DualSense\n%%post\n/usr/sbin/restorecon -R /usr/bin/vdsd /usr/bin/vdsctl /usr/lib/systemd/system/vdsd.service || true\n%%files\n/usr/lib/modules/%s/extra/vds_hcd.ko\n/usr/lib/modules-load.d/vds.conf\n/usr/bin/vdsd\n/usr/bin/vdsctl\n%%dir /usr/lib/systemd/system/bluetooth.service.d\n/usr/lib/systemd/system/bluetooth.service.d/override.conf\n%%dir /usr/lib/systemd/system/vdsd.service.d\n/usr/lib/systemd/system/vdsd.service.d/99-network-fix.conf\n/usr/lib/systemd/system/vdsd.service\n/usr/lib/systemd/system/vds-chmod-sdp.service\n/usr/lib/systemd/system/vds-chmod-sdp.path\n/usr/share/dbus-1/system.d/org.vdsd.conf\n/usr/lib/udev/rules.d/99-vds-dualsense-udev.rules\n/usr/lib/udev/rules.d/99-vds-uinput.rules\n" "${KERNEL_VERSION}" > /root/rpmbuild/SPECS/vds.spec && \
             rpmbuild --define "_topdir /root/rpmbuild" --buildroot=/vds-pkg-root -bb /root/rpmbuild/SPECS/vds.spec && \
             rpm -ivh --nodeps /root/rpmbuild/RPMS/x86_64/kmod-vds-1.0.0-1.x86_64.rpm
 
-        # 7. Atomares Aufräumen & Depmod-Triggering
+        # 8. Atomares Aufräumen & Depmod-Triggering
         RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
             depmod -a -b / "${KERNEL_VERSION}" && \
             systemctl enable vdsd.service && \
             systemctl enable vds-chmod-sdp.path && \
-            rm -rf /vds_build_dir /vds-pkg-root /root/root/rpmbuild
+            rm -rf /vds_build_dir /vds-pkg-root /root/rpmbuild
