@@ -107,3 +107,11 @@ modules:
             echo "/usr/lib/udev/rules.d/99-vds-uinput.rules" >> /root/rpmbuild/SPECS/vds.spec && \
             sed -i "s|/usr/lib/modules/%{nil}||g" /root/rpmbuild/SPECS/vds.spec && \
             rpmbuild --define "_topdir /root/rpmbuild" --buildroot=/vds-pkg-root -bb /root/rpmbuild/SPECS/vds.spec && \
+            rpm -ivh --nodeps /root/rpmbuild/RPMS/x86_64/kmod-vds-1.0.0-1.x86_64.rpm
+
+        # 7. Atomares Aufräumen & Depmod-Triggering
+        RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
+            depmod -a -b / "${KERNEL_VERSION}" && \
+            systemctl enable vdsd.service && \
+            systemctl enable vds-chmod-sdp.path && \
+            rm -rf /vds_build_dir /vds-pkg-root /root/rpmbuild
