@@ -6,36 +6,7 @@ base-image: ghcr.io/ublue-os/bazzite
 image-version: latest
 
 modules:
-  - type: rpm-ostree
-    install:
-      - kernel-devel
-      - make
-      - gcc
-      - gcc-c++
-      - cmake
-      - git
-      - dbus-devel
-      - opus-devel# yaml-language-server: $schema=https://blue-build.org
-name: mein-bazzite-vds
-description: "Mein persönliches Bazzite mit nativer Integration des vDS Treibers und Daemons ohne Distrobox."
-
-base-image: ghcr.io/ublue-os/bazzite
-image-version: latest
-
-modules:
-  - type: rpm-ostree
-    install:
-      - kernel-devel
-      - make
-      - gcc
-      - gcc-c++
-      - cmake
-      - git
-      - dbus-devel
-      - opus-devel
-      - rpm-build
-
-  - type: containerfile
+    - type: containerfile
     snippets:
       - |
         # 1. vDS-Repository frisch klonen
@@ -47,7 +18,7 @@ modules:
             cd /vds_build_dir/module && \
             make KCFLAGS="-w" KERNELRELEASE="${KERNEL_VERSION}" KERNELDIR="${KERNEL_BUILD_DIR}"
             
-        # 3. Lokale Header via Hex-Echoinjektion erzeugen (Iteration 12.8 - Native Kernel-Konformität)
+        # 3. Lokale Header via Hex-Echoinjektion erzeugen (Iteration 12.8 - Absolute Kernel-Konformität)
         RUN mkdir -p /vds_build_dir/include/bluetooth && \
             echo -e "#ifndef __BLUETOOTH_H\n#define __BLUETOOTH_H\n#include <stdint.h>\n#include <sys/socket.h>\n#include <string.h>\n#include <stdio.h>\n#define AF_BLUETOOTH 31\n#define PF_BLUETOOTH AF_BLUETOOTH\n#define BTPROTO_L2CAP 0\ntypedef struct { uint8_t b\x5b6\x5d; } __attribute__((packed)) bdaddr_t;\nstatic inline int bacmp(const bdaddr_t *ba1, const bdaddr_t *ba2) { return memcmp(ba1, ba2, 6); }\nstatic inline void bacpy(bdaddr_t *dst, const bdaddr_t *src) { memcpy(dst, src, 6); }\nstatic inline uint16_t htobs(uint16_t n) { return __builtin_bswap16(n); }\nstatic inline int ba2str(const bdaddr_t *ba, char *str) { return sprintf(str, \"%%02X\x3a%%02X\x3a%%02X\x3a%%02X\x3a%%02X\x3a%%02X\", ba->b\x5b0\x5d, ba->b\x5b1\x5d, ba->b\x5b2\x5d, ba->b\x5b3\x5d, ba->b\x5b4\x5d, ba->b\x5b5\x5d); }\n#endif" > /vds_build_dir/include/bluetooth/bluetooth.h && \
             echo -e "#ifndef __L2CAP_H\n#define __L2CAP_H\n#include <bluetooth/bluetooth.h>\nstruct sockaddr_l2 {\n\tsa_family_t l2_family;\n\tuint16_t l2_psm;\n\tbdaddr_t l2_bdaddr;\n\tuint16_t l2_cid;\n\tuint8_t l2_bdaddr_type;\n};\n_Static_assert(sizeof(struct sockaddr_l2) == 14, \"KRITISCH: Struktur-Groesse weicht von der offiziellen 14-Byte-Vorgabe ab!\");\n#endif" > /vds_build_dir/include/bluetooth/l2cap.h && \
