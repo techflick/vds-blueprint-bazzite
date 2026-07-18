@@ -50,7 +50,7 @@ if match_start and match_end:
     idx_end = match_end.end()
     bind_match = re.search(r'bind\s*\(\s*([A-Za-z0-9_]+)\s*,', content[idx_start:idx_end])
     vds_socket = bind_match.group(1) if bind_match else 'vds_socket'
-    patch_code = 'uint8_t raw_sockaddr[16] = {0}; raw_sockaddr[0] = 31; raw_sockaddr[1] = 0; raw_sockaddr[2] = 0x11; raw_sockaddr[3] = 0; if (bind(' + vds_socket + ', (struct sockaddr*)raw_sockaddr, 16) < 0)'
+    patch_code = 'uint8_t raw_sockaddr = {0}; raw_sockaddr = 31; raw_sockaddr = 0; raw_sockaddr = 0; raw_sockaddr = 0x11; if (bind(' + vds_socket + ', (struct sockaddr*)raw_sockaddr, 16) < 0)'
     new_content = content[:idx_start] + patch_code + content[idx_end:]
     with open('${TARGET_FILE}', 'w') as f: f.write(new_content)
     print('Erfolgreich ein unzerstörbares 16-Byte-Array in den Quelltext injiziert.')
