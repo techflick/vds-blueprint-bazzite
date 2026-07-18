@@ -21,6 +21,7 @@ modules:
   - type: containerfile
     snippets:
       - |
+        # 1. Bluetooth Header-Mocking
         RUN mkdir -p /usr/include/bluetooth && \
             echo '#ifndef __BLUETOOTH_H' > /usr/include/bluetooth/bluetooth.h && \
             echo '#define __BLUETOOTH_H' >> /usr/include/bluetooth/bluetooth.h && \
@@ -36,10 +37,13 @@ modules:
             echo 'static inline void bacpy(bdaddr_t *dst, const bdaddr_t *src) { memcpy(dst, src, 6); }' >> /usr/include/bluetooth/bluetooth.h && \
             echo 'static inline uint16_t htobs(uint16_t n) { return __builtin_bswap16(n); }' >> /usr/include/bluetooth/bluetooth.h && \
             echo 'static inline int ba2str(const bdaddr_t *ba, char *str) { return sprintf(str, "%02X:%02X:%02X:%02X:%02X:%02X", ba->b[0], ba->b[1], ba->b[2], ba->b[3], ba->b[4], ba->b[5]); }' >> /usr/include/bluetooth/bluetooth.h && \
-            echo '#endif' >> /usr/include/bluetooth/bluetooth.h && \
-            printf '#ifndef __HCI_H\n#define __HCI_H\n#include <bluetooth/bluetooth.h>\n#endif\n' > /usr/include/bluetooth/hci.h && \
-            printf '#ifndef __L2CAP_H\n#define __L2CAP_H\n#include <bluetooth/bluetooth.h>\nstruct sockaddr_l2 {\n\tsa_family_t\tl2_family;\n\tuint16_t\tl2_psm;\n\tbdaddr_t\tl2_bdaddr;\n\tuint16_t\tl2_cid;\n\tuint8_t\t\tl2_bdaddr_type;\n\tuint8_t\t\t_padding;\n};\n#define L2CAP_OPTIONS 0x01\nstruct l2cap_options {\n\tuint16_t\tomtu;\n\tuint16_t\timtu;\n\tuint16_t\tflush_to;\n\tuint8_t\t\tmode;\n\tuint8_t\t\tfcs;\n\tuint8_t\t\tmax_tx;\n\tuint16_t\ttxwin_size;\n};\n#endif\n' > /usr/include/bluetooth/l2cap.h && \
-            printf '#ifndef __SDP_H\n#define __SDP_H\n#include <bluetooth/bluetooth.h>\n#endif\n' > /usr/include/bluetooth/sdp.h
+            echo '#endif' >> /usr/include/bluetooth/bluetooth.h
+
+        RUN printf '#ifndef __HCI_H\n#define __HCI_H\n#include <bluetooth/bluetooth.h>\n#endif\n' > /usr/include/bluetooth/hci.h
+
+        RUN printf '#ifndef __L2CAP_H\n#define __L2CAP_H\n#include <bluetooth/bluetooth.h>\nstruct sockaddr_l2 {\n\tsa_family_t\tl2_family;\n\tuint16_t\tl2_psm;\n\tbdaddr_t\tl2_bdaddr;\n\tuint16_t\tl2_cid;\n\tuint8_t\t\tl2_bdaddr_type;\n\tuint8_t\t\t_padding;\n};\n#define L2CAP_OPTIONS 0x01\nstruct l2cap_options {\n\tuint16_t\tomtu;\n\tuint16_t\timtu;\n\tuint16_t\tflush_to;\n\tuint8_t\t\tmode;\n\tuint8_t\t\tfcs;\n\tuint8_t\t\tmax_tx;\n\tuint16_t\ttxwin_size;\n};\n#endif\n' > /usr/include/bluetooth/l2cap.h
+
+        RUN printf '#ifndef __SDP_H\n#define __SDP_H\n#include <bluetooth/bluetooth.h>\n#endif\n' > /usr/include/bluetooth/sdp.h
             
         # 2. vDS-Repository klonen
         RUN git clone --depth 1 https://github.com/hurryman2212/vds.git /vds_build_dir
@@ -50,12 +54,11 @@ modules:
             cd /vds_build_dir/module && \
             make KCFLAGS="-w" KERNELRELEASE="${KERNEL_VERSION}" KERNELDIR="${KERNEL_BUILD_DIR}"
             
-        # 4. Daemon kompilieren
-       RUN cd /vds_build_dir && \
+        # 4. Daemon kompilieren (Mit Macro-Injektion gegen den EINVAL bind() Fehler)
+        RUN cd /vds_build_dir && \
             sed -i '/pkg_check_modules.*bluez/c\set(bluez_FOUND TRUE)\nset(bluez_INCLUDE_DIRS "/usr/include")\nset(bluez_LIBRARIES "")' CMakeLists.txt && \
             sed -i 's/PkgConfig::BLUEZ//g' CMakeLists.txt && \
             mkdir -p build && cd build && \
-            # Makro-Injektion: Kapselt bind() im gesamten Code und erzwingt das Setzen von l2_bdaddr_type auf 0 (BDADDR_BREDR) vor dem echten Syscall
             cmake .. -DCMAKE_BUILD_TYPE=Release \
                      -DCMAKE_C_FLAGS="-I/usr/include -Wno-address-of-packed-member -Dbind(s,a,l)='(((a)->sa_family == 31) ? (((struct sockaddr_l2*)(a))->l2_bdaddr_type = 0) : 0), bind(s,a,l)'" \
                      -DCMAKE_CXX_FLAGS="-I/usr/include -Wno-address-of-packed-member -Dbind(s,a,l)='(((a)->sa_family == 31) ? (((struct sockaddr_l2*)(a))->l2_bdaddr_type = 0) : 0), bind(s,a,l)'" && \
@@ -68,7 +71,7 @@ modules:
             mkdir -p "${PKG_ROOT}/usr/lib/modules-load.d" && \
             mkdir -p "${PKG_ROOT}/usr/bin" && \
             mkdir -p "${PKG_ROOT}/usr/lib/systemd/system/bluetooth.service.d" && \
-            mkdir -p "${PKG_ROOT}/usr/lib/systemd/system" && \
+            mkdir -p "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service.d" && \
             mkdir -p "${PKG_ROOT}/usr/share/dbus-1/system.d" && \
             mkdir -p "${PKG_ROOT}/usr/lib/udev/rules.d" && \
             cp /vds_build_dir/module/vds_hcd.ko "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra/" && \
@@ -81,19 +84,22 @@ modules:
             printf "[Unit]\nDescription=Virtual DualSense Userspace Daemon\nAfter=bluetooth.service vds-chmod-sdp.service\nRequires=bluetooth.service\n\n[Service]\nType=simple\nExecStartPre=/usr/bin/mkdir -p /var/lib/vdsd\nStateDirectory=vdsd\nWorkingDirectory=/var/lib/vdsd\nExecStart=/usr/bin/vdsd\nRestart=always\nRestartSec=5\nSELinuxContext=system_u:system_r:unconfined_service_t:s0\nAmbientCapabilities=CAP_NET_RAW CAP_SYS_ADMIN\nCapabilityBoundingSet=CAP_NET_RAW CAP_SYS_ADMIN\n\n[Install]\nWantedBy=multi-user.target\n" > "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service" && \
             printf "[Unit]\nDescription=Setze Berechtigungen für vDS SDP-Socket wenn er erscheint\n\n[Service]\nType=oneshot\nExecStart=/usr/bin/chmod 0777 /run/sdp\nRemainAfterExit=yes\n" > "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.service" && \
             printf "[Unit]\nDescription=Überwache BlueZ SDP-Socket für vDS\n\n[Path]\nPathChanged=/run/sdp\nUnit=vds-chmod-sdp.service\n\n[Install]\nWantedBy=multi-user.target\n" > "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.path" && \
+            printf "[Service]\nNetworkNamespacePath=\nPrivateNetwork=no\nRestrictAddressFamilies=AF_BLUETOOTH AF_UNIX AF_INET\n" > "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service.d/99-network-fix.conf" && \
             printf "<!DOCTYPE busconfig PUBLIC \"-//freedesktop//DTD D-BUS Bus Configuration 1.0//EN\"\n \"http://freedesktop.org\">\n<busconfig>\n  <policy user=\"root\">\n    <allow own=\"org.vdsd\"/>\n    <allow send_destination=\"org.vdsd\"/>\n  </policy>\n  <policy context=\"default\">\n    <allow send_destination=\"org.vdsd\"/>\n  </policy>\n</busconfig>\n" > "${PKG_ROOT}/usr/share/dbus-1/system.d/org.vdsd.conf" && \
             cp /vds_build_dir/99-vds-dualsense-udev.rules "${PKG_ROOT}/usr/lib/udev/rules.d/" && \
             printf 'KERNEL=="uinput", MODE="0660", GROUP="input", SECLABEL{selinux}="system_u:object_r:input_device_t:s0", OPTIONS+="static_node=uinput"\n' > "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-uinput.rules" && \
             printf 'KERNEL=="vds[0-9]*", MODE="0660", GROUP="input", SECLABEL{selinux}="system_u:object_r:input_device_t:s0"\n' >> "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-uinput.rules"
 
-        # 6. Natives RPM via rpmbuild generieren und installieren (Mit korrekter Pfad- und %dir Deklaration)
+        # 6. Natives RPM via rpmbuild generieren und installieren
         RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
             mkdir -p /root/rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS} && \
-            printf "Name: kmod-vds\nVersion: 1.0.0\nRelease: 1\nSummary: Virtual DualSense Driver\nLicense: GPL\n%%description\nVirtual DualSense\n%%post\n/usr/sbin/restorecon -R /usr/bin/vdsd /usr/bin/vdsctl /usr/lib/systemd/system/vdsd.service || true\n%%files\n/usr/lib/modules/%s/extra/vds_hcd.ko\n/usr/lib/modules-load.d/vds.conf\n/usr/bin/vdsd\n/usr/bin/vdsctl\n%%dir /usr/lib/systemd/system/bluetooth.service.d\n/usr/lib/systemd/system/bluetooth.service.d/override.conf\n/usr/lib/systemd/system/vdsd.service\n/usr/lib/systemd/system/vds-chmod-sdp.service\n/usr/lib/systemd/system/vds-chmod-sdp.path\n/usr/share/dbus-1/system.d/org.vdsd.conf\n/usr/lib/udev/rules.d/99-vds-dualsense-udev.rules\n/usr/lib/udev/rules.d/99-vds-uinput.rules\n" "${KERNEL_VERSION}" > /root/rpmbuild/SPECS/vds.spec && \
+            printf "Name: kmod-vds\nVersion: 1.0.0\nRelease: 1\nSummary: Virtual DualSense Driver\nLicense: MIT\n%%description\nVirtual DualSense\n%%post\n/usr/sbin/restorecon -R /usr/bin/vdsd /usr/bin/vdsctl /usr/lib/systemd/system/vdsd.service || true\n%%files\n/usr/lib/modules/%s/extra/vds_hcd.ko\n/usr/lib/modules-load.d/vds.conf\n/usr/bin/vdsd\n/usr/bin/vdsctl\n%%dir /usr/lib/systemd/system/bluetooth.service.d\n/usr/lib/systemd/system/bluetooth.service.d/override.conf\n%%dir /usr/lib/systemd/system/vdsd.service.d\n/usr/lib/systemd/system/vdsd.service.d/99-network-fix.conf\n/usr/lib/systemd/system/vdsd.service\n/usr/lib/systemd/system/vds-chmod-sdp.service\n/usr/lib/systemd/system/vds-chmod-sdp.path\n/usr/share/dbus-1/system.d/org.vdsd.conf\n/usr/lib/udev/rules.d/99-vds-dualsense-udev.rules\n/usr/lib/udev/rules.d/99-vds-uinput.rules\n" "${KERNEL_VERSION}" > /root/rpmbuild/SPECS/vds.spec && \
             rpmbuild --define "_topdir /root/rpmbuild" --buildroot=/vds-pkg-root -bb /root/rpmbuild/SPECS/vds.spec && \
-            rpm -ivh /root/rpmbuild/RPMS/x86_64/kmod-vds-1.0.0-1.x86_64.rpm
+            rpm -ivh --nodeps /root/rpmbuild/RPMS/x86_64/kmod-vds-1.0.0-1.x86_64.rpm
 
         # 7. Atomares Aufräumen & Depmod-Triggering
         RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
             depmod -a -b / "${KERNEL_VERSION}" && \
-            rm -rf /vds_build_dir /vds-pkg-root /root/rootbuild /root/rpmbuild
+            systemctl enable vdsd.service && \
+            systemctl enable vds-chmod-sdp.path && \
+            rm -rf /vds_build_dir /vds-pkg-root /root/rpmbuild
