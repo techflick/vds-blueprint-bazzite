@@ -30,21 +30,17 @@ modules:
             cd /vds_build_dir/module && \
             make KCFLAGS="-w" KERNELRELEASE="${KERNEL_VERSION}" KERNELDIR="${KERNEL_BUILD_DIR}"
             
-        # 3. Daemon von BlueZ entkoppeln und EINVAL-Fix injizieren
+        # 3. Daemon-Build patchen (Vollständige BlueZ-Entkopplung über CMake-Flags)
         RUN cd /vds_build_dir && \
-            # Entferne BlueZ komplett aus CMake
+            # BlueZ Paketprüfung aus CMake entfernen
             sed -i '/pkg_check_modules.*bluez/d' CMakeLists.txt && \
             sed -i 's/PkgConfig::BLUEZ//g' CMakeLists.txt && \
-            # Injiziere die minimal notwendigen Linux-Bluetooth-Strukturen direkt oben in src/daemon.c
-            sed -i '1i #include <stdint.h>\n#include <sys/socket.h>\ntypedef struct { uint8_t b[6]; } __attribute__((packed)) bdaddr_t;\nstruct sockaddr_l2 {\n    sa_family_t l2_family;\n    uint16_t l2_psm;\n    bdaddr_t l2_bdaddr;\n    uint16_t l2_cid;\n    uint8_t l2_bdaddr_type;\n    uint8_t _padding;\n};' src/daemon.c && \
-            # Neutralisiere BlueZ SDP-Funktionsaufrufe im Quellcode
-            sed -i 's/sdp_session_t/void/g' src/daemon.c || true && \
-            sed -i 's/sdp_connect/nullptr; \/\/ sdp_connect/g' src/daemon.c || true && \
-            sed -i 's/sdp_record_register/0; \/\/ sdp_record_register/g' src/daemon.c || true && \
-            # Der eigentliche Kernel-Fix: Setze das Speicherlayout vor dem bind() sauber auf 0
-            sed -i '/bind(/i \    ((struct sockaddr_l2 *)&addr)->l2_bdaddr_type = 0;' src/daemon.c || true && \
+            # Dem Compiler mitteilen, dass er BlueZ-Typen ignorieren und Sockets direkt korrigieren soll
+            echo 'add_compile_definitions(sdp_session_t=void sdp_connect=nullptr sdp_record_register=0)' >> CMakeLists.txt && \
             mkdir -p build && cd build && \
-            cmake .. -DCMAKE_BUILD_TYPE=Release && \
+            # Sauberer EINVAL-Fix via Präprozessor: Wir fangen das "bind" ab und setzen den Typ auf 0
+            cmake .. -DCMAKE_BUILD_TYPE=Release \
+                     -DCMAKE_CXX_FLAGS="-Wno-address-of-packed-member -Dbind\(s,a,l\)='\(\(\(struct{uint16_t f\;uint16_t p\;uint8_t b\[6\]\;uint16_t c\;uint8_t t\;}\* \)\(a\)\)->t=0,bind\(s,a,l\)\)'" && \
             make
             
         # 4. RPM-Paketstruktur vorbereiten (PKG_ROOT) inklusive Systemd- & SELinux-Härtung
