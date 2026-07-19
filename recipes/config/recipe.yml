@@ -33,53 +33,62 @@ modules:
         # 3. Lokale Header via sicherem Heredoc erzeugen (Verhindert Maskierungsfehler und löst MACs in Kleinbuchstaben auf)
         RUN mkdir -p /vds_build_dir/include/bluetooth && \
             cat << 'EOF' > /vds_build_dir/include/bluetooth/bluetooth.h
-#ifndef __BLUETOOTH_H
-#define __BLUETOOTH_H
-#include <stdint.h>
-#include <sys/socket.h>
-#include <string.h>
-#include <stdio.h>
-#ifndef AF_BLUETOOTH
-#define AF_BLUETOOTH 31
-#endif
-#ifndef PF_BLUETOOTH
-#define PF_BLUETOOTH AF_BLUETOOTH
-#endif
-#define BTPROTO_L2CAP 0
-typedef struct { uint8_t b[6]; } __attribute__((packed)) bdaddr_t;
-static inline int bacmp(const bdaddr_t *ba1, const bdaddr_t *ba2) { return memcmp(ba1, ba2, 6); }
-static inline void bacpy(bdaddr_t *dst, const bdaddr_t *src) { memcpy(dst, src, 6); }
-static inline uint16_t htobs(uint16_t n) { return n; }
-static inline int ba2str(const bdaddr_t *ba, char *str) { 
-    return sprintf(str, "%02x:%02x:%02x:%02x:%02x:%02x", ba->b[5], ba->b[4], ba->b[3], ba->b[2], ba->b[1], ba->b[0]); 
-}
-#endif
-EOF
+        #ifndef __BLUETOOTH_H
+        #define __BLUETOOTH_H
+        #include <stdint.h>
+        #include <sys/socket.h>
+        #include <string.h>
+        #include <stdio.h>
+        #ifndef AF_BLUETOOTH
+        #define AF_BLUETOOTH 31
+        #endif
+        #ifndef PF_BLUETOOTH
+        #define PF_BLUETOOTH AF_BLUETOOTH
+        #endif
+        #define BTPROTO_L2CAP 0
+        typedef struct { uint8_t b[6]; } __attribute__((packed)) bdaddr_t;
+        static inline int bacmp(const bdaddr_t *ba1, const bdaddr_t *ba2) { return memcmp(ba1, ba2, 6); }
+        static inline void bacpy(bdaddr_t *dst, const bdaddr_t *src) { memcpy(dst, src, 6); }
+        static inline uint16_t htobs(uint16_t n) { return n; }
+        static inline int ba2str(const bdaddr_t *ba, char *str) { 
+            return sprintf(str, "%02x:%02x:%02x:%02x:%02x:%02x", ba->b[5], ba->b[4], ba->b[3], ba->b[2], ba->b[1], ba->b[0]); 
+        }
+        #endif
+        EOF
 
         RUN cat << 'EOF' > /vds_build_dir/include/bluetooth/l2cap.h
-#ifndef __L2CAP_H
-#define __L2CAP_H
-#include <bluetooth/bluetooth.h>
-#ifdef __cplusplus
-extern "C" {
-#endif
-struct sockaddr_l2 {
-	sa_family_t l2_family;
-	uint16_t l2_psm;
-	bdaddr_t l2_bdaddr;
-	uint16_t l2_cid;
-	uint8_t l2_bdaddr_type;
-};
-#ifdef __cplusplus
-}
-#endif
-#ifdef __cplusplus
-static_assert(sizeof(struct sockaddr_l2) == 14, "KRITISCH: Struktur-Groesse weicht von 14 Byte ab!");
-#else
-_Static_assert(sizeof(struct sockaddr_l2) == 14, "KRITISCH: Struktur-Groesse weicht von 14 Byte ab!");
-#endif
-#endif
-EOF
+        #ifndef __L2CAP_H
+        #define __L2CAP_H
+        #include <bluetooth/bluetooth.h>
+        #ifdef __cplusplus
+        extern "C" {
+        #endif
+        struct sockaddr_l2 {
+        	sa_family_t l2_family;
+        	uint16_t l2_psm;
+        	bdaddr_t l2_bdaddr;
+        	uint16_t l2_cid;
+        	uint8_t l2_bdaddr_type;
+        };
+        #ifdef __cplusplus
+        }
+        #endif
+        #ifdef __cplusplus
+        static_assert(sizeof(struct sockaddr_l2) == 14, "KRITISCH: Struktur-Groesse weicht von 14 Byte ab!");
+        #else
+        _Static_assert(sizeof(struct sockaddr_l2) == 14, "KRITISCH: Struktur-Groesse weicht von 14 Byte ab!");
+        #endif
+        #endif
+        EOF
+
+        # 4. Daemon kompilieren und C++ Quellcode-Patches anwenden (Originaler MAC-Vergleich bleibt aktiv!)
+        RUN cd /vds_build_dir && \
+            sed -i 's/sockaddr.l2_psm = htobs(psm);/sockaddr.l2_psm = psm;/g' src/platform/linux/vds_bt.cc || true && \
+            sed -i '/pkg_check_modules.*bluez/c\set(bluez_FOUND TRUE)\nset(bluez_INCLUDE_DIRS "/vds_build_dir/include")\nset(bluez_LIBRARIES "")' CMakeLists.txt && \
+            sed -i 's/PkgConfig::BLUEZ//g' CMakeLists.txt && \
+            mkdir -p build && cd build && \
+            cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS="-I/vds_build_dir/include" -DCMAKE_CXX_FLAGS="-I/vds_build_dir/include" && \
+            make
 
         # 4. Daemon kompilieren und C++ Quellcode-Patches anwenden (Originaler MAC-Vergleich bleibt aktiv!)
         RUN cd /vds_build_dir && \
