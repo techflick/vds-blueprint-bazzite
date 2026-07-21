@@ -86,71 +86,11 @@ modules:
         #endif
         EOF
 
-                # 4. Daemon kompilieren und C++ Quellcode-Patches anwenden (Priorisiert die lokalen Header)
+        # 4. Daemon kompilieren und C++ Quellcode-Patches anwenden (Priorisiert die lokalen Header)
         RUN cd /vds_build_dir && \
             sed -i '/pkg_check_modules.*bluez/c\set(bluez_FOUND TRUE)\nset(bluez_INCLUDE_DIRS "/vds_build_dir/include")\nset(bluez_LIBRARIES "")' CMakeLists.txt && \
             sed -i 's/PkgConfig::BLUEZ//g' CMakeLists.txt && \
-            awk ' \
-            BEGIN { \
-                print "// --- VDS DYNAMISCHE SOFTWARE WEICHE HEADERS ---"; \
-                print "#include <linux/uinput.h>"; \
-                print "#include <fstream>"; \
-                print "#include <filesystem>"; \
-                print "#include <cctype>"; \
-                print "#include <thread>"; \
-                print "#include <chrono>"; \
-            } \
-            /void handle_bt_accept/ { \
-                print "// --- VDS DYNAMISCHE SOFTWARE WEICHE FUNKTIONEN ---"; \
-                print "struct PendingUinputProxy { std::string address; int control_fd = -1; int interrupt_fd = -1; };"; \
-                print "std::vector<PendingUinputProxy> g_pending_proxies;"; \
-                print "bool get_bluez_device_info(const std::string& t_mac, uint16_t& vendor, uint16_t& product, std::string& name) {"; \
-                print "  std::string m_low = t_mac; for (auto &c : m_low) c = std::tolower(c);"; \
-                print "  std::string m_up = t_mac; for (auto &c : m_up) c = std::toupper(c);"; \
-                print "  std::string b_p = \"/var/lib/bluetooth/\"; if (!std::filesystem::exists(b_p)) return false;"; \
-                print "  for (const auto& entry : std::filesystem::directory_iterator(b_p)) {"; \
-                print "    if (!entry.is_directory()) continue;"; \
-                print "    std::string path_low = entry.path().string() + \"/\" + m_low + \"/info\";"; \
-                print "    std::string path_up = entry.path().string() + \"/\" + m_up + \"/info\";"; \
-                print "    std::string target_path = \"\";"; \
-                print "    if (std::filesystem::exists(path_low)) target_path = path_low;"; \
-                print "    else if (std::filesystem::exists(path_up)) target_path = path_up;"; \
-                print "    if (!target_path.empty()) {"; \
-                print "      std::ifstream file(target_path); std::string line;"; \
-                print "      while (std::getline(file, line)) {"; \
-                print "        if (line.find(\"Name=\") == 0) name = line.substr(5);"; \
-                print "        if (line.find(\"Vendor=\") == 0) vendor = std::stoul(line.substr(7), nullptr, 16);"; \
-                print "        if (line.find(\"Product=\") == 0) product = std::stoul(line.substr(8), nullptr, 16);"; \
-                print "      }"; \
-                print "      return true;"; \
-                print "    }"; \
-                print "  } return false;"; \
-                print "}"; \
-                print "void run_uinput_proxy_worker(std::string address, int control_fd, int interrupt_fd) {"; \
-                print "  std::this_thread::sleep_for(std::chrono::milliseconds(150));"; \
-                print "  uint16_t vendor = 0x0079; uint16_t product = 0x0006; std::string device_name = \"Generic vDS uinput Gamepad\";"; \
-                print "  get_bluez_device_info(address, vendor, product, device_name);"; \
-                print "  int uinput_fd = ::open(\"/dev/uinput\", O_WRONLY | O_NONBLOCK); if (uinput_fd < 0) { ::close(control_fd); ::close(interrupt_fd); return; }"; \
-                print "  struct uinput_setup us; std::memset(&us, 0, sizeof(us)); us.id.bustype = BUS_USB; us.id.vendor = vendor; us.id.product = product; std::strncpy(us.name, device_name.c_str(), UINPUT_MAX_NAME_SIZE);"; \
-                print "  ::ioctl(uinput_fd, UI_SET_EVBIT, EV_KEY); ::ioctl(uinput_fd, UI_SET_KEYBIT, BTN_SOUTH); ::ioctl(uinput_fd, UI_SET_KEYBIT, BTN_EAST); ::ioctl(uinput_fd, UI_SET_KEYBIT, BTN_NORTH); ::ioctl(uinput_fd, UI_SET_KEYBIT, BTN_WEST);"; \
-                print "  ::ioctl(uinput_fd, UI_SET_KEYBIT, BTN_TL); ::ioctl(uinput_fd, UI_SET_KEYBIT, BTN_TR); ::ioctl(uinput_fd, UI_SET_KEYBIT, BTN_SELECT); ::ioctl(uinput_fd, UI_SET_KEYBIT, BTN_START); ::ioctl(uinput_fd, UI_SET_KEYBIT, BTN_MODE);"; \
-                print "  ::ioctl(uinput_fd, UI_SET_EVBIT, EV_ABS); ::ioctl(uinput_fd, UI_SET_ABSBIT, ABS_X); ::ioctl(uinput_fd, UI_SET_ABSBIT, ABS_Y); ::ioctl(uinput_fd, UI_SET_ABSBIT, ABS_Z); ::ioctl(uinput_fd, UI_SET_ABSBIT, ABS_RZ); ::ioctl(uinput_fd, UI_SET_ABSBIT, ABS_HAT0X); ::ioctl(uinput_fd, UI_SET_ABSBIT, ABS_HAT0Y);"; \
-                print "  ::ioctl(uinput_fd, UI_DEV_SETUP, &us); ::ioctl(uinput_fd, UI_DEV_CREATE);"; \
-                print "  struct pollfd p_fds[2]; std::memset(p_fds, 0, sizeof(p_fds)); p_fds[0].fd = control_fd; p_fds[0].events = POLLIN; p_fds[1].fd = interrupt_fd; p_fds[1].events = POLLIN;"; \
-                print "  std::uint8_t buffer[1024]; extern volatile sig_atomic_t g_stop_requested;"; \
-                print "  while (!g_stop_requested) { int ret = ::poll(p_fds, 2, 50); if (ret > 0 && (p_fds[1].revents & POLLIN)) { ssize_t bytes = ::read(interrupt_fd, buffer, sizeof(buffer)); if (bytes <= 0) break; ::write(uinput_fd, buffer, bytes); } }"; \
-                print "  ::ioctl(uinput_fd, UI_DEV_DESTROY); ::close(uinput_fd); ::close(control_fd); ::close(interrupt_fd);"; \
-                print "}"; \
-                print "void handle_uinput_fallback(const std::string& address, vds::UniqueFd& fd, bool control_channel) {"; \
-                print "  for (auto it = g_pending_proxies.begin(); it != g_pending_proxies.end(); ++it) { if (it->address == address) { if (control_channel) it->control_fd = fd.release(); else it->interrupt_fd = fd.release(); if (it->control_fd >= 0 && it->interrupt_fd >= 0) { std::thread(run_uinput_proxy_worker, it->address, it->control_fd, it->interrupt_fd).detach(); g_pending_proxies.erase(it); break; } return; } }"; \
-                print "  PendingUinputProxy p; p.address = address; if (control_channel) p.control_fd = fd.release(); else p.interrupt_fd = fd.release(); g_pending_proxies.push_back(p);"; \
-                print "}"; \
-            } \
-            { print } \
-            ' src/vdsd.cc > src/vdsd.cc.tmp && mv src/vdsd.cc.tmp src/vdsd.cc && \
-            mkdir -p build && cd build && \
-            cmake -DCMAKE_BUILD_TYPE=Release .. && \
-            make -j$(nproc)
+            sed -i '/void handle_bt_accept/i #include <linux/uinput.h>\n#include <fstream>\n#include <filesystem>\n#include <cctype>\n#include <thread>\n#include <chrono>\nstruct PendingUinputProxy { std::string address; int control_fd = -1; int interrupt_fd = -1; };\nstd::vector<PendingUinputProxy> g_pending_proxies;\nbool get_bluez_device_info(const std::string\& t_mac, uint16_t\& vendor, uint16_t\& product, std::string\& name) {\n  std::string m_low = t_mac; for (auto \&c : m_low) c = std::tolower(c);\n  std::string m_up = t_mac; for (auto \&c : m_up) c = std::toupper(c);\n  std::string b_p = "/var/lib/bluetooth/"; if (!std::filesystem::exists(b_p)) return false;\n  for (const auto\& entry : std::filesystem::directory_iterator(b_p)) {\n    if (!entry.is_directory()) continue;\n    std::string path_low = entry.path().string() + "/" + m_low + "/info";\n    std::string path_up = entry.path().string() + "/" + m_up + "/info";\n    std::string target_path = "";\n    if (std::filesystem::exists(path_low)) target_path = path_low;\n    else if (std::filesystem::exists(path_up)) target_path = path_up;\n    if (!target_path.empty()) {\n      std::ifstream file(target_path); std::string line;\n      while (std::getline(file, line)) {\n        if (line.find("Name=") == 0) name = line.substr(5);\n        if (line.find("Vendor=") == 0) vendor = std::stoul(line.substr(7), nullptr, 16);\n        if (line.find("Product=") == 0) product = std::stoul(line.substr(8), nullptr, 16);\n      }\n      return true;\n    }\n  } return false;\n}\nvoid run_uinput_proxy_worker(std::string address, int control_fd, int interrupt_fd) {\n  std::this_thread::sleep_for(std::chrono::milliseconds(150));\n  uint16_t vendor = 0x0079; uint16_t product = 0x0006; std::string device_name = "Generic vDS uinput Gamepad";\n  get_bluez_device_info(address, vendor, product, device_name);\n  int uinput_fd = ::open("/dev/uinput", O_WRONLY | O_NONBLOCK); if (uinput_fd < 0) { ::close(control_fd); ::close(interrupt_fd); return; }\n  struct uinput_setup us; std::memset(\&us, 0, sizeof(us)); us.id.bustype = BUS_USB; us.id.vendor = vendor; us.id.product = product; std::strncpy(us.name, device_name.c_str(), UINPUT_MAX_NAME_SIZE);\n  ::ioctl(uinput_fd, UI_SET_EVBIT, EV_KEY); ::ioctl(uinput_fd, UI_SET_KEYBIT, BTN_SOUTH); ::ioctl(uinput_fd, UI_SET_KEYBIT, BTN_EAST); ::ioctl(uinput_fd, UI_SET_KEYBIT, BTN_NORTH); ::ioctl(uinput_fd, UI_SET_KEYBIT, BTN_WEST);\n  ::ioctl(uinput_fd, UI_SET_KEYBIT, BTN_TL); ::ioctl(uinput_fd, UI_SET_KEYBIT, BTN_TR); ::ioctl(uinput_fd, UI_SET_KEYBIT, BTN_SELECT); ::ioctl(uinput_fd, UI_SET_KEYBIT, BTN_START); ::ioctl(uinput_fd, UI_SET_KEYBIT, BTN_MODE);\n  ::ioctl(uinput_fd, UI_SET_EVBIT, EV_ABS); ::ioctl(uinput_fd, UI_SET_ABSBIT, ABS_X); ::ioctl(uinput_fd, UI_SET_ABSBIT, ABS_Y); ::ioctl(uinput_fd, UI_SET_ABSBIT, ABS_Z); ::ioctl(uinput_fd, UI_SET_ABSBIT, ABS_RZ); ::ioctl(uinput_fd, UI_SET_ABSBIT, ABS_HAT0X); ::ioctl(uinput_fd, UI_SET_ABSBIT, ABS_HAT0Y);\n  ::ioctl(uinput_fd, UI_DEV_SETUP, \&us); ::ioctl(uinput_fd, UI_DEV_CREATE);\n  struct pollfd p_fds[2]; p_fds[0].fd = control_fd; p_fds[0].events = POLLIN; p_fds[1].fd = interrupt_fd; p_fds[1].events = POLLIN;\n  std::uint8_t buffer[1024]; extern volatile sig_atomic_t g_stop_requested;\n  while (!g_stop_requested) { int ret = ::poll(p_fds, 2, 50); if (ret > 0 \&\& (p_fds[1].revents \& POLLIN)) { ssize_t bytes = ::read(interrupt_fd, buffer, sizeof(buffer)); if (bytes <= 0) break; ::write(uinput_fd, buffer, bytes); } }\n  ::ioctl(uinput_fd, UI_DEV_DESTROY); ::close(uinput_fd); ::close(control_fd); ::close(interrupt_fd);\n}\nvoid handle_uinput_fallback(const std::string\& address, vds::UniqueFd\& fd, bool control_channel) {\n  for (auto it = g_pending_proxies.begin(); it != g_pending_proxies.end(); ++it) { if (it->address == address) { if (control_channel) it->control_fd = fd.release(); else it->interrupt_fd = fd.release(); if (it->control_fd >= 0 \&\& it->interrupt_fd >= 0) { std::thread(run_uinput_proxy_worker, it->address, it->control_fd, it->interrupt_fd).detach(); g_pending_proxies.erase(it); break; } return; } }\n  PendingUinputProxy p; p.address = address; if (control_channel) p.control_fd = fd.release(); else p.interrupt_fd = fd.release(); g_pending_proxies.push_back(p);\n}' src/vdsd.cc && \n            mkdir -p build && cd build && \n            cmake -DCMAKE_BUILD_TYPE=Release .. && \n            make -j$(nproc)
 
         # 5. RPM-Paketstruktur vorbereiten (PKG_ROOT) inklusive REVISION 17.50 Weichen-Schranke
         RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
