@@ -182,7 +182,17 @@ modules:
             mkdir -p "${PKG_ROOT}/usr/lib/modules-load.d" && \
             echo "vds_hcd" > "${PKG_ROOT}/usr/lib/modules-load.d/vds.conf" && \
             mkdir -p "${PKG_ROOT}/usr/share/dbus-1/system.d" && \
-            cp /vds_build_dir/daemon/org.vdsd.conf "${PKG_ROOT}/usr/share/dbus-1/system.d/" && \
+            echo '<!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-BUS Bus Configuration 1.0//EN"' > "${PKG_ROOT}/usr/share/dbus-1/system.d/org.vdsd.conf" && \
+            echo ' "http://freedesktop.org">' >> "${PKG_ROOT}/usr/share/dbus-1/system.d/org.vdsd.conf" && \
+            echo '<busconfig>' >> "${PKG_ROOT}/usr/share/dbus-1/system.d/org.vdsd.conf" && \
+            echo '  <policy user="root">' >> "${PKG_ROOT}/usr/share/dbus-1/system.d/org.vdsd.conf" && \
+            echo '    <allow own="org.vdsd"/>' >> "${PKG_ROOT}/usr/share/dbus-1/system.d/org.vdsd.conf" && \
+            echo '    <allow send_destination="org.vdsd"/>' >> "${PKG_ROOT}/usr/share/dbus-1/system.d/org.vdsd.conf" && \
+            echo '  </policy>' >> "${PKG_ROOT}/usr/share/dbus-1/system.d/org.vdsd.conf" && \
+            echo '  <policy context="default">' >> "${PKG_ROOT}/usr/share/dbus-1/system.d/org.vdsd.conf" && \
+            echo '    <allow send_destination="org.vdsd"/>' >> "${PKG_ROOT}/usr/share/dbus-1/system.d/org.vdsd.conf" && \
+            echo '  </policy>' >> "${PKG_ROOT}/usr/share/dbus-1/system.d/org.vdsd.conf" && \
+            echo '</busconfig>' >> "${PKG_ROOT}/usr/share/dbus-1/system.d/org.vdsd.conf" && \
             mkdir -p "${PKG_ROOT}/usr/lib/systemd/system" && \
             echo '[Unit]' > "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service" && \
             echo 'Description=Virtual DualSense Daemon' >> "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service" && \
