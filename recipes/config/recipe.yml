@@ -37,17 +37,15 @@ modules:
 
         # 2.5 HÄRTUNG DER BLUETOOTH-TIMEOUTS (Behebt den Unraid VM / Kernel 7.1 Disconnect-Bug)
         RUN mkdir -p /etc/bluetooth && \
-            cat << 'EOF' > /etc/bluetooth/main.conf
-        [General]
-        Name = Bazzite-vDS-Host
-        Class = 0x000100
+            echo '[General]' > /etc/bluetooth/main.conf && \
+            echo 'Name = Bazzite-vDS-Host' >> /etc/bluetooth/main.conf && \
+            echo 'Class = 0x000100' >> /etc/bluetooth/main.conf && \
+            echo '[LE]' >> /etc/bluetooth/main.conf && \
+            echo 'MinConnectionInterval=7' >> /etc/bluetooth/main.conf && \
+            echo 'MaxConnectionInterval=9' >> /etc/bluetooth/main.conf && \
+            echo 'ConnectionLatency=0' >> /etc/bluetooth/main.conf && \
+            echo 'SupervisionTimeout=300' >> /etc/bluetooth/main.conf
 
-        [LE]
-        MinConnectionInterval=7
-        MaxConnectionInterval=9
-        ConnectionLatency=0
-        SupervisionTimeout=300
-        EOF
 
         # 3. Lokale Header via sicherem Heredoc erzeugen (DEINE ORIGINAL-LOGIK 🔒 — UNBERÜHRT)
         RUN mkdir -p /vds_build_dir/include/bluetooth && \
@@ -175,12 +173,6 @@ modules:
         # 5. RPM-Paketstruktur vorbereiten (PKG_ROOT) inklusive REVISION 17.50 Weichen-Schranke
         RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
             PKG_ROOT="/vds-pkg-root" && \
-            mkdir -p "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra" && \
-            mkdir -p "${PKG_ROOT}/usr/lib/modules-load.d" && \
-
-        # 6. Natives RPM via rpmbuild generieren und installieren (Optimierte SELinux- & Systemd-Pfade)
-        RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
-            PKG_ROOT="/vds-pkg-root" && \
             mkdir -p "${PKG_ROOT}/usr/bin" && \
             cp /vds_build_dir/build/vdsd "${PKG_ROOT}/usr/bin/vdsd" && \
             cp /vds_build_dir/build/vdsctl "${PKG_ROOT}/usr/bin/vdsctl" && \
@@ -192,55 +184,44 @@ modules:
             mkdir -p "${PKG_ROOT}/usr/share/dbus-1/system.d" && \
             cp /vds_build_dir/daemon/org.vdsd.conf "${PKG_ROOT}/usr/share/dbus-1/system.d/" && \
             mkdir -p "${PKG_ROOT}/usr/lib/systemd/system" && \
-            cat << 'EOF' > "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service" && \
-            [Unit]
-            Description=Virtual DualSense Daemon
-            After=bluetooth.service
-            Requires=bluetooth.service
-            
-            [Service]
-            Type=dbus
-            BusName=org.vdsd
-            ExecStart=/usr/bin/vdsd
-            Restart=always
-            SELinuxContext=system_u:system_r:init_t:s0
-            
-            [Install]
-            WantedBy=multi-user.target
-            EOF
-            cat << 'EOF' > "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.service" && \
-            [Unit]
-            Description=vDS SDP Permissions Workaround
-            After=bluetooth.service
-            
-            [Service]
-            Type=oneshot
-            ExecStart=/bin/chmod 777 /var/run/sdp
-            RemainAfterExit=yes
-            
-            [Install]
-            WantedBy=multi-user.target
-            EOF
-            cat << 'EOF' > "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.path" && \
-            [Unit]
-            Description=Watch for BlueZ SDP Socket creation
-            
-            [Path]
-            PathExists=/var/run/sdp
-            
-            [Install]
-            WantedBy=multi-user.target
-            EOF
+            echo '[Unit]' > "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service" && \
+            echo 'Description=Virtual DualSense Daemon' >> "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service" && \
+            echo 'After=bluetooth.service' >> "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service" && \
+            echo 'Requires=bluetooth.service' >> "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service" && \
+            echo '[Service]' >> "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service" && \
+            echo 'Type=dbus' >> "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service" && \
+            echo 'BusName=org.vdsd' >> "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service" && \
+            echo 'ExecStart=/usr/bin/vdsd' >> "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service" && \
+            echo 'Restart=always' >> "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service" && \
+            echo 'SELinuxContext=system_u:system_r:init_t:s0' >> "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service" && \
+            echo '[Install]' >> "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service" && \
+            echo 'WantedBy=multi-user.target' >> "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service" && \
+            echo '[Unit]' > "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.service" && \
+            echo 'Description=vDS SDP Permissions Workaround' >> "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.service" && \
+            echo 'After=bluetooth.service' >> "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.service" && \
+            echo '[Service]' >> "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.service" && \
+            echo 'Type=oneshot' >> "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.service" && \
+            echo 'ExecStart=/bin/chmod 777 /var/run/sdp' >> "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.service" && \
+            echo 'RemainAfterExit=yes' >> "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.service" && \
+            echo '[Install]' >> "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.service" && \
+            echo 'WantedBy=multi-user.target' >> "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.service" && \
+            echo '[Unit]' > "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.path" && \
+            echo 'Description=Watch for BlueZ SDP Socket creation' >> "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.path" && \
+            echo '[Path]' >> "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.path" && \
+            echo 'PathExists=/var/run/sdp' >> "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.path" && \
+            echo '[Install]' >> "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.path" && \
+            echo 'WantedBy=multi-user.target' >> "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.path" && \
             mkdir -p "${PKG_ROOT}/usr/lib/systemd/system/bluetooth.service.d" && \
-            cat << 'EOF' > "${PKG_ROOT}/usr/lib/systemd/system/bluetooth.service.d/override.conf" && \
-            [Service]
-            ExecStart=
-            ExecStart=/usr/libexec/bluetooth/bluetoothd --noplugin=input
-            EOF
+            echo '[Service]' > "${PKG_ROOT}/usr/lib/systemd/system/bluetooth.service.d/override.conf" && \
+            echo 'ExecStart=' >> "${PKG_ROOT}/usr/lib/systemd/system/bluetooth.service.d/override.conf" && \
+            echo 'ExecStart=/usr/libexec/bluetooth/bluetoothd --noplugin=input' >> "${PKG_ROOT}/usr/lib/systemd/system/bluetooth.service.d/override.conf" && \
             mkdir -p "${PKG_ROOT}/usr/etc/bluetooth" && \
             cp /etc/bluetooth/main.conf "${PKG_ROOT}/usr/etc/bluetooth/main.conf" && \
             mkdir -p "${PKG_ROOT}/usr/lib/udev/rules.d" && \
-            echo 'KERNEL=="uinput", SUBSYSTEM=="misc", OPTIONS+="static_node=uinput", TAG+="systemd", MODE="0660", GROUP="input"' > "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-uinput.rules" && \
+            echo 'KERNEL=="uinput", SUBSYSTEM=="misc", OPTIONS+="static_node=uinput", TAG+="systemd", MODE="0660", GROUP="input"' > "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-uinput.rules"
+
+               # 6. Natives RPM via rpmbuild generieren und installieren (Optimierte SELinux- & Systemd-Pfade)
+        RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
             mkdir -p /root/rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS} && \
             echo "Name: kmod-vds" > /root/rpmbuild/SPECS/vds.spec && \
             echo "Version: 1.0.0" >> /root/rpmbuild/SPECS/vds.spec && \
