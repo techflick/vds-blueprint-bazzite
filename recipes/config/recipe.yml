@@ -98,7 +98,7 @@ modules:
         #endif
         EOF
 
-# 4. Daemon kompilieren und C++ Quellcode-Patches anwenden (Priorisiert die lokalen Header)
+        # 4. Daemon kompilieren und C++ Quellcode-Patches anwenden (Priorisiert die lokalen Header)
         RUN cd /vds_build_dir && \
             echo 'set(bluez_FOUND TRUE)' > /tmp/cmake.patch && \
             echo 'set(bluez_INCLUDE_DIRS "/vds_build_dir/include")' >> /tmp/cmake.patch && \
@@ -218,9 +218,42 @@ modules:
             mkdir -p "${PKG_ROOT}/usr/etc/bluetooth" && \
             cp /etc/bluetooth/main.conf "${PKG_ROOT}/usr/etc/bluetooth/main.conf" && \
             mkdir -p "${PKG_ROOT}/usr/lib/udev/rules.d" && \
-            echo 'KERNEL=="uinput", SUBSYSTEM=="misc", OPTIONS+="static_node=uinput", TAG+="systemd", MODE="0660", GROUP="input"' > "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-uinput.rules"
+            echo 'KERNEL=="uinput", SUBSYSTEM=="misc", OPTIONS+="static_node=uinput", TAG+="systemd", MODE="0660", GROUP="input"' > "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-uinput.rules" && \
+            mkdir -p /root/rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS} && \
+            echo "Name: kmod-vds" > /root/rpmbuild/SPECS/vds.spec && \
+            echo "Version: 1.0.0" >> /root/rpmbuild/SPECS/vds.spec && \
+            echo "Release: 1" >> /root/rpmbuild/SPECS/vds.spec && \
+            echo "Summary: Virtual DualSense Driver" >> /root/rpmbuild/SPECS/vds.spec && \
+            echo "License: MIT" >> /root/rpmbuild/SPECS/vds.spec && \
+            echo "%description" >> /root/rpmbuild/SPECS/vds.spec && \
+            echo "Virtual DualSense Driver und Daemon mit integrierter uinput-Proxy Weiche für Bazzite." >> /root/rpmbuild/SPECS/vds.spec && \
+            echo "%post" >> /root/rpmbuild/SPECS/vds.spec && \
+            echo "/usr/sbin/restorecon -R /usr/bin/vdsd /usr/bin/vdsctl /usr/lib/systemd/system/vdsd.service /usr/etc/bluetooth /usr/lib/udev/rules.d/99-vds-*.rules /var/lib/vdsd 2>/dev/null || true" >> /root/rpmbuild/SPECS/vds.spec && \
+            echo "/usr/bin/udevadm control --reload-rules 2>/dev/null || true" >> /root/rpmbuild/SPECS/vds.spec && \
+            echo "/usr/bin/udevadm trigger --action=change 2>/dev/null || true" >> /root/rpmbuild/SPECS/vds.spec && \
+            echo "/usr/bin/systemctl daemon-reload 2>/dev/null || true" >> /root/rpmbuild/SPECS/vds.spec && \
+            echo "/usr/bin/systemctl preset vdsd.service 2>/dev/null || true" >> /root/rpmbuild/SPECS/vds.spec && \
+            echo "/usr/bin/systemctl enable vdsd.service 2>/dev/null || true" >> /root/rpmbuild/SPECS/vds.spec && \
+            echo "/usr/bin/systemctl preset vds-chmod-sdp.path 2>/dev/null || true" >> /root/rpmbuild/SPECS/vds.spec && \
+            echo "/usr/bin/systemctl enable vds-chmod-sdp.path 2>/dev/null || true" >> /root/rpmbuild/SPECS/vds.spec && \
+            echo "%files" >> /root/rpmbuild/SPECS/vds.spec && \
+            echo "/usr/lib/modules/${KERNEL_VERSION}/extra/vds_hcd.ko" >> /root/rpmbuild/SPECS/vds.spec && \
+            echo "/usr/lib/modules-load.d/vds.conf" >> /root/rpmbuild/SPECS/vds.spec && \
+            echo "/usr/bin/vdsd" >> /root/rpmbuild/SPECS/vds.spec && \
+            echo "/usr/bin/vdsctl" >> /root/rpmbuild/SPECS/vds.spec && \
+            echo "%dir /usr/lib/systemd/system/bluetooth.service.d" >> /root/rpmbuild/SPECS/vds.spec && \
+            echo "/usr/lib/systemd/system/bluetooth.service.d/override.conf" >> /root/rpmbuild/SPECS/vds.spec && \
+            echo "%dir /usr/etc/bluetooth" >> /root/rpmbuild/SPECS/vds.spec && \
+            echo "/usr/etc/bluetooth/main.conf" >> /root/rpmbuild/SPECS/vds.spec && \
+            echo "/usr/lib/systemd/system/vdsd.service" >> /root/rpmbuild/SPECS/vds.spec && \
+            echo "/usr/lib/systemd/system/vds-chmod-sdp.service" >> /root/rpmbuild/SPECS/vds.spec && \
+            echo "/usr/lib/systemd/system/vds-chmod-sdp.path" >> /root/rpmbuild/SPECS/vds.spec && \
+            echo "/usr/share/dbus-1/system.d/org.vdsd.conf" >> /root/rpmbuild/SPECS/vds.spec && \
+            echo "/usr/lib/udev/rules.d/99-vds-uinput.rules" >> /root/rpmbuild/SPECS/vds.spec && \
+            rpmbuild --define "_topdir /root/rpmbuild" --buildroot=/vds-pkg-root -bb /root/rpmbuild/SPECS/vds.spec && \
+            rpm -ivh --nodeps /root/rpmbuild/RPMS/x86_64/kmod-vds-1.0.0-1.x86_64.rpm
 
-               # 6. Natives RPM via rpmbuild generieren und installieren (Optimierte SELinux- & Systemd-Pfade)
+        # 6. Natives RPM via rpmbuild generieren und installieren (Optimierte SELinux- & Systemd-Pfade)
         RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
             mkdir -p /root/rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS} && \
             echo "Name: kmod-vds" > /root/rpmbuild/SPECS/vds.spec && \
