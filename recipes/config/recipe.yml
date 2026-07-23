@@ -85,7 +85,7 @@ modules:
         #endif
         #endif
         EOF
-
+        
         # 4. Daemon kompilieren und C++ Quellcode-Patches anwenden (Priorisiert die lokalen Header)
         RUN cd /vds_build_dir && \
             echo 'set(bluez_FOUND TRUE)' > /tmp/cmake.patch && \
@@ -143,7 +143,8 @@ modules:
             echo '  for (auto it = g_pending_proxies.begin(); it != g_pending_proxies.end(); ++it) { if (it->address == address) { if (control_channel) it->control_fd = fd.release(); else it->interrupt_fd = fd.release(); if (it->control_fd >= 0 && it->interrupt_fd >= 0) { std::thread(run_uinput_proxy_worker, it->address, it->control_fd, it->interrupt_fd).detach(); g_pending_proxies.erase(it); break; } return; } }' >> /tmp/proxy.patch && \
             echo '  PendingUinputProxy p; p.address = address; if (control_channel) p.control_fd = fd.release(); else p.interrupt_fd = fd.release(); g_pending_proxies.push_back(p);' >> /tmp/proxy.patch && \
             echo '}' >> /tmp/proxy.patch && \
-            sed -i '/void handle_bt_accept/r /tmp/proxy.patch' daemon/vdsd.cc && \
+            TARGET_VDSD=$(find . -name vdsd.cc | head -n 1) && \
+            sed -i '/void handle_bt_accept/r /tmp/proxy.patch' "$TARGET_VDSD" && \
             mkdir -p build && cd build && \
             cmake -DCMAKE_BUILD_TYPE=Release .. && \
             make -j$(nproc)
