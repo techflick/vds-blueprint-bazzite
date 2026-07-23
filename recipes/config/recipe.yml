@@ -72,7 +72,7 @@ modules:
         }
         #endif
         EOF
-
+ 
         RUN cat << 'EOF' > /vds_build_dir/include/bluetooth/l2cap.h
         #ifndef __L2CAP_H
         #define __L2CAP_H
