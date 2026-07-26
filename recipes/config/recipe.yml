@@ -82,7 +82,7 @@ modules:
             echo '#endif' >> /vds_build_dir/include/bluetooth/l2cap.h && \
             echo '#endif' >> /vds_build_dir/include/bluetooth/l2cap.h
 
-          # Schritt 3: Daemon kompilieren und C++ Handshake- & uinput-Patches anwenden
+                # Schritt 3 (Teil 1): Daemon kompilieren und C++ Handshake- & uinput-Patches anwenden
         RUN cd /vds_build_dir && \
             echo 'set(bluez_FOUND TRUE)' > /tmp/cmake.patch && \
             echo 'set(bluez_INCLUDE_DIRS "/vds_build_dir/include")' >> /tmp/cmake.patch && \
@@ -119,7 +119,7 @@ modules:
             echo '    std::string target_path = "";' >> /tmp/proxy.patch && \
             echo '    if (std::filesystem::exists(path_low)) target_path = path_low;' >> /tmp/proxy.patch && \
             echo '    else if (std::filesystem::exists(path_up)) target_path = path_up;' >> /tmp/proxy.patch && \
-            echo '    if (!target_path.empty()) {' >> /tmp/proxy.patch && \
+            if (!target_path.empty()) {' >> /tmp/proxy.patch && \
             echo '      std::ifstream file(target_path); std::string line;' >> /tmp/proxy.patch && \
             echo '      while (std::getline(file, line)) {' >> /tmp/proxy.patch && \
             echo '        if (line.find("Name=") == 0) name = line.substr(5);' >> /tmp/proxy.patch && \
@@ -157,7 +157,7 @@ modules:
             echo '  std::uint8_t buffer[1024];' >> /tmp/proxy.patch && \
             echo '  while (true) {' >> /tmp/proxy.patch && \
             echo '    int ret = ::poll(p_fds, 2, 50);' >> /tmp/proxy.patch && \
-            echo '    if (ret > 0) {' >> /tmp/proxy.patch && \
+            echo '    if (ret > 0) { ' >> /tmp/proxy.patch && \
             echo '      if (p_fds[0].revents & POLLIN) {' >> /tmp/proxy.patch && \
             echo '        ssize_t bytes = ::read(control_fd, buffer, sizeof(buffer));' >> /tmp/proxy.patch && \
             echo '        if (bytes <= 0) break;' >> /tmp/proxy.patch && \
