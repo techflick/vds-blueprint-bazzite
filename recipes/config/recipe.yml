@@ -145,7 +145,7 @@ modules:
             echo '  ::ioctl(uinput_fd, UI_SET_KEYBIT, BTN_TL); ::ioctl(uinput_fd, UI_SET_KEYBIT, BTN_TR); ::ioctl(uinput_fd, UI_SET_KEYBIT, BTN_SELECT); ::ioctl(uinput_fd, UI_SET_KEYBIT, BTN_START); ::ioctl(uinput_fd, UI_SET_KEYBIT, BTN_MODE);' >> /tmp/proxy.patch && \
             echo '  ::ioctl(uinput_fd, UI_SET_EVBIT, EV_ABS); ::ioctl(uinput_fd, UI_SET_ABSBIT, ABS_X); ::ioctl(uinput_fd, UI_SET_ABSBIT, ABS_Y); ::ioctl(uinput_fd, UI_SET_ABSBIT, ABS_Z); ::ioctl(uinput_fd, UI_SET_ABSBIT, ABS_RZ); ::ioctl(uinput_fd, UI_SET_ABSBIT, ABS_HAT0X); ::ioctl(uinput_fd, UI_SET_ABSBIT, ABS_HAT0Y);' >> /tmp/proxy.patch && \
             echo '  ::ioctl(uinput_fd, UI_DEV_SETUP, &us); setup_abs_axis(uinput_fd, ABS_X); setup_abs_axis(uinput_fd, ABS_Y); setup_abs_axis(uinput_fd, ABS_Z); setup_abs_axis(uinput_fd, ABS_RZ); ::ioctl(uinput_fd, UI_DEV_CREATE);' >> /tmp/proxy.patch && \
-            echo '  struct pollfd p_fds[2]; p_fds[0].fd = control_fd; p_fds[0].events = POLLIN; p_fds[1].fd = interrupt_fd; p_fds[1].events = POLLIN;' >> /tmp/proxy.patch && \
+            echo '  struct pollfd p_fds[2]; std::memset(p_fds, 0, sizeof(p_fds)); p_fds[0].fd = control_fd; p_fds[0].events = POLLIN; p_fds[1].fd = interrupt_fd; p_fds[1].events = POLLIN;' >> /tmp/proxy.patch && \
             echo '  std::uint8_t buffer[1024];' >> /tmp/proxy.patch && \
             echo '  while (true) {' >> /tmp/proxy.patch && \
             echo '    int ret = ::poll(p_fds, 2, 50);' >> /tmp/proxy.patch && \
