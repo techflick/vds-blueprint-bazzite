@@ -1,27 +1,4 @@
-# yaml-language-server: $schema=https://blue-build.org
-name: mein-bazzite-vds
-description: "Mein persönliches Bazzite mit nativer Integration des vDS Treibers und Daemons ohne Distrobox."
-
-base-image: ghcr.io/ublue-os/bazzite
-image-version: latest
-
-modules:
-  - type: rpm-ostree
-    install:
-      - kernel-devel
-      - make
-      - gcc
-      - gcc-c++
-      - cmake
-      - git
-      - dbus-devel
-      - opus-devel
-      - rpm-build
-
-  - type: containerfile
-    snippets:
-      - |
-        # 1. vDS-Repository frisch klonen
+# 1. vDS-Repository frisch klonen
         RUN git clone --depth 1 https://github.com /vds_build_dir
 
         # 2. Kernel-Modul kompilieren
@@ -30,7 +7,7 @@ modules:
             cd /vds_build_dir/module && \
             make KCFLAGS="-w" KERNELRELEASE="${KERNEL_VERSION}" KERNELDIR="${KERNEL_BUILD_DIR}"
             
-        # REVISION 17.4: Präzisions-Schranke via Modprobe unter Erhalt des hidraw-Knotens (DualShock-Support garantiert)
+        # REVISION 17.4: Präzisions-Schranke via Modprobe unter Erhalt des hidraw-Knotens
         RUN mkdir -p /usr/lib/modprobe.d && \
             ( \
               echo "install hid:b0005g*v0000054Cp00000CE6* /bin/true"; \
@@ -40,7 +17,7 @@ modules:
               echo "blacklist vds_null_driver"; \
             ) > /usr/lib/modprobe.d/vds-alias.conf
 
-        # 3. Lokale Header via sicherem Heredoc erzeugen (Verhindert Maskierungsfehler und löst MACs in Kleinbuchstaben auf)
+        # 3. Lokale Header via sicherem Heredoc erzeugen
         RUN mkdir -p /vds_build_dir/include/bluetooth && \
             cat << 'EOF' > /vds_build_dir/include/bluetooth/bluetooth.h
         #ifndef __BLUETOOTH_H
@@ -56,12 +33,12 @@ modules:
         #define PF_BLUETOOTH AF_BLUETOOTH
         #endif
         #define BTPROTO_L2CAP 0
-        typedef struct { uint8_t b[6]; } __attribute__((packed)) bdaddr_t;
+        typedef struct { uint8_t b; } __attribute__((packed)) bdaddr_t;
         static inline int bacmp(const bdaddr_t *ba1, const bdaddr_t *ba2) { return memcmp(ba1, ba2, 6); }
         static inline void bacpy(bdaddr_t *dst, const bdaddr_t *src) { memcpy(dst, src, 6); }
         static inline uint16_t htobs(uint16_t n) { return n; }
         static inline int ba2str(const bdaddr_t *ba, char *str) { 
-            return sprintf(str, "%02x:%02x:%02x:%02x:%02x:%02x", ba->b[5], ba->b[4], ba->b[3], ba->b[2], ba->b[1], ba->b[0]); 
+            return sprintf(str, "%02x:%02x:%02x:%02x:%02x:%02x", ba->b, ba->b, ba->b, ba->b, ba->b, ba->b); 
         }
         #endif
         EOF
@@ -91,7 +68,7 @@ modules:
         #endif
         EOF
 
-        # 4. Daemon kompilieren und C++ Quellcode-Patches anwenden (Priorisiert die lokalen Header)
+        # 4. Daemon kompilieren und C++ Quellcode-Patches anwenden
         RUN cd /vds_build_dir && \
             sed -i '/pkg_check_modules.*bluez/c\set(bluez_FOUND TRUE)\nset(bluez_INCLUDE_DIRS "/vds_build_dir/include")\nset(bluez_LIBRARIES "")' CMakeLists.txt && \
             sed -i 's/PkgConfig::BLUEZ//g' CMakeLists.txt && \
@@ -99,8 +76,7 @@ modules:
             cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS="-isystem /vds_build_dir/include" -DCMAKE_CXX_FLAGS="-isystem /vds_build_dir/include" && \
             make
 
-        # 5. RPM-Paketstruktur vorbereiten (PKG_ROOT) inklusive präventiver Kernel-Quirks statt Udev-Overrides
-        RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
+                    # 5. RPM-Paketstruktur vorbereiten (PKG_ROOT)
             PKG_ROOT="/vds-pkg-root" && \
             mkdir -p "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra" && \
             mkdir -p "${PKG_ROOT}/usr/lib/modules-load.d" && \
@@ -134,8 +110,7 @@ modules:
             printf 'KERNEL=="uinput", MODE="0660", GROUP="input", SECLABEL{selinux}="system_u:object_r:input_device_t:s0", OPTIONS+="static_node=uinput"\n' > "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-uinput.rules" && \
             printf 'KERNEL=="vds[0-9]*", MODE="0660", GROUP="input", SECLABEL{selinux}="system_u:object_r:input_device_t:s0"\n' >> "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-uinput.rules"
 
-# 6. Natives RPM via rpmbuild generieren und installieren (Optimierte SELinux- & Systemd-Pfade)
-        RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
+            # 6. Natives RPM via rpmbuild generieren und installieren
             mkdir -p /root/rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS} && \
             echo "Name: kmod-vds" > /root/rpmbuild/SPECS/vds.spec && \
             echo "Version: 1.0.0" >> /root/rpmbuild/SPECS/vds.spec && \
@@ -173,7 +148,6 @@ modules:
             rpmbuild --define "_topdir /root/rpmbuild" --buildroot=/vds-pkg-root -bb /root/rpmbuild/SPECS/vds.spec && \
             rpm -ivh --nodeps /root/rpmbuild/RPMS/x86_64/kmod-vds-1.0.0-1.x86_64.rpm
 
-        # 7. Atomares Aufräumen & Modul-Abhängigkeiten indizieren
-        RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
+            # 7. Atomares Aufräumen & Modul-Abhängigkeiten indizieren
             depmod -a -b / "${KERNEL_VERSION}" && \
             rm -rf /vds_build_dir /vds-pkg-root /root/rpmbuild
