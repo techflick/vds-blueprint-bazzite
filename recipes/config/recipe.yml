@@ -188,7 +188,7 @@ modules:
             cmake -DCMAKE_BUILD_TYPE=Release .. && \
             make -j$(nproc)
 
-        # Schritt 4: RPM-Paketstruktur vorbereiten (PKG_ROOT) inklusive Systemd- & Udev-Injektion
+                # Schritt 4: RPM-Paketstruktur vorbereiten (PKG_ROOT) inklusive Systemd- & Udev-Injektion
         RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
             PKG_ROOT="/vds-pkg-root" && \
             mkdir -p "${PKG_ROOT}/usr/bin" && \
@@ -252,7 +252,7 @@ modules:
             mkdir -p "${PKG_ROOT}/usr/lib/udev/rules.d" && \
             echo 'KERNEL=="uinput", SUBSYSTEM=="misc", OPTIONS+="static_node=uinput", TAG+="systemd", MODE="0660", GROUP="input"' > "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-uinput.rules"
 
-        # Schritt 5: Natives RPM via rpmbuild generieren und installieren
+                # Schritt 5: Natives RPM via rpmbuild generieren und installieren (Pfad-Korrektur D-Bus)
         RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
             DETECTED_ARCH=$(rpm -q kernel --queryformat '%{ARCH}\n' | head -n 1) && \
             mkdir -p /root/rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS} && \
@@ -284,7 +284,7 @@ modules:
             echo "/usr/lib/systemd/system/vdsd.service" >> /root/rpmbuild/SPECS/vds.spec && \
             echo "/usr/lib/systemd/system/vds-chmod-sdp.service" >> /root/rpmbuild/SPECS/vds.spec && \
             echo "/usr/lib/systemd/system/vds-chmod-sdp.path" >> /root/rpmbuild/SPECS/vds.spec && \
-            echo "/share/dbus-1/system.d/org.vdsd.conf" >> /root/rpmbuild/SPECS/vds.spec && \
+            echo "/usr/share/dbus-1/system.d/org.vdsd.conf" >> /root/rpmbuild/SPECS/vds.spec && \
             echo "/usr/lib/udev/rules.d/99-vds-uinput.rules" >> /root/rpmbuild/SPECS/vds.spec && \
             \
             rpmbuild --define "_topdir /root/rpmbuild" --buildroot=/vds-pkg-root -bb /root/rpmbuild/SPECS/vds.spec && \
@@ -294,3 +294,4 @@ modules:
         RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
             depmod -a -b / "${KERNEL_VERSION}" && \
             rm -rf /vds_build_dir /vds-pkg-root /root/rpmbuild
+
