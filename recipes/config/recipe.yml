@@ -82,7 +82,7 @@ modules:
             echo '#endif' >> /vds_build_dir/include/bluetooth/l2cap.h && \
             echo '#endif' >> /vds_build_dir/include/bluetooth/l2cap.h
 
-         # Schritt 3: Daemon kompilieren und C++ Handshake- & uinput-Patches anwenden
+        # Schritt 3 (Teil A): Daemon kompilieren und C++ Handshake- & uinput-Patches anwenden
         RUN cd /vds_build_dir && \
             echo 'set(bluez_FOUND TRUE)' > /tmp/cmake.patch && \
             echo 'set(bluez_INCLUDE_DIRS "/vds_build_dir/include")' >> /tmp/cmake.patch && \
@@ -103,6 +103,9 @@ modules:
             echo '#include <cstring>' >> /tmp/proxy.patch && \
             echo '#include <vector>' >> /tmp/proxy.patch && \
             echo '#include <csignal>' >> /tmp/proxy.patch && \
+            echo '#include <sys/socket.h>' >> /tmp/proxy.patch && \
+            echo '#include <errno.h>' >> /tmp/proxy.patch && \
+            echo '#include <iostream>' >> /tmp/proxy.patch && \
             echo 'struct PendingUinputProxy { std::string address; int control_fd = -1; int interrupt_fd = -1; };' >> /tmp/proxy.patch && \
             echo 'inline std::vector<PendingUinputProxy> g_pending_proxies;' >> /tmp/proxy.patch && \
             echo 'inline bool get_bluez_device_info(const std::string& t_mac, uint16_t& vendor, uint16_t& product, std::string& name) {' >> /tmp/proxy.patch && \
@@ -134,7 +137,13 @@ modules:
             echo 'inline void setup_abs_axis(int fd, uint16_t code) {' >> /tmp/proxy.patch && \
             echo '  struct uinput_abs_setup s; std::memset(&s, 0, sizeof(s)); s.code = code; s.absinfo.minimum = 0; s.absinfo.maximum = 255; ::ioctl(fd, UI_ABS_SETUP, &s);' >> /tmp/proxy.patch && \
             echo '}' >> /tmp/proxy.patch && \
+            # Schritt 3 (Teil B): Proxy-Worker & Compilierung
             echo 'inline void run_uinput_proxy_worker(std::string address, int control_fd, int interrupt_fd) {' >> /tmp/proxy.patch && \
+            echo '  int opt = 1;' >> /tmp/proxy.patch && \
+            echo '  ::setsockopt(control_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));' >> /tmp/proxy.patch && \
+            echo '  ::setsockopt(interrupt_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));' >> /tmp/proxy.patch && \
+            echo '  ::fcntl(control_fd, F_SETFL, O_NONBLOCK);' >> /tmp/proxy.patch && \
+            echo '  ::fcntl(interrupt_fd, F_SETFL, O_NONBLOCK);' >> /tmp/proxy.patch && \
             echo '  std::this_thread::sleep_for(std::chrono::milliseconds(200));' >> /tmp/proxy.patch && \
             echo '  uint16_t vendor = 0x054c; uint16_t product = 0x0ce6; std::string device_name = "DualSense Wireless Controller";' >> /tmp/proxy.patch && \
             echo '  get_bluez_device_info(address, vendor, product, device_name);' >> /tmp/proxy.patch && \
@@ -163,7 +172,7 @@ modules:
             echo '          emit_event(uinput_fd, EV_SYN, 0, 0);' >> /tmp/proxy.patch && \
             echo '        }' >> /tmp/proxy.patch && \
             echo '      }' >> /tmp/proxy.patch && \
-            echo '    } else if (ret < 0) { break; }' >> /tmp/proxy.patch && \
+            echo '    } else if (ret < 0) { if(errno != EINTR && errno != EAGAIN) break; }' >> /tmp/proxy.patch && \
             echo '  }' >> /tmp/proxy.patch && \
             echo '  ::ioctl(uinput_fd, UI_DEV_DESTROY); ::close(uinput_fd); ::close(control_fd); ::close(interrupt_fd);' >> /tmp/proxy.patch && \
             echo '}' >> /tmp/proxy.patch && \
@@ -212,12 +221,12 @@ modules:
             echo 'Group=root' >> "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service" && \
             echo 'ExecStart=/usr/bin/vdsd' >> "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service" && \
             echo 'Restart=always' >> "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service" && \
-            echo 'RestartSec=5' >> "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service" && \
+            echo 'RestartSec=3' >> "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service" && \
             echo 'DeviceAllow=/dev/uinput rw' >> "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service" && \
             echo 'PrivateNetwork=no' >> "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service" && \
-            echo 'SELinuxContext=system_u:system_r:unconfined_t:s0' >> "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service" && \
-            echo 'AmbientCapabilities=CAP_NET_RAW CAP_NET_ADMIN CAP_SYS_ADMIN CAP_SYS_RAWIO' >> "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service" && \
-            echo 'CapabilityBoundingSet=CAP_NET_RAW CAP_NET_ADMIN CAP_SYS_ADMIN CAP_SYS_RAWIO' >> "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service" && \
+            echo 'PrivateDevices=no' >> "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service" && \
+            echo 'AmbientCapabilities=CAP_NET_RAW CAP_NET_ADMIN CAP_SYS_ADMIN' >> "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service" && \
+            echo 'CapabilityBoundingSet=CAP_NET_RAW CAP_NET_ADMIN CAP_SYS_ADMIN' >> "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service" && \
             echo '[Install]' >> "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service" && \
             echo 'WantedBy=multi-user.target' >> "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service" && \
             echo '[Unit]' > "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.service" && \
@@ -227,8 +236,7 @@ modules:
             echo 'Type=oneshot' >> "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.service" && \
             echo 'ExecStart=/bin/chmod 777 /var/run/sdp' >> "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.service" && \
             echo 'RemainAfterExit=yes' >> "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.service" && \
-            echo '[Install]' >> "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.service" && \
-            echo 'WantedBy=multi-user.target' >> "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.path" && \
+            echo '[Install]' >> "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.path" && \
             echo '[Unit]' > "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.path" && \
             echo 'Description=Watch for BlueZ SDP Socket creation' >> "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.path" && \
             echo '[Path]' >> "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.path" && \
@@ -244,7 +252,7 @@ modules:
             mkdir -p "${PKG_ROOT}/usr/lib/udev/rules.d" && \
             echo 'KERNEL=="uinput", SUBSYSTEM=="misc", OPTIONS+="static_node=uinput", TAG+="systemd", MODE="0660", GROUP="input"' > "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-uinput.rules"
 
-         # Schritt 5: Natives RPM via rpmbuild generieren und installieren
+        # Schritt 5: Natives RPM via rpmbuild generieren und installieren
         RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
             DETECTED_ARCH=$(rpm -q kernel --queryformat '%{ARCH}\n' | head -n 1) && \
             mkdir -p /root/rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS} && \
@@ -276,7 +284,7 @@ modules:
             echo "/usr/lib/systemd/system/vdsd.service" >> /root/rpmbuild/SPECS/vds.spec && \
             echo "/usr/lib/systemd/system/vds-chmod-sdp.service" >> /root/rpmbuild/SPECS/vds.spec && \
             echo "/usr/lib/systemd/system/vds-chmod-sdp.path" >> /root/rpmbuild/SPECS/vds.spec && \
-            echo "/usr/share/dbus-1/system.d/org.vdsd.conf" >> /root/rpmbuild/SPECS/vds.spec && \
+            echo "/share/dbus-1/system.d/org.vdsd.conf" >> /root/rpmbuild/SPECS/vds.spec && \
             echo "/usr/lib/udev/rules.d/99-vds-uinput.rules" >> /root/rpmbuild/SPECS/vds.spec && \
             \
             rpmbuild --define "_topdir /root/rpmbuild" --buildroot=/vds-pkg-root -bb /root/rpmbuild/SPECS/vds.spec && \
