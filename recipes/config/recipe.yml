@@ -236,8 +236,9 @@ modules:
             mkdir -p "${PKG_ROOT}/usr/lib/udev/rules.d" && \
             echo 'KERNEL=="uinput", SUBSYSTEM=="misc", OPTIONS+="static_node=uinput", TAG+="systemd", MODE="0660", GROUP="input"' > "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-uinput.rules"
 
-        # Schritt 5: Natives RPM via rpmbuild generieren und installieren
+         # Schritt 5: Natives RPM via rpmbuild generieren und installieren
         RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
+            DETECTED_ARCH=$(rpm -q kernel --queryformat '%{ARCH}\n' | head -n 1) && \
             mkdir -p /root/rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS} && \
             echo "Name: kmod-vds" > /root/rpmbuild/SPECS/vds.spec && \
             echo "Version: 1.0.0" >> /root/rpmbuild/SPECS/vds.spec && \
@@ -271,7 +272,7 @@ modules:
             echo "/usr/lib/udev/rules.d/99-vds-uinput.rules" >> /root/rpmbuild/SPECS/vds.spec && \
             \
             rpmbuild --define "_topdir /root/rpmbuild" --buildroot=/vds-pkg-root -bb /root/rpmbuild/SPECS/vds.spec && \
-            rpm -Uvh --nodeps --force /root/rpmbuild/RPMS/%{ARCH}/kmod-vds-1.0.0-1.%{ARCH}.rpm
+            rpm -Uvh --nodeps --force /root/rpmbuild/RPMS/${DETECTED_ARCH}/kmod-vds-1.0.0-1.${DETECTED_ARCH}.rpm
 
         # Schritt 6: Atomares Aufräumen & Modul-Abhängigkeiten indizieren
         RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
