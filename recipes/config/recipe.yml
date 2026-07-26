@@ -82,7 +82,7 @@ modules:
             echo '#endif' >> /vds_build_dir/include/bluetooth/l2cap.h && \
             echo '#endif' >> /vds_build_dir/include/bluetooth/l2cap.h
 
-        # Schritt 3: Daemon kompilieren und C++ Handshake- & uinput-Patches anwenden
+         # Schritt 3: Daemon kompilieren und C++ Handshake- & uinput-Patches anwenden
         RUN cd /vds_build_dir && \
             echo 'set(bluez_FOUND TRUE)' > /tmp/cmake.patch && \
             echo 'set(bluez_INCLUDE_DIRS "/vds_build_dir/include")' >> /tmp/cmake.patch && \
@@ -171,7 +171,7 @@ modules:
             echo '  for (auto it = g_pending_proxies.begin(); it != g_pending_proxies.end(); ++it) { if (it->address == address) { if (control_channel) it->control_fd = fd; else it->interrupt_fd = fd; if (it->control_fd >= 0 && it->interrupt_fd >= 0) { std::thread(run_uinput_proxy_worker, it->address, it->control_fd, it->interrupt_fd).detach(); g_pending_proxies.erase(it); break; } return; } }' >> /tmp/proxy.patch && \
             echo '  PendingUinputProxy p; p.address = address; if (control_channel) p.control_fd = fd; else p.interrupt_fd = fd; g_pending_proxies.push_back(p);' >> /tmp/proxy.patch && \
             TARGET_VDSD=$(find . -name vdsd.cc | head -n 1) && \
-            sed -i '1r /tmp/proxy.patch' "$TARGET_VDSD" && \
+            cat /tmp/proxy.patch >> "$TARGET_VDSD" && \
             sed -i 's/handle_uinput_fallback(address, fd, true);/handle_fallback_wrapper(address, fd, true);/g' "$TARGET_VDSD" && \
             sed -i 's/handle_uinput_fallback(address, fd, false);/handle_fallback_wrapper(address, fd, false);/g' "$TARGET_VDSD" && \
             mkdir -p build && cd build && \
