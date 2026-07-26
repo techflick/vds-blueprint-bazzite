@@ -124,11 +124,8 @@ modules:
               echo "blacklist vds_null_driver"; \
             ) > "${PKG_ROOT}/usr/lib/modprobe.d/vds-alias.conf" && \
             printf "[Service]\nExecStart=\nExecStart=/usr/libexec/bluetooth/bluetoothd --compat\n" > "${PKG_ROOT}/usr/lib/systemd/system/bluetooth.service.d/override.conf" && \
-            \
-            # BLUEZ SECURE TUNING: Verhindert die passive Trennung durch das L2CAP-Subsystem
             printf "[General]\nUserspaceHID=true\nClassicBondedOnly=false\n" > "${PKG_ROOT}/usr/etc/bluetooth/main.conf" && \
             printf "[Input]\nUserspaceHID=true\n" > "${PKG_ROOT}/usr/etc/bluetooth/input.conf" && \
-            \
             printf "[Unit]\nDescription=Virtual DualSense Userspace Daemon\nAfter=bluetooth.service vds-chmod-sdp.service\nRequires=bluetooth.service\n\n[Service]\nType=simple\nExecStartPre=/usr/bin/mkdir -p /var/lib/vdsd\nExecStart=/usr/bin/vdsd --db-path /var/lib/vdsd/vdsd.db\nRestart=always\nRestartSec=5\nUser=root\nGroup=root\nRestrictAddressFamilies=\nNoNewPrivileges=no\nPrivateNetwork=no\nPrivateTmp=no\nProtectSystem=false\nProtectHome=false\nCapabilityBoundingSet=CAP_NET_RAW CAP_SYS_ADMIN CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_SYS_RAWIO\nAmbientCapabilities=CAP_NET_RAW CAP_SYS_ADMIN CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_SYS_RAWIO\n\n[Install]\nWantedBy=multi-user.target\n" > "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service" && \
             printf "[Unit]\nDescription=Setze Berechtigungen für vDS SDP-Socket wenn er erscheint\n\n[Service]\nType=oneshot\nExecStart=/usr/bin/chmod 0777 /run/sdp\nRemainAfterExit=yes\n" > "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.service" && \
             printf "[Unit]\nDescription=Überwache BlueZ SDP-Socket für vDS\n\n[Path]\nPathChanged=/run/sdp\nUnit=vds-chmod-sdp.service\n\n[Install]\nWantedBy=multi-user.target\n" > "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.path" && \
