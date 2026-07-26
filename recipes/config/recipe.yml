@@ -172,7 +172,7 @@ modules:
             make -j$(nproc)
 
         # 5. RPM-Paketstruktur vorbereiten (PKG_ROOT) inklusive REVISION 17.60 Weichen-Schranke
-        RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%_arch\n' | head -n 1) && \
+        RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
             PKG_ROOT="/vds-pkg-root" && \
             mkdir -p "${PKG_ROOT}/usr/bin" && \
             cp /vds_build_dir/build/vdsd "${PKG_ROOT}/usr/bin/vdsd" && \
