@@ -135,11 +135,12 @@ modules:
             echo '  struct uinput_abs_setup s; std::memset(&s, 0, sizeof(s)); s.code = code; s.absinfo.minimum = 0; s.absinfo.maximum = 255; ::ioctl(fd, UI_ABS_SETUP, &s);' >> /tmp/proxy.patch && \
             echo '}' >> /tmp/proxy.patch && \
             echo 'inline void run_uinput_proxy_worker(std::string address, int control_fd, int interrupt_fd) {' >> /tmp/proxy.patch && \
-            echo '  std::this_thread::sleep_for(std::chrono::milliseconds(150));' >> /tmp/proxy.patch && \
-            echo '  uint16_t vendor = 0x054c; uint16_t product = 0x0ce6; std::string device_name = "Wireless Controller";' >> /tmp/proxy.patch && \
+            echo '  std::this_thread::sleep_for(std::chrono::milliseconds(200));' >> /tmp/proxy.patch && \
+            echo '  uint16_t vendor = 0x054c; uint16_t product = 0x0ce6; std::string device_name = "DualSense Wireless Controller";' >> /tmp/proxy.patch && \
             echo '  get_bluez_device_info(address, vendor, product, device_name);' >> /tmp/proxy.patch && \
             echo '  int uinput_fd = ::open("/dev/uinput", O_WRONLY | O_NONBLOCK); if (uinput_fd < 0) { ::close(control_fd); ::close(interrupt_fd); return; }' >> /tmp/proxy.patch && \
-            echo '  struct uinput_setup us; std::memset(&us, 0, sizeof(us)); us.id.bustype = BUS_BLUETOOTH; us.id.vendor = vendor; us.id.product = product; std::strncpy(us.name, device_name.c_str(), UINPUT_MAX_NAME_SIZE);' >> /tmp/proxy.patch && \
+            echo '  struct uinput_setup us; std::memset(&us, 0, sizeof(us)); us.id.bustype = BUS_BLUETOOTH;' >> /tmp/proxy.patch && \
+            echo '  us.id.vendor = vendor; us.id.product = product; std::strncpy(us.name, device_name.c_str(), UINPUT_MAX_NAME_SIZE);' >> /tmp/proxy.patch && \
             echo '  ::ioctl(uinput_fd, UI_SET_EVBIT, EV_KEY); ::ioctl(uinput_fd, UI_SET_KEYBIT, BTN_SOUTH); ::ioctl(uinput_fd, UI_SET_KEYBIT, BTN_EAST); ::ioctl(uinput_fd, UI_SET_KEYBIT, BTN_NORTH); ::ioctl(uinput_fd, UI_SET_KEYBIT, BTN_WEST);' >> /tmp/proxy.patch && \
             echo '  ::ioctl(uinput_fd, UI_SET_KEYBIT, BTN_TL); ::ioctl(uinput_fd, UI_SET_KEYBIT, BTN_TR); ::ioctl(uinput_fd, UI_SET_KEYBIT, BTN_SELECT); ::ioctl(uinput_fd, UI_SET_KEYBIT, BTN_START); ::ioctl(uinput_fd, UI_SET_KEYBIT, BTN_MODE);' >> /tmp/proxy.patch && \
             echo '  ::ioctl(uinput_fd, UI_SET_EVBIT, EV_ABS); ::ioctl(uinput_fd, UI_SET_ABSBIT, ABS_X); ::ioctl(uinput_fd, UI_SET_ABSBIT, ABS_Y); ::ioctl(uinput_fd, UI_SET_ABSBIT, ABS_Z); ::ioctl(uinput_fd, UI_SET_ABSBIT, ABS_RZ); ::ioctl(uinput_fd, UI_SET_ABSBIT, ABS_HAT0X); ::ioctl(uinput_fd, UI_SET_ABSBIT, ABS_HAT0Y);' >> /tmp/proxy.patch && \
@@ -147,26 +148,28 @@ modules:
             echo '  struct pollfd p_fds[2]; p_fds[0].fd = control_fd; p_fds[0].events = POLLIN; p_fds[1].fd = interrupt_fd; p_fds[1].events = POLLIN;' >> /tmp/proxy.patch && \
             echo '  std::uint8_t buffer[1024];' >> /tmp/proxy.patch && \
             echo '  while (true) {' >> /tmp/proxy.patch && \
-            echo '    int ret = ::poll(p_fds, 2, 20);' >> /tmp/proxy.patch && \
+            echo '    int ret = ::poll(p_fds, 2, 50);' >> /tmp/proxy.patch && \
             echo '    if (ret > 0) {' >> /tmp/proxy.patch && \
-            echo '      if (p_fds[1].revents & POLLIN) {' >> /tmp/proxy.patch && \
-            echo '        ssize_t bytes = ::read(interrupt_fd, buffer, sizeof(buffer));' >> /tmp/proxy.patch && \
-            echo '        if (bytes <= 0) break;' >> /tmp/proxy.patch && \
-            echo '      }' >> /tmp/proxy.patch && \
             echo '      if (p_fds[0].revents & POLLIN) {' >> /tmp/proxy.patch && \
             echo '        ssize_t bytes = ::read(control_fd, buffer, sizeof(buffer));' >> /tmp/proxy.patch && \
             echo '        if (bytes <= 0) break;' >> /tmp/proxy.patch && \
-            echo '        if (buffer[0] == 0x01 || bytes < 5) { std::uint8_t ack[2] = {0x00, 0x00}; ::write(control_fd, ack, 2); }' >> /tmp/proxy.patch && \
-            echo '        else { ::write(control_fd, buffer, bytes); }' >> /tmp/proxy.patch && \
             echo '      }' >> /tmp/proxy.patch && \
-            echo '    }' >> /tmp/proxy.patch && \
+            echo '      if (p_fds[1].revents & POLLIN) {' >> /tmp/proxy.patch && \
+            echo '        ssize_t bytes = ::read(interrupt_fd, buffer, sizeof(buffer));' >> /tmp/proxy.patch && \
+            echo '        if (bytes <= 0) break;' >> /tmp/proxy.patch && \
+            echo '        if (bytes >= 5 && buffer[0] == 0x01) {' >> /tmp/proxy.patch && \
+            echo '          int16_t lx = buffer[1]; int16_t ly = buffer[2];' >> /tmp/proxy.patch && \
+            echo '          emit_event(uinput_fd, EV_ABS, ABS_X, lx); emit_event(uinput_fd, EV_ABS, ABS_Y, ly);' >> /tmp/proxy.patch && \
+            echo '          emit_event(uinput_fd, EV_SYN, 0, 0);' >> /tmp/proxy.patch && \
+            echo '        }' >> /tmp/proxy.patch && \
+            echo '      }' >> /tmp/proxy.patch && \
+            echo '    } else if (ret < 0) { break; }' >> /tmp/proxy.patch && \
             echo '  }' >> /tmp/proxy.patch && \
             echo '  ::ioctl(uinput_fd, UI_DEV_DESTROY); ::close(uinput_fd); ::close(control_fd); ::close(interrupt_fd);' >> /tmp/proxy.patch && \
             echo '}' >> /tmp/proxy.patch && \
             echo 'inline void handle_fallback_wrapper(const std::string& address, int fd, bool control_channel) {' >> /tmp/proxy.patch && \
             echo '  for (auto it = g_pending_proxies.begin(); it != g_pending_proxies.end(); ++it) { if (it->address == address) { if (control_channel) it->control_fd = fd; else it->interrupt_fd = fd; if (it->control_fd >= 0 && it->interrupt_fd >= 0) { std::thread(run_uinput_proxy_worker, it->address, it->control_fd, it->interrupt_fd).detach(); g_pending_proxies.erase(it); break; } return; } }' >> /tmp/proxy.patch && \
             echo '  PendingUinputProxy p; p.address = address; if (control_channel) p.control_fd = fd; else p.interrupt_fd = fd; g_pending_proxies.push_back(p);' >> /tmp/proxy.patch && \
-            echo '}' >> /tmp/proxy.patch && \
             TARGET_VDSD=$(find . -name vdsd.cc | head -n 1) && \
             sed -i '1r /tmp/proxy.patch' "$TARGET_VDSD" && \
             sed -i 's/handle_uinput_fallback(address, fd, true);/handle_fallback_wrapper(address, fd, true);/g' "$TARGET_VDSD" && \
@@ -200,16 +203,20 @@ modules:
             mkdir -p "${PKG_ROOT}/usr/lib/systemd/system" && \
             echo '[Unit]' > "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service" && \
             echo 'Description=Virtual DualSense Daemon' >> "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service" && \
-            echo 'After=bluetooth.service' >> "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service" && \
+            echo 'After=bluetooth.service systemd-udevd.service' >> "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service" && \
             echo 'Requires=bluetooth.service' >> "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service" && \
             echo '[Service]' >> "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service" && \
             echo 'Type=simple' >> "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service" && \
+            echo 'User=root' >> "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service" && \
+            echo 'Group=root' >> "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service" && \
             echo 'ExecStart=/usr/bin/vdsd' >> "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service" && \
             echo 'Restart=always' >> "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service" && \
+            echo 'RestartSec=5' >> "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service" && \
             echo 'DeviceAllow=/dev/uinput rw' >> "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service" && \
-            echo 'SELinuxContext=system_u:system_r:init_t:s0' >> "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service" && \
-            echo 'AmbientCapabilities=CAP_NET_RAW CAP_NET_ADMIN' >> "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service" && \
-            echo 'CapabilityBoundingSet=CAP_NET_RAW CAP_NET_ADMIN' >> "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service" && \
+            echo 'PrivateNetwork=no' >> "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service" && \
+            echo 'SELinuxContext=system_u:system_r:unconfined_t:s0' >> "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service" && \
+            echo 'AmbientCapabilities=CAP_NET_RAW CAP_NET_ADMIN CAP_SYS_ADMIN CAP_SYS_RAWIO' >> "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service" && \
+            echo 'CapabilityBoundingSet=CAP_NET_RAW CAP_NET_ADMIN CAP_SYS_ADMIN CAP_SYS_RAWIO' >> "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service" && \
             echo '[Install]' >> "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service" && \
             echo 'WantedBy=multi-user.target' >> "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service" && \
             echo '[Unit]' > "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.service" && \
@@ -220,7 +227,7 @@ modules:
             echo 'ExecStart=/bin/chmod 777 /var/run/sdp' >> "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.service" && \
             echo 'RemainAfterExit=yes' >> "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.service" && \
             echo '[Install]' >> "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.service" && \
-            echo 'WantedBy=multi-user.target' >> "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.service" && \
+            echo 'WantedBy=multi-user.target' >> "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.path" && \
             echo '[Unit]' > "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.path" && \
             echo 'Description=Watch for BlueZ SDP Socket creation' >> "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.path" && \
             echo '[Path]' >> "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.path" && \
