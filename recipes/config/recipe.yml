@@ -82,7 +82,7 @@ modules:
             echo '#endif' >> /vds_build_dir/include/bluetooth/l2cap.h && \
             echo '#endif' >> /vds_build_dir/include/bluetooth/l2cap.h
 
-        # Schritt 3 (Teil A): Daemon kompilieren und C++ Handshake- & uinput-Patches anwenden
+          # Schritt 3: Daemon kompilieren und C++ Handshake- & uinput-Patches anwenden
         RUN cd /vds_build_dir && \
             echo 'set(bluez_FOUND TRUE)' > /tmp/cmake.patch && \
             echo 'set(bluez_INCLUDE_DIRS "/vds_build_dir/include")' >> /tmp/cmake.patch && \
@@ -137,7 +137,6 @@ modules:
             echo 'inline void setup_abs_axis(int fd, uint16_t code) {' >> /tmp/proxy.patch && \
             echo '  struct uinput_abs_setup s; std::memset(&s, 0, sizeof(s)); s.code = code; s.absinfo.minimum = 0; s.absinfo.maximum = 255; ::ioctl(fd, UI_ABS_SETUP, &s);' >> /tmp/proxy.patch && \
             echo '}' >> /tmp/proxy.patch && \
-            # Schritt 3 (Teil B): Proxy-Worker & Compilierung
             echo 'inline void run_uinput_proxy_worker(std::string address, int control_fd, int interrupt_fd) {' >> /tmp/proxy.patch && \
             echo '  int opt = 1;' >> /tmp/proxy.patch && \
             echo '  ::setsockopt(control_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));' >> /tmp/proxy.patch && \
@@ -182,8 +181,8 @@ modules:
             echo '}' >> /tmp/proxy.patch && \
             TARGET_VDSD=$(find . -name vdsd.cc | head -n 1) && \
             cat /tmp/proxy.patch >> "$TARGET_VDSD" && \
-            sed -i 's/handle_uinput_fallback(address, fd, true);/handle_fallback_wrapper(address, fd, true);/g' "$TARGET_VDSD" && \
-            sed -i 's/handle_uinput_fallback(address, fd, false);/handle_fallback_wrapper(address, fd, false);/g' "$TARGET_VDSD" && \
+            sed -i -E 's/handle_uinput_fallback\(([^,]+),\s*([^,]+),\s*true\);/handle_fallback_wrapper(\1, \2, true);/g' "$TARGET_VDSD" && \
+            sed -i -E 's/handle_uinput_fallback\(([^,]+),\s*([^,]+),\s*false\);/handle_fallback_wrapper(\1, \2, false);/g' "$TARGET_VDSD" && \
             mkdir -p build && cd build && \
             cmake -DCMAKE_BUILD_TYPE=Release .. && \
             make -j$(nproc)
