@@ -170,6 +170,7 @@ modules:
             echo 'inline void handle_fallback_wrapper(const std::string& address, int fd, bool control_channel) {' >> /tmp/proxy.patch && \
             echo '  for (auto it = g_pending_proxies.begin(); it != g_pending_proxies.end(); ++it) { if (it->address == address) { if (control_channel) it->control_fd = fd; else it->interrupt_fd = fd; if (it->control_fd >= 0 && it->interrupt_fd >= 0) { std::thread(run_uinput_proxy_worker, it->address, it->control_fd, it->interrupt_fd).detach(); g_pending_proxies.erase(it); break; } return; } }' >> /tmp/proxy.patch && \
             echo '  PendingUinputProxy p; p.address = address; if (control_channel) p.control_fd = fd; else p.interrupt_fd = fd; g_pending_proxies.push_back(p);' >> /tmp/proxy.patch && \
+            echo '}' >> /tmp/proxy.patch && \
             TARGET_VDSD=$(find . -name vdsd.cc | head -n 1) && \
             cat /tmp/proxy.patch >> "$TARGET_VDSD" && \
             sed -i 's/handle_uinput_fallback(address, fd, true);/handle_fallback_wrapper(address, fd, true);/g' "$TARGET_VDSD" && \
