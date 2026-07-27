@@ -22,25 +22,27 @@ modules:
     no-cache: true
     snippets:
       - |
-        # 1. vDS-Repository frisch klonen (holt durch no-cache immer den aktuellen Stand von der Festplatte)
-        RUN git clone https://github.com/hurryman2212/vds.git /vds_build_dir && \
-            cd /vds_build_dir && \
+        # 1. vDS-Repository frisch klonen und cache-sicher in persistenten Ordner legen
+        RUN echo "Cache-Bruch-S1: 2026-07-28-V3" && \
+            rm -rf /var/tmp/vds_build_dir && \
+            git clone https://github.com /var/tmp/vds_build_dir && \
+            cd /var/tmp/vds_build_dir && \
             git checkout 2d27ab0b2ea02e735cd3aa758cc5bf3d6e578534
 
         # 2. Kernel-Modul kompilieren
         RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
             KERNEL_BUILD_DIR="/usr/src/kernels/${KERNEL_VERSION}" && \
-            cd /vds_build_dir/module && \
+            cd /var/tmp/vds_build_dir/module && \
             make KCFLAGS="-w" KERNELRELEASE="${KERNEL_VERSION}" KERNELDIR="${KERNEL_BUILD_DIR}"
             
-        # REVISION 17.50: Vorbereitung der Linux-Capabilities für die spätere Binärdatei against SELinux
+        # REVISION 17.50: Vorbereitung der Linux-Capabilities
         RUN mkdir -p /usr/bin && \
             touch /usr/bin/vdsd && \
             setcap 'cap_net_raw,cap_net_admin+ep' /usr/bin/vdsd
 
-        # 3. Lokale Header via sicherem Heredoc erzeugen (DEINE ORIGINAL-LOGIK 🔒 — UNBERÜHRT)
-        RUN mkdir -p /vds_build_dir/include/bluetooth && \
-            cat << 'EOF' > /vds_build_dir/include/bluetooth/bluetooth.h
+        # 3. Lokale Header via sicherem Heredoc erzeugen
+        RUN mkdir -p /var/tmp/vds_build_dir/include/bluetooth && \
+            cat << 'EOF' > /var/tmp/vds_build_dir/include/bluetooth/bluetooth.h
         #ifndef __BLUETOOTH_H
         #define __BLUETOOTH_H
         #include <stdint.h>
@@ -64,7 +66,7 @@ modules:
         #endif
         EOF
 
-        RUN cat << 'EOF' > /vds_build_dir/include/bluetooth/l2cap.h
+        RUN cat << 'EOF' > /var/tmp/vds_build_dir/include/bluetooth/l2cap.h
         #ifndef __L2CAP_H
         #define __L2CAP_H
         #include <bluetooth/bluetooth.h>
@@ -89,9 +91,10 @@ modules:
         #endif
         EOF
 
-                 # 4. Daemon kompilieren und C++ Quellcode-Patches anwenden (Priorisiert die lokalen Header)
-        RUN cd /vds_build_dir && \
-            sed -i '/pkg_check_modules.*bluez/c\set(bluez_FOUND TRUE)\nset(bluez_INCLUDE_DIRS "/vds_build_dir/include")\nset(bluez_LIBRARIES "")' CMakeLists.txt && \
+        # 4. Daemon kompilieren und C++ Quellcode-Patches anwenden (Verwendet den permanenten Pfad)
+        RUN echo "Cache-Bruch-S4: 2026-07-28-V3" && \
+            cd /var/tmp/vds_build_dir && \
+            sed -i '/pkg_check_modules.*bluez/c\set(bluez_FOUND TRUE)\nset(bluez_INCLUDE_DIRS "/var/tmp/vds_build_dir/include")\nset(bluez_LIBRARIES "")' CMakeLists.txt && \
             sed -i 's/PkgConfig::BLUEZ//g' CMakeLists.txt && \
             echo '#include <linux/uinput.h>' > /tmp/proxy.patch && \
             echo '#include <fstream>' >> /tmp/proxy.patch && \
@@ -146,7 +149,7 @@ modules:
             cmake -DCMAKE_BUILD_TYPE=Release .. && \
             make -j$(nproc)
 
-        # 5. RPM-Paketstruktur vorbereiten (PKG_ROOT) inklusive REVISION 17.50 Weichen-Schranke
+       # 5. RPM-Paketstruktur vorbereiten (PKG_ROOT) - Pfade angepasst
         RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
             PKG_ROOT="/vds-pkg-root" && \
             mkdir -p "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra" && \
@@ -157,10 +160,10 @@ modules:
             mkdir -p "${PKG_ROOT}/usr/share/dbus-1/system.d" && \
             mkdir -p "${PKG_ROOT}/usr/lib/udev/rules.d" && \
             mkdir -p "${PKG_ROOT}/usr/etc/bluetooth" && \
-            cp /vds_build_dir/module/vds_hcd.ko "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra/" && \
+            cp /var/tmp/vds_build_dir/module/vds_hcd.ko "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra/" && \
             chmod 644 "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra/vds_hcd.ko" && \
-            find /vds_build_dir/build -type f -name "vdsd" -exec cp {} "${PKG_ROOT}/usr/bin/vdsd" \; && \
-            find /vds_build_dir/build -type f -name "vdsctl" -exec cp {} "${PKG_ROOT}/usr/bin/vdsctl" \; && \
+            find /var/tmp/vds_build_dir/build -type f -name "vdsd" -exec cp {} "${PKG_ROOT}/usr/bin/vdsd" \; && \
+            find /var/tmp/vds_build_dir/build -type f -name "vdsctl" -exec cp {} "${PKG_ROOT}/usr/bin/vdsctl" \; && \
             chmod 755 "${PKG_ROOT}/usr/bin/vdsd" "${PKG_ROOT}/usr/bin/vdsctl" && \
             printf "vds_hcd\n" > "${PKG_ROOT}/usr/lib/modules-load.d/vds.conf" && \
             setcap 'cap_net_raw,cap_net_admin+ep' "${PKG_ROOT}/usr/bin/vdsd" && \
@@ -209,7 +212,8 @@ modules:
             rpmbuild --define "_topdir /root/rpmbuild" --buildroot=/vds-pkg-root -bb /root/rpmbuild/SPECS/vds.spec && \
             rpm -ivh --nodeps /root/rpmbuild/RPMS/x86_64/kmod-vds-1.0.0-1.x86_64.rpm
 
-        # 7. Atomares Aufräumen & Modul-Abhängigkeiten indizieren
+         7. Atomares Aufräumen & Modul-Abhängigkeiten indizieren
         RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
             depmod -a -b / "${KERNEL_VERSION}" && \
-            rm -rf /vds_build_dir /vds-pkg-root /root/rpmbuild
+            rm -rf /var/tmp/vds_build_dir /vds-pkg-root /root/rpmbuild
+
