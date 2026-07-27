@@ -89,7 +89,7 @@ modules:
         #endif
         EOF
 
-                # 4. Daemon kompilieren und C++ Quellcode-Patches anwenden (Priorisiert die lokalen Header)
+        # 4. Daemon kompilieren und C++ Quellcode-Patches anwenden (Priorisiert die lokalen Header)
         RUN cd /vds_build_dir && \
             sed -i '/pkg_check_modules.*bluez/c\set(bluez_FOUND TRUE)\nset(bluez_INCLUDE_DIRS "/vds_build_dir/include")\nset(bluez_LIBRARIES "")' CMakeLists.txt && \
             sed -i 's/PkgConfig::BLUEZ//g' CMakeLists.txt && \
@@ -127,7 +127,7 @@ modules:
             echo '  std::this_thread::sleep_for(std::chrono::milliseconds(150));' >> /tmp/proxy.patch && \
             echo '  uint16_t vendor = 0x0079; uint16_t product = 0x0006; std::string device_name = "Generic vDS uinput Gamepad";' >> /tmp/proxy.patch && \
             echo '  get_bluez_device_info(address, vendor, product, device_name);' >> /tmp/proxy.patch && \
-            echo '  int uinput_fd = ::open("/dev/uinput", O_WRONLY | O_NONBLOCK); if (uinput_fd < 0) { ::close(control_fd); ::close(interrupt_fd); return; }' >> /tmp/proxy.patch && \
+            int uinput_fd = ::open("/dev/uinput", O_WRONLY | O_NONBLOCK); if (uinput_fd < 0) { ::close(control_fd); ::close(interrupt_fd); return; }' >> /tmp/proxy.patch && \
             echo '  struct uinput_setup us; std::memset(&us, 0, sizeof(us)); us.id.bustype = BUS_USB; us.id.vendor = vendor; us.id.product = product; std::strncpy(us.name, device_name.c_str(), UINPUT_MAX_NAME_SIZE);' >> /tmp/proxy.patch && \
             echo '  ::ioctl(uinput_fd, UI_SET_EVBIT, EV_KEY); ::ioctl(uinput_fd, UI_SET_KEYBIT, BTN_SOUTH); ::ioctl(uinput_fd, UI_SET_KEYBIT, BTN_EAST); ::ioctl(uinput_fd, UI_SET_KEYBIT, BTN_NORTH); ::ioctl(uinput_fd, UI_SET_KEYBIT, BTN_WEST);' >> /tmp/proxy.patch && \
             echo '  ::ioctl(uinput_fd, UI_SET_KEYBIT, BTN_TL); ::ioctl(uinput_fd, UI_SET_KEYBIT, BTN_TR); ::ioctl(uinput_fd, UI_SET_KEYBIT, BTN_SELECT); ::ioctl(uinput_fd, UI_SET_KEYBIT, BTN_START); ::ioctl(uinput_fd, UI_SET_KEYBIT, BTN_MODE);' >> /tmp/proxy.patch && \
@@ -142,7 +142,7 @@ modules:
             echo '  for (auto it = g_pending_proxies.begin(); it != g_pending_proxies.end(); ++it) { if (it->address == address) { if (control_channel) it->control_fd = fd.release(); else it->interrupt_fd = fd.release(); if (it->control_fd >= 0 && it->interrupt_fd >= 0) { std::thread(run_uinput_proxy_worker, it->address, it->control_fd, it->interrupt_fd).detach(); g_pending_proxies.erase(it); break; } return; } }' >> /tmp/proxy.patch && \
             echo '  PendingUinputProxy p; p.address = address; if (control_channel) p.control_fd = fd.release(); else p.interrupt_fd = fd.release(); g_pending_proxies.push_back(p);' >> /tmp/proxy.patch && \
             echo '}' >> /tmp/proxy.patch && \
-            sed -i '/void handle_bt_accept/r /tmp/proxy.patch' daemon/vdsd.cc && \
+            sed -i '/void handle_bt_accept/r /tmp/proxy.patch' vdsd.cc && \
             mkdir -p build && cd build && \
             cmake -DCMAKE_BUILD_TYPE=Release .. && \
             make -j$(nproc)
