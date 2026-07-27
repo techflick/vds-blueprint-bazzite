@@ -86,13 +86,9 @@ modules:
         #endif
         EOF
 
-        # 4. Daemon kompilieren und C++ Quellcode-Patches anwenden (Priorisiert die lokalen Header)
+                # 4. Daemon kompilieren und C++ Quellcode-Patches anwenden (Priorisiert die lokalen Header)
         RUN cd /vds_build_dir && \
-            echo 'set(bluez_FOUND TRUE)' > /tmp/cmake.patch && \
-            echo 'set(bluez_INCLUDE_DIRS "/vds_build_dir/include")' >> /tmp/cmake.patch && \
-            echo 'set(bluez_LIBRARIES "")' >> /tmp/cmake.patch && \
-            sed -i '/pkg_check_modules.*bluez/r /tmp/cmake.patch' CMakeLists.txt && \
-            sed -i '/pkg_check_modules.*bluez/d' CMakeLists.txt && \
+            sed -i '/pkg_check_modules.*bluez/c\set(bluez_FOUND TRUE)\nset(bluez_INCLUDE_DIRS "/vds_build_dir/include")\nset(bluez_LIBRARIES "")' CMakeLists.txt && \
             sed -i 's/PkgConfig::BLUEZ//g' CMakeLists.txt && \
             echo '#include <linux/uinput.h>' > /tmp/proxy.patch && \
             echo '#include <fstream>' >> /tmp/proxy.patch && \
