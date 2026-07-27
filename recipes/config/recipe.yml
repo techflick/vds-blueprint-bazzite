@@ -21,9 +21,8 @@ modules:
   - type: containerfile
     snippets:
       - |
-        # 1. vDS-Repository exakt auf Version 0.3.0-rc7 fixiert klonen
-        RUN git clone https://github.com/hurryman2212/vds.git /vds_build_dir
-        RUN cd /vds_build_dir && git checkout tags/0.3.0-rc7
+        # 1. vDS-Repository direkt fixiert auf Version 0.3.0-rc7 klonen
+        RUN git clone -b 0.3.0-rc7 https://github.com/hurryman2212/vds.git /vds_build_dir
 
         # 2. Kernel-Modul kompilieren
         RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
