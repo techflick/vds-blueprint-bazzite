@@ -21,12 +21,9 @@ modules:
   - type: containerfile
     snippets:
       - |
-        # 1. vDS-Repository bereitstellen und Struktur prüfen
-        RUN curl -L -o /tmp/vds.tar.gz "https://github.com/hurryman2212/vds/archive/refs/tags/0.3.0-rc7.tar.gz"
-        RUN mkdir -p /vds_build_dir
-        RUN tar -xzf /tmp/vds.tar.gz -C /vds_build_dir --strip-components=1
-        RUN ls -R /vds_build_dir
-        RUN rm /tmp/vds.tar.gz
+        # 1. vDS-Repository exakt auf Version 0.3.0-rc7 fixiert klonen
+        RUN git clone https://github.com/hurryman2212/vds.git /vds_build_dir
+        RUN cd /vds_build_dir && git checkout tags/0.3.0-rc7
 
         # 2. Kernel-Modul kompilieren
         RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
