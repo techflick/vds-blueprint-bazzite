@@ -24,8 +24,8 @@ modules:
         # 1. vDS-Repository direkt fixiert auf Version 0.3.0-rc7 klonen
         RUN git clone https://github.com/hurryman2212/vds.git /vds_build_dir && \
             cd /vds_build_dir && \
-            git reset --hard 2d27ab0b2ea02e735cd3aa758cc5bf3d6e578534 && \
-            git clean -fdx
+            git checkout 2d27ab0b2ea02e735cd3aa758cc5bf3d6e578534 && \
+            echo "Build-ID: ${GITHUB_RUN_ID}" > /dev/null
 
         # 2. Kernel-Modul kompilieren
         RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
