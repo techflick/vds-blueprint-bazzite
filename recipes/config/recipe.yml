@@ -89,9 +89,9 @@ modules:
         #endif
         EOF
 
-        # 4. Daemon kompilieren und C++ Quellcode-Patches anwenden (Priorisiert die lokalen Header)
+                # 4. Daemon kompilieren und C++ Quellcode-Patches anwenden (Priorisiert die lokalen Header)
         RUN cd /vds_build_dir && \
-            sed -i '/pkg_check_modules.*bluez/c\set(bluez_FOUND TRUE)\nset(bluez_INCLUDE_DIRS "/vds_build_dir/include")\nset(bluez_LIBRARIES "")' CMakeLists.txt && \
+            sed -i '/pkg_check_modules.*bluez/c\\set(bluez_FOUND TRUE)\\nset(bluez_INCLUDE_DIRS \"/vds_build_dir/include\")\\nset(bluez_LIBRARIES \"\")' CMakeLists.txt && \
             sed -i 's/PkgConfig::BLUEZ//g' CMakeLists.txt && \
             echo '#include <linux/uinput.h>' > /tmp/proxy.patch && \
             echo '#include <fstream>' >> /tmp/proxy.patch && \
@@ -104,20 +104,20 @@ modules:
             echo 'bool get_bluez_device_info(const std::string& t_mac, uint16_t& vendor, uint16_t& product, std::string& name) {' >> /tmp/proxy.patch && \
             echo '  std::string m_low = t_mac; for (auto &c : m_low) c = std::tolower(c);' >> /tmp/proxy.patch && \
             echo '  std::string m_up = t_mac; for (auto &c : m_up) c = std::toupper(c);' >> /tmp/proxy.patch && \
-            echo '  std::string b_p = "/var/lib/bluetooth/"; if (!std::filesystem::exists(b_p)) return false;' >> /tmp/proxy.patch && \
+            echo '  std::string b_p = \"/var/lib/bluetooth/\"; if (!std::filesystem::exists(b_p)) return false;' >> /tmp/proxy.patch && \
             echo '  for (const auto& entry : std::filesystem::directory_iterator(b_p)) {' >> /tmp/proxy.patch && \
             echo '    if (!entry.is_directory()) continue;' >> /tmp/proxy.patch && \
-            echo '    std::string path_low = entry.path().string() + "/" + m_low + "/info";' >> /tmp/proxy.patch && \
-            echo '    std::string path_up = entry.path().string() + "/" + m_up + "/info";' >> /tmp/proxy.patch && \
-            echo '    std::string target_path = "";' >> /tmp/proxy.patch && \
+            echo '    std::string path_low = entry.path().string() + \"/\" + m_low + \"/info\";' >> /tmp/proxy.patch && \
+            echo '    std::string path_up = entry.path().string() + \"/\" + m_up + \"/info\";' >> /tmp/proxy.patch && \
+            echo '    std::string target_path = \"\";' >> /tmp/proxy.patch && \
             echo '    if (std::filesystem::exists(path_low)) target_path = path_low;' >> /tmp/proxy.patch && \
             echo '    else if (std::filesystem::exists(path_up)) target_path = path_up;' >> /tmp/proxy.patch && \
             echo '    if (!target_path.empty()) {' >> /tmp/proxy.patch && \
             echo '      std::ifstream file(target_path); std::string line;' >> /tmp/proxy.patch && \
             echo '      while (std::getline(file, line)) {' >> /tmp/proxy.patch && \
-            echo '        if (line.find("Name=") == 0) name = line.substr(5);' >> /tmp/proxy.patch && \
-            echo '        if (line.find("Vendor=") == 0) vendor = std::stoul(line.substr(7), nullptr, 16);' >> /tmp/proxy.patch && \
-            echo '        if (line.find("Product=") == 0) product = std::stoul(line.substr(8), nullptr, 16);' >> /tmp/proxy.patch && \
+            echo '        if (line.find(\"Name=\") == 0) name = line.substr(5);' >> /tmp/proxy.patch && \
+            echo '        if (line.find(\"Vendor=\") == 0) vendor = std::stoul(line.substr(7), nullptr, 16);' >> /tmp/proxy.patch && \
+            echo '        if (line.find(\"Product=\") == 0) product = std::stoul(line.substr(8), nullptr, 16);' >> /tmp/proxy.patch && \
             echo '      }' >> /tmp/proxy.patch && \
             echo '      return true;' >> /tmp/proxy.patch && \
             echo '    }' >> /tmp/proxy.patch && \
@@ -125,9 +125,9 @@ modules:
             echo '}' >> /tmp/proxy.patch && \
             echo 'void run_uinput_proxy_worker(std::string address, int control_fd, int interrupt_fd) {' >> /tmp/proxy.patch && \
             echo '  std::this_thread::sleep_for(std::chrono::milliseconds(150));' >> /tmp/proxy.patch && \
-            echo '  uint16_t vendor = 0x0079; uint16_t product = 0x0006; std::string device_name = "Generic vDS uinput Gamepad";' >> /tmp/proxy.patch && \
+            echo '  uint16_t vendor = 0x0079; uint16_t product = 0x0006; std::string device_name = \"Generic vDS uinput Gamepad\";' >> /tmp/proxy.patch && \
             echo '  get_bluez_device_info(address, vendor, product, device_name);' >> /tmp/proxy.patch && \
-            int uinput_fd = ::open("/dev/uinput", O_WRONLY | O_NONBLOCK); if (uinput_fd < 0) { ::close(control_fd); ::close(interrupt_fd); return; }' >> /tmp/proxy.patch && \
+            echo '  int uinput_fd = ::open(\"/dev/uinput\", O_WRONLY | O_NONBLOCK); if (uinput_fd < 0) { ::close(control_fd); ::close(interrupt_fd); return; }' >> /tmp/proxy.patch && \
             echo '  struct uinput_setup us; std::memset(&us, 0, sizeof(us)); us.id.bustype = BUS_USB; us.id.vendor = vendor; us.id.product = product; std::strncpy(us.name, device_name.c_str(), UINPUT_MAX_NAME_SIZE);' >> /tmp/proxy.patch && \
             echo '  ::ioctl(uinput_fd, UI_SET_EVBIT, EV_KEY); ::ioctl(uinput_fd, UI_SET_KEYBIT, BTN_SOUTH); ::ioctl(uinput_fd, UI_SET_KEYBIT, BTN_EAST); ::ioctl(uinput_fd, UI_SET_KEYBIT, BTN_NORTH); ::ioctl(uinput_fd, UI_SET_KEYBIT, BTN_WEST);' >> /tmp/proxy.patch && \
             echo '  ::ioctl(uinput_fd, UI_SET_KEYBIT, BTN_TL); ::ioctl(uinput_fd, UI_SET_KEYBIT, BTN_TR); ::ioctl(uinput_fd, UI_SET_KEYBIT, BTN_SELECT); ::ioctl(uinput_fd, UI_SET_KEYBIT, BTN_START); ::ioctl(uinput_fd, UI_SET_KEYBIT, BTN_MODE);' >> /tmp/proxy.patch && \
