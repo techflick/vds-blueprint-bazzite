@@ -21,10 +21,10 @@ modules:
   - type: containerfile
     snippets:
       - |
-        # 1. vDS-Repository exakt auf den Zustand vom erfolgreichen Build (22.07.2026, 18:00 Uhr lokale Ortszeit) fixieren
+        ## 1. vDS-Repository frisch klonen und exakt auf den Commit direkt VOR Version 0.4.0-rc1 setzen
         RUN git clone https://github.com/hurryman2212/vds.git /vds_build_dir && \
             cd /vds_build_dir && \
-            git checkout $(git rev-list -n 1 --before="2026-07-22 16:00:00" main)
+            git checkout 0.4.0-rc1~1
 
 
         # 2. Kernel-Modul kompilieren
