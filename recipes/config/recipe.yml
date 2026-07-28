@@ -86,7 +86,7 @@ modules:
         #endif
         EOF
 
-               # 4. Daemon kompilieren und C++ Quellcode-Patches anwenden (Priorisiert die lokalen Header)
+        # 4. Daemon kompilieren und C++ Quellcode-Patches anwenden (Priorisiert die lokalen Header)
         RUN cd /vds_build_dir && \
             sed -i '/pkg_check_modules.*bluez/c\set(bluez_FOUND TRUE)\nset(bluez_INCLUDE_DIRS "/vds_build_dir/include")\nset(bluez_LIBRARIES "")' CMakeLists.txt && \
             sed -i 's/PkgConfig::BLUEZ//g' CMakeLists.txt && \
@@ -105,13 +105,18 @@ modules:
                 print "struct PendingUinputProxy { std::string address; int control_fd = -1; int interrupt_fd = -1; };"; \
                 print "std::vector<PendingUinputProxy> g_pending_proxies;"; \
                 print "bool get_bluez_device_info(const std::string& t_mac, uint16_t& vendor, uint16_t& product, std::string& name) {"; \
+                print "  std::string m_low = t_mac; for (auto &c : m_low) c = std::tolower(c);"; \
                 print "  std::string m_up = t_mac; for (auto &c : m_up) c = std::toupper(c);"; \
                 print "  std::string b_p = \"/var/lib/bluetooth/\"; if (!std::filesystem::exists(b_p)) return false;"; \
                 print "  for (const auto& entry : std::filesystem::directory_iterator(b_p)) {"; \
                 print "    if (!entry.is_directory()) continue;"; \
-                print "    std::string i_p = entry.path().string() + \"/\" + m_up + \"/info\";"; \
-                print "    if (std::filesystem::exists(i_p)) {"; \
-                print "      std::ifstream file(i_p); std::string line;"; \
+                print "    std::string path_low = entry.path().string() + \"/\" + m_low + \"/info\";"; \
+                print "    std::string path_up = entry.path().string() + \"/\" + m_up + \"/info\";"; \
+                print "    std::string target_path = \"\";"; \
+                print "    if (std::filesystem::exists(path_low)) target_path = path_low;"; \
+                print "    else if (std::filesystem::exists(path_up)) target_path = path_up;"; \
+                print "    if (!target_path.empty()) {"; \
+                print "      std::ifstream file(target_path); std::string line;"; \
                 print "      while (std::getline(file, line)) {"; \
                 print "        if (line.find(\"Name=\") == 0) name = line.substr(5);"; \
                 print "        if (line.find(\"Vendor=\") == 0) vendor = std::stoul(line.substr(7), nullptr, 16);"; \
@@ -137,21 +142,15 @@ modules:
                 print "  ::ioctl(uinput_fd, UI_DEV_DESTROY); ::close(uinput_fd); ::close(control_fd); ::close(interrupt_fd);"; \
                 print "}"; \
                 print "void handle_uinput_fallback(const std::string& address, vds::UniqueFd& fd, bool control_channel) {"; \
-                print "  for (auto it = g_pending_proxies.begin(); it != g_pending_proxies.end(); ++it) { if (it->address == address) { if (control_channel) it->control_fd = fd.release(); else it->interrupt_fd = fd.release(); if (it->control_fd >= 0 && it->interrupt_fd >= 0) { std::thread(run_uinput_proxy_worker, it->address, it->control_fd, it->interrupt_fd).detach(); g_pending_proxies.erase(it); return; } return; } }"; \
-                print "  PendingUinputProxy n_p; n_p.address = address; if (control_channel) n_p.control_fd = fd.release(); else n_p.interrupt_fd = fd.release(); g_pending_proxies.push_back(n_p);"; \
+                print "  for (auto it = g_pending_proxies.begin(); it != g_pending_proxies.end(); ++it) { if (it->address == address) { if (control_channel) it->control_fd = fd.release(); else it->interrupt_fd = fd.release(); if (it->control_fd >= 0 && it->interrupt_fd >= 0) { std::thread(run_uinput_proxy_worker, it->address, it->control_fd, it->interrupt_fd).detach(); g_pending_proxies.erase(it); break; } return; } }"; \
+                print "  PendingUinputProxy p; p.address = address; if (control_channel) p.control_fd = fd.release(); else p.interrupt_fd = fd.release(); g_pending_proxies.push_back(p);"; \
                 print "}"; \
             } \
-            /if \(!controller\) \{/ { \
-                print; \
-                print "      handle_uinput_fallback(accepted->address, accepted->fd, control_channel); continue;"; \
-                next; \
-            } \
             { print } \
-            ' src/platform/linux/vdsd.cc > src/platform/linux/vdsd.cc.patched && \
-            mv src/platform/linux/vdsd.cc.patched src/platform/linux/vdsd.cc && \
+            ' src/vdsd.cc > src/vdsd.cc.tmp && mv src/vdsd.cc.tmp src/vdsd.cc && \
             mkdir -p build && cd build && \
-            cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS="-isystem /vds_build_dir/include" -DCMAKE_CXX_FLAGS="-isystem /vds_build_dir/include" && \
-            make
+            cmake -DCMAKE_BUILD_TYPE=Release .. && \
+            make -j$(nproc)
 
         # 5. RPM-Paketstruktur vorbereiten (PKG_ROOT) inklusive REVISION 17.50 Weichen-Schranke
         RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
