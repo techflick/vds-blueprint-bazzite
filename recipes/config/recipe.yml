@@ -88,9 +88,10 @@ modules:
         #endif
         EOF
 
-                # 4. Daemon kompilieren und C++ Quellcode-Patches anwenden (Pfad korrigiert auf vdsd.cc)
+               # 4. Daemon kompilieren und C++ Quellcode-Patches anwenden (Priorisiert die lokalen Header)
+        RUN cd /vds_build_dir && mkdir -p daemon && cp vdsd.cc daemon/vdsd.cc 2>/dev/null || true
         RUN cd /vds_build_dir && \
-            sed -i "s|pkg_check_modules.*bluez|set(bluez_FOUND TRUE)\nset(bluez_INCLUDE_DIRS \"/vds_build_dir/include\")\nset(bluez_LIBRARIES \"\")|g" CMakeLists.txt && \
+            sed -i '/pkg_check_modules.*bluez/c\set(bluez_FOUND TRUE)\nset(bluez_INCLUDE_DIRS "/vds_build_dir/include")\nset(bluez_LIBRARIES "")' CMakeLists.txt && \
             sed -i 's/PkgConfig::BLUEZ//g' CMakeLists.txt && \
             echo '#include <linux/uinput.h>' > /tmp/proxy.patch && \
             echo '#include <fstream>' >> /tmp/proxy.patch && \
@@ -117,7 +118,7 @@ modules:
             echo '        if (line.find("Name=") == 0) name = line.substr(5);' >> /tmp/proxy.patch && \
             echo '        if (line.find("Vendor=") == 0) vendor = std::stoul(line.substr(7), nullptr, 16);' >> /tmp/proxy.patch && \
             echo '        if (line.find("Product=") == 0) product = std::stoul(line.substr(8), nullptr, 16);' >> /tmp/proxy.patch && \
-            echo '      }' >> /tmp/proxy.patch && \
+            } >> /tmp/proxy.patch && \
             echo '      return true;' >> /tmp/proxy.patch && \
             echo '    }' >> /tmp/proxy.patch && \
             echo '  } return false;' >> /tmp/proxy.patch && \
@@ -140,7 +141,7 @@ modules:
             echo 'void handle_uinput_fallback(const std::string& address, vds::UniqueFd& fd, bool control_channel) {' >> /tmp/proxy.patch && \
             echo '  for (auto it = g_pending_proxies.begin(); it != g_pending_proxies.end(); ++it) { if (it->address == address) { if (control_channel) it->control_fd = fd.release(); else it->interrupt_fd = fd.release(); if (it->control_fd >= 0 && it->interrupt_fd >= 0) { std::thread(run_uinput_proxy_worker, it->address, it->control_fd, it->interrupt_fd).detach(); g_pending_proxies.erase(it); break; } return; } }' >> /tmp/proxy.patch && \
             echo '  PendingUinputProxy p; p.address = address; if (control_channel) p.control_fd = fd.release(); else p.interrupt_fd = fd.release(); g_pending_proxies.push_back(p);' >> /tmp/proxy.patch && \
-            sed -i '/void handle_bt_accept/r /tmp/proxy.patch' vdsd.cc && \
+            sed -i '/void handle_bt_accept/r /tmp/proxy.patch' daemon/vdsd.cc && \
             mkdir -p build && cd build && \
             cmake -DCMAKE_BUILD_TYPE=Release .. && \
             make -j$(nproc)
