@@ -22,7 +22,7 @@ modules:
     snippets:
       - |
         # 1. vDS-Repository frisch klonen und exakt auf Version 0.3.0-rc7 einfrieren
-        RUN git clone https://github.com /vds_build_dir && \
+        RUN git clone https://github.com/hurryman2212/vds.git /vds_build_dir && \
             cd /vds_build_dir && \
             git checkout 2d27ab0b2ea02e735cd3aa758cc5bf3d6e578534
 
