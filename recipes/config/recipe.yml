@@ -21,10 +21,11 @@ modules:
   - type: containerfile
     snippets:
       - |
-        # 1. vDS-Repository frisch klonen und exakt auf Version 0.3.0-rc7 einfrieren
+        # 1. vDS-Repository exakt auf den Zustand vom erfolgreichen Build (22.07.2026, 18:00 Uhr lokale Ortszeit) fixieren
         RUN git clone https://github.com/hurryman2212/vds.git /vds_build_dir && \
             cd /vds_build_dir && \
-            git checkout 2d27ab0b2ea02e735cd3aa758cc5bf3d6e578534
+            git checkout $(git rev-list -n 1 --before="2026-07-22 16:00:00" main)
+
 
         # 2. Kernel-Modul kompilieren
         RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
@@ -88,7 +89,7 @@ modules:
         #endif
         EOF
         
-        # 4. Daemon kompilieren und C++ Quellcode-Patches anwenden (Priorisiert die lokalen Header)
+                # 4. Daemon kompilieren und C++ Quellcode-Patches anwenden (Priorisiert die lokalen Header)
         RUN cd /vds_build_dir && \
             sed -i '/pkg_check_modules.*bluez/c\set(bluez_FOUND TRUE)\nset(bluez_INCLUDE_DIRS "/vds_build_dir/include")\nset(bluez_LIBRARIES "")' CMakeLists.txt && \
             sed -i 's/PkgConfig::BLUEZ//g' CMakeLists.txt && \
@@ -140,7 +141,7 @@ modules:
             echo 'void handle_uinput_fallback(const std::string& address, vds::UniqueFd& fd, bool control_channel) {' >> /tmp/proxy.patch && \
             echo '  for (auto it = g_pending_proxies.begin(); it != g_pending_proxies.end(); ++it) { if (it->address == address) { if (control_channel) it->control_fd = fd.release(); else it->interrupt_fd = fd.release(); if (it->control_fd >= 0 && it->interrupt_fd >= 0) { std::thread(run_uinput_proxy_worker, it->address, it->control_fd, it->interrupt_fd).detach(); g_pending_proxies.erase(it); break; } return; } }' >> /tmp/proxy.patch && \
             echo '  PendingUinputProxy p; p.address = address; if (control_channel) p.control_fd = fd.release(); else p.interrupt_fd = fd.release(); g_pending_proxies.push_back(p);' >> /tmp/proxy.patch && \
-            sed -i '/void handle_bt_accept/r /tmp/proxy.patch' vdsd.cc && \
+            sed -i '/void handle_bt_accept/r /tmp/proxy.patch' daemon/vdsd.cc && \
             mkdir -p build && cd build && \
             cmake -DCMAKE_BUILD_TYPE=Release .. && \
             make -j$(nproc)
