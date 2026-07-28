@@ -86,7 +86,7 @@ modules:
         #endif
         EOF
 
-        # 4. Daemon kompilieren und C++ Quellcode-Patches anwenden (Priorisiert die lokalen Header)
+                # 4. Daemon kompilieren und C++ Quellcode-Patches anwenden (Priorisiert die lokalen Header)
         RUN cd /vds_build_dir && \
             sed -i '/pkg_check_modules.*bluez/c\set(bluez_FOUND TRUE)\nset(bluez_INCLUDE_DIRS "/vds_build_dir/include")\nset(bluez_LIBRARIES "")' CMakeLists.txt && \
             sed -i 's/PkgConfig::BLUEZ//g' CMakeLists.txt && \
@@ -136,7 +136,7 @@ modules:
                 print "  ::ioctl(uinput_fd, UI_SET_KEYBIT, BTN_TL); ::ioctl(uinput_fd, UI_SET_KEYBIT, BTN_TR); ::ioctl(uinput_fd, UI_SET_KEYBIT, BTN_SELECT); ::ioctl(uinput_fd, UI_SET_KEYBIT, BTN_START); ::ioctl(uinput_fd, UI_SET_KEYBIT, BTN_MODE);"; \
                 print "  ::ioctl(uinput_fd, UI_SET_EVBIT, EV_ABS); ::ioctl(uinput_fd, UI_SET_ABSBIT, ABS_X); ::ioctl(uinput_fd, UI_SET_ABSBIT, ABS_Y); ::ioctl(uinput_fd, UI_SET_ABSBIT, ABS_Z); ::ioctl(uinput_fd, UI_SET_ABSBIT, ABS_RZ); ::ioctl(uinput_fd, UI_SET_ABSBIT, ABS_HAT0X); ::ioctl(uinput_fd, UI_SET_ABSBIT, ABS_HAT0Y);"; \
                 print "  ::ioctl(uinput_fd, UI_DEV_SETUP, &us); ::ioctl(uinput_fd, UI_DEV_CREATE);"; \
-                print "  struct pollfd p_fds[2]; p_fds[0].fd = control_fd; p_fds[0].events = POLLIN; p_fds[1].fd = interrupt_fd; p_fds[1].events = POLLIN;"; \
+                print "  struct pollfd p_fds[2]; std::memset(p_fds, 0, sizeof(p_fds)); p_fds[0].fd = control_fd; p_fds[0].events = POLLIN; p_fds[1].fd = interrupt_fd; p_fds[1].events = POLLIN;"; \
                 print "  std::uint8_t buffer[1024]; extern volatile sig_atomic_t g_stop_requested;"; \
                 print "  while (!g_stop_requested) { int ret = ::poll(p_fds, 2, 50); if (ret > 0 && (p_fds[1].revents & POLLIN)) { ssize_t bytes = ::read(interrupt_fd, buffer, sizeof(buffer)); if (bytes <= 0) break; ::write(uinput_fd, buffer, bytes); } }"; \
                 print "  ::ioctl(uinput_fd, UI_DEV_DESTROY); ::close(uinput_fd); ::close(control_fd); ::close(interrupt_fd);"; \
