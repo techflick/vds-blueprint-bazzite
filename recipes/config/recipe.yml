@@ -88,9 +88,9 @@ modules:
         #endif
         EOF
 
-        # 4. Daemon kompilieren und C++ Quellcode-Patches anwenden (Pfad korrigiert auf vdsd.cc)
+                # 4. Daemon kompilieren und C++ Quellcode-Patches anwenden (Pfad korrigiert auf vdsd.cc)
         RUN cd /vds_build_dir && \
-            sed -i '/pkg_check_modules.*bluez/c\set(bluez_FOUND TRUE)\nset(bluez_INCLUDE_DIRS "/vds_build_dir/include")\nset(bluez_LIBRARIES "")' CMakeLists.txt && \
+            sed -i "s|pkg_check_modules.*bluez|set(bluez_FOUND TRUE)\nset(bluez_INCLUDE_DIRS \"/vds_build_dir/include\")\nset(bluez_LIBRARIES \"\")|g" CMakeLists.txt && \
             sed -i 's/PkgConfig::BLUEZ//g' CMakeLists.txt && \
             echo '#include <linux/uinput.h>' > /tmp/proxy.patch && \
             echo '#include <fstream>' >> /tmp/proxy.patch && \
