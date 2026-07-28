@@ -35,6 +35,18 @@ modules:
             touch /usr/bin/vdsd && \
             setcap 'cap_net_raw,cap_net_admin+ep' /usr/bin/vdsd
 
+        # 2.5 HÄRTUNG DER BLUETOOTH-TIMEOUTS (Behebt den Unraid VM / Kernel 7.1 Disconnect-Bug)
+        RUN mkdir -p /etc/bluetooth && \
+            echo '[General]' > /etc/bluetooth/main.conf && \
+            echo 'Name = Bazzite-vDS-Host' >> /etc/bluetooth/main.conf && \
+            echo 'Class = 0x000100' >> /etc/bluetooth/main.conf && \
+            echo '[LE]' >> /etc/bluetooth/main.conf && \
+            echo 'MinConnectionInterval=7' >> /etc/bluetooth/main.conf && \
+            echo 'MaxConnectionInterval=9' >> /etc/bluetooth/main.conf && \
+            echo 'ConnectionLatency=0' >> /etc/bluetooth/main.conf && \
+            echo 'SupervisionTimeout=300' >> /etc/bluetooth/main.conf
+
+
         # 3. Lokale Header via sicherem Heredoc erzeugen (DEINE ORIGINAL-LOGIK 🔒 — UNBERÜHRT)
         RUN mkdir -p /vds_build_dir/include/bluetooth && \
             cat << 'EOF' > /vds_build_dir/include/bluetooth/bluetooth.h
@@ -60,7 +72,7 @@ modules:
         }
         #endif
         EOF
-
+ 
         RUN cat << 'EOF' > /vds_build_dir/include/bluetooth/l2cap.h
         #ifndef __L2CAP_H
         #define __L2CAP_H
@@ -85,7 +97,7 @@ modules:
         #endif
         #endif
         EOF
-        
+
         # 4. Daemon kompilieren und C++ Quellcode-Patches anwenden (Priorisiert die lokalen Header)
         RUN cd /vds_build_dir && \
             echo 'set(bluez_FOUND TRUE)' > /tmp/cmake.patch && \
@@ -100,6 +112,13 @@ modules:
             echo '#include <cctype>' >> /tmp/proxy.patch && \
             echo '#include <thread>' >> /tmp/proxy.patch && \
             echo '#include <chrono>' >> /tmp/proxy.patch && \
+            echo '#include <fcntl.h>' >> /tmp/proxy.patch && \
+            echo '#include <unistd.h>' >> /tmp/proxy.patch && \
+            echo '#include <sys/poll.h>' >> /tmp/proxy.patch && \
+            echo '#include <sys/ioctl.h>' >> /tmp/proxy.patch && \
+            echo '#include <cstring>' >> /tmp/proxy.patch && \
+            echo '#include <vector>' >> /tmp/proxy.patch && \
+            echo '#include <csignal>' >> /tmp/proxy.patch && \
             echo 'struct PendingUinputProxy { std::string address; int control_fd = -1; int interrupt_fd = -1; };' >> /tmp/proxy.patch && \
             echo 'inline std::vector<PendingUinputProxy> g_pending_proxies;' >> /tmp/proxy.patch && \
             echo 'inline bool get_bluez_device_info(const std::string& t_mac, uint16_t& vendor, uint16_t& product, std::string& name) {' >> /tmp/proxy.patch && \
@@ -135,15 +154,14 @@ modules:
             echo '  ::ioctl(uinput_fd, UI_SET_EVBIT, EV_ABS); ::ioctl(uinput_fd, UI_SET_ABSBIT, ABS_X); ::ioctl(uinput_fd, UI_SET_ABSBIT, ABS_Y); ::ioctl(uinput_fd, UI_SET_ABSBIT, ABS_Z); ::ioctl(uinput_fd, UI_SET_ABSBIT, ABS_RZ); ::ioctl(uinput_fd, UI_SET_ABSBIT, ABS_HAT0X); ::ioctl(uinput_fd, UI_SET_ABSBIT, ABS_HAT0Y);' >> /tmp/proxy.patch && \
             echo '  ::ioctl(uinput_fd, UI_DEV_SETUP, &us); ::ioctl(uinput_fd, UI_DEV_CREATE);' >> /tmp/proxy.patch && \
             echo '  struct pollfd p_fds[2]; p_fds[0].fd = control_fd; p_fds[0].events = POLLIN; p_fds[1].fd = interrupt_fd; p_fds[1].events = POLLIN;' >> /tmp/proxy.patch && \
-            echo '  std::uint8_t buffer[1024]; extern volatile sig_atomic_t g_stop_requested;' >> /tmp/proxy.patch && \
-            echo '  while (!g_stop_requested) { int ret = ::poll(p_fds, 2, 50); if (ret > 0) { if (p_fds[1].revents & POLLIN) { ssize_t bytes = ::read(interrupt_fd, buffer, sizeof(buffer)); if (bytes <= 0) break; ::write(uinput_fd, buffer, bytes); } if (p_fds[0].revents & POLLIN) { ssize_t bytes = ::read(control_fd, buffer, sizeof(buffer)); if (bytes <= 0) break; } } }' >> /tmp/proxy.patch && \
+            echo '  std::uint8_t buffer[1024];' >> /tmp/proxy.patch && \
+            echo '  while (true) { int ret = ::poll(p_fds, 2, 50); if (ret > 0) { if (p_fds[1].revents & POLLIN) { ssize_t bytes = ::read(interrupt_fd, buffer, sizeof(buffer)); if (bytes <= 0) break; ::write(uinput_fd, buffer, bytes); } if (p_fds[0].revents & POLLIN) { ssize_t bytes = ::read(control_fd, buffer, sizeof(buffer)); if (bytes <= 0) break; } } }' >> /tmp/proxy.patch && \
             echo '  ::ioctl(uinput_fd, UI_DEV_DESTROY); ::close(uinput_fd); ::close(control_fd); ::close(interrupt_fd);' >> /tmp/proxy.patch && \
             echo '}' >> /tmp/proxy.patch && \
-            echo 'inline void handle_uinput_fallback(const std::string& address, vds::UniqueFd& fd, bool control_channel) {' >> /tmp/proxy.patch && \
-            echo '  for (auto it = g_pending_proxies.begin(); it != g_pending_proxies.end(); ++it) { if (it->address == address) { if (control_channel) it->control_fd = fd.release(); else it->interrupt_fd = fd.release(); if (it->control_fd >= 0 && it->interrupt_fd >= 0) { std::thread(run_uinput_proxy_worker, it->address, it->control_fd, it->interrupt_fd).detach(); g_pending_proxies.erase(it); break; } return; } }' >> /tmp/proxy.patch && \
-            echo '  PendingUinputProxy p; p.address = address; if (control_channel) p.control_fd = fd.release(); else p.interrupt_fd = fd.release(); g_pending_proxies.push_back(p);' >> /tmp/proxy.patch && \
+            echo 'inline void handle_fallback_wrapper(const std::string& address, int fd, bool control_channel) {' >> /tmp/proxy.patch && \
+            echo '  for (auto it = g_pending_proxies.begin(); it != g_pending_proxies.end(); ++it) { if (it->address == address) { if (control_channel) it->control_fd = fd; else it->interrupt_fd = fd; if (it->control_fd >= 0 && it->interrupt_fd >= 0) { std::thread(run_uinput_proxy_worker, it->address, it->control_fd, it->interrupt_fd).detach(); g_pending_proxies.erase(it); break; } return; } }' >> /tmp/proxy.patch && \
+            echo '  PendingUinputProxy p; p.address = address; if (control_channel) p.control_fd = fd; else p.interrupt_fd = fd; g_pending_proxies.push_back(p);' >> /tmp/proxy.patch && \
             echo '}' >> /tmp/proxy.patch && \
-            echo 'void handle_fallback_wrapper(const std::string& address, int& fd, bool control) { vds::UniqueFd u_fd(fd); handle_uinput_fallback(address, u_fd, control); fd = u_fd.release(); }' >> /tmp/proxy.patch && \
             TARGET_VDSD=$(find . -name vdsd.cc | head -n 1) && \
             sed -i '1r /tmp/proxy.patch' "$TARGET_VDSD" && \
             sed -i 's/handle_uinput_fallback(address, fd, true);/handle_fallback_wrapper(address, fd, true);/g' "$TARGET_VDSD" && \
@@ -155,29 +173,95 @@ modules:
         # 5. RPM-Paketstruktur vorbereiten (PKG_ROOT) inklusive REVISION 17.50 Weichen-Schranke
         RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
             PKG_ROOT="/vds-pkg-root" && \
-            mkdir -p "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra" && \
-            mkdir -p "${PKG_ROOT}/usr/lib/modules-load.d" && \
-            mkdir -p "${PKG_ROOT}/usr/lib/modprobe.d" && \
             mkdir -p "${PKG_ROOT}/usr/bin" && \
-            mkdir -p "${PKG_ROOT}/usr/lib/systemd/system/bluetooth.service.d" && \
-            mkdir -p "${PKG_ROOT}/usr/share/dbus-1/system.d" && \
-            mkdir -p "${PKG_ROOT}/usr/lib/udev/rules.d" && \
-            mkdir -p "${PKG_ROOT}/usr/etc/bluetooth" && \
-            cp /vds_build_dir/module/vds_hcd.ko "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra/" && \
-            chmod 644 "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra/vds_hcd.ko" && \
-            find /vds_build_dir/build -type f -name "vdsd" -exec cp {} "${PKG_ROOT}/usr/bin/vdsd" \; && \
-            find /vds_build_dir/build -type f -name "vdsctl" -exec cp {} "${PKG_ROOT}/usr/bin/vdsctl" \; && \
-            chmod 755 "${PKG_ROOT}/usr/bin/vdsd" "${PKG_ROOT}/usr/bin/vdsctl" && \
-            printf "vds_hcd\n" > "${PKG_ROOT}/usr/lib/modules-load.d/vds.conf" && \
+            cp /vds_build_dir/build/vdsd "${PKG_ROOT}/usr/bin/vdsd" && \
+            cp /vds_build_dir/build/vdsctl "${PKG_ROOT}/usr/bin/vdsctl" && \
             setcap 'cap_net_raw,cap_net_admin+ep' "${PKG_ROOT}/usr/bin/vdsd" && \
-            printf "[Service]\nExecStart=\nExecStart=/usr/libexec/bluetooth/bluetoothd --nodetach --noplugin=input\n" > "${PKG_ROOT}/usr/lib/systemd/system/bluetooth.service.d/override.conf" && \
-            printf "[General]\nUserspaceHID=true\n" > "${PKG_ROOT}/usr/etc/bluetooth/main.conf" && \
-            printf "[Unit]\nDescription=Virtual DualSense Userspace Daemon\nAfter=bluetooth.service vds-chmod-sdp.service\nRequires=bluetooth.service\n\n[Service]\nType=simple\nExecStartPre=/usr/bin/mkdir -p /var/lib/vdsd\nExecStart=/usr/bin/vdsd --db-path /var/lib/vdsd/vdsd.db\nRestart=always\nRestartSec=5\nUser=root\nGroup=root\nSELinuxContext=system_u:system_r:init_t:s0\n\n[Install]\nWantedBy=multi-user.target\n" > "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service" && \
-            printf "[Unit]\nDescription=Setze Berechtigungen für vDS SDP-Socket wenn er erscheint\n\n[Service]\nType=oneshot\nExecStart=/usr/bin/chmod 0777 /run/sdp\nRemainAfterExit=yes\n" > "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.service" && \
-            printf "[Unit]\nDescription=Überwache BlueZ SDP-Socket für vDS\n\n[Path]\nPathChanged=/run/sdp\nUnit=vds-chmod-sdp.service\n\n[Install]\nWantedBy=multi-user.target\n" > "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.path" && \
-            printf "<!DOCTYPE busconfig PUBLIC \"-//freedesktop//DTD D-BUS Bus Configuration 1.0//EN\"\n \"http://freedesktop.org\">\n<busconfig>\n  <policy user=\"root\">\n    <allow own=\"org.vdsd\"/>\n    <allow send_destination=\"org.vdsd\"/>\n  </policy>\n  <policy context=\"default\">\n    <allow send_destination=\"org.vdsd\"/>\n  </policy>\n</busconfig>\n" > "${PKG_ROOT}/usr/share/dbus-1/system.d/org.vdsd.conf" && \
-            printf 'KERNEL=="uinput", MODE="0660", GROUP="input", OPTIONS+="static_node=uinput"\n' > "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-uinput.rules" && \
-            printf 'KERNEL=="vds[0-9]*", MODE="0660", GROUP="input", SECLABEL{selinux}="system_u:object_r:input_device_t:s0"\n' >> "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-uinput.rules"
+            mkdir -p "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra" && \
+            cp /vds_build_dir/module/vds_hcd.ko "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra/" && \
+            mkdir -p "${PKG_ROOT}/usr/lib/modules-load.d" && \
+            echo "vds_hcd" > "${PKG_ROOT}/usr/lib/modules-load.d/vds.conf" && \
+            mkdir -p "${PKG_ROOT}/usr/share/dbus-1/system.d" && \
+            echo '<!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-BUS Bus Configuration 1.0//EN"' > "${PKG_ROOT}/usr/share/dbus-1/system.d/org.vdsd.conf" && \
+            echo ' "http://freedesktop.org">' >> "${PKG_ROOT}/usr/share/dbus-1/system.d/org.vdsd.conf" && \
+            echo '<busconfig>' >> "${PKG_ROOT}/usr/share/dbus-1/system.d/org.vdsd.conf" && \
+            echo '  <policy user="root">' >> "${PKG_ROOT}/usr/share/dbus-1/system.d/org.vdsd.conf" && \
+            echo '    <allow own="org.vdsd"/>' >> "${PKG_ROOT}/usr/share/dbus-1/system.d/org.vdsd.conf" && \
+            echo '    <allow send_destination="org.vdsd"/>' >> "${PKG_ROOT}/usr/share/dbus-1/system.d/org.vdsd.conf" && \
+            echo '  </policy>' >> "${PKG_ROOT}/usr/share/dbus-1/system.d/org.vdsd.conf" && \
+            echo '  <policy context="default">' >> "${PKG_ROOT}/usr/share/dbus-1/system.d/org.vdsd.conf" && \
+            echo '    <allow send_destination="org.vdsd"/>' >> "${PKG_ROOT}/usr/share/dbus-1/system.d/org.vdsd.conf" && \
+            echo '  </policy>' >> "${PKG_ROOT}/usr/share/dbus-1/system.d/org.vdsd.conf" && \
+            echo '</busconfig>' >> "${PKG_ROOT}/usr/share/dbus-1/system.d/org.vdsd.conf" && \
+            mkdir -p "${PKG_ROOT}/usr/lib/systemd/system" && \
+            echo '[Unit]' > "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service" && \
+            echo 'Description=Virtual DualSense Daemon' >> "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service" && \
+            echo 'After=bluetooth.service' >> "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service" && \
+            echo 'Requires=bluetooth.service' >> "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service" && \
+            echo '[Service]' >> "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service" && \
+            echo 'Type=dbus' >> "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service" && \
+            echo 'BusName=org.vdsd' >> "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service" && \
+            echo 'ExecStart=/usr/bin/vdsd' >> "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service" && \
+            echo 'Restart=always' >> "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service" && \
+            echo 'SELinuxContext=system_u:system_r:init_t:s0' >> "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service" && \
+            echo '[Install]' >> "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service" && \
+            echo 'WantedBy=multi-user.target' >> "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service" && \
+            echo '[Unit]' > "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.service" && \
+            echo 'Description=vDS SDP Permissions Workaround' >> "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.service" && \
+            echo 'After=bluetooth.service' >> "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.service" && \
+            echo '[Service]' >> "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.service" && \
+            echo 'Type=oneshot' >> "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.service" && \
+            echo 'ExecStart=/bin/chmod 777 /var/run/sdp' >> "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.service" && \
+            echo 'RemainAfterExit=yes' >> "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.service" && \
+            echo '[Install]' >> "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.service" && \
+            echo 'WantedBy=multi-user.target' >> "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.service" && \
+            echo '[Unit]' > "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.path" && \
+            echo 'Description=Watch for BlueZ SDP Socket creation' >> "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.path" && \
+            echo '[Path]' >> "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.path" && \
+            echo 'PathExists=/var/run/sdp' >> "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.path" && \
+            echo '[Install]' >> "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.path" && \
+            echo 'WantedBy=multi-user.target' >> "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.path" && \
+            mkdir -p "${PKG_ROOT}/usr/lib/systemd/system/bluetooth.service.d" && \
+            echo '[Service]' > "${PKG_ROOT}/usr/lib/systemd/system/bluetooth.service.d/override.conf" && \
+            echo 'ExecStart=' >> "${PKG_ROOT}/usr/lib/systemd/system/bluetooth.service.d/override.conf" && \
+            echo 'ExecStart=/usr/libexec/bluetooth/bluetoothd --noplugin=input' >> "${PKG_ROOT}/usr/lib/systemd/system/bluetooth.service.d/override.conf" && \
+            mkdir -p "${PKG_ROOT}/usr/etc/bluetooth" && \
+            cp /etc/bluetooth/main.conf "${PKG_ROOT}/usr/etc/bluetooth/main.conf" && \
+            mkdir -p "${PKG_ROOT}/usr/lib/udev/rules.d" && \
+            echo 'KERNEL=="uinput", SUBSYSTEM=="misc", OPTIONS+="static_node=uinput", TAG+="systemd", MODE="0660", GROUP="input"' > "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-uinput.rules" && \
+            mkdir -p /root/rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS} && \
+            echo "Name: kmod-vds" > /root/rpmbuild/SPECS/vds.spec && \
+            echo "Version: 1.0.0" >> /root/rpmbuild/SPECS/vds.spec && \
+            echo "Release: 1" >> /root/rpmbuild/SPECS/vds.spec && \
+            echo "Summary: Virtual DualSense Driver" >> /root/rpmbuild/SPECS/vds.spec && \
+            echo "License: MIT" >> /root/rpmbuild/SPECS/vds.spec && \
+            echo "%description" >> /root/rpmbuild/SPECS/vds.spec && \
+            echo "Virtual DualSense Driver und Daemon mit integrierter uinput-Proxy Weiche für Bazzite." >> /root/rpmbuild/SPECS/vds.spec && \
+            echo "%post" >> /root/rpmbuild/SPECS/vds.spec && \
+            echo "/usr/sbin/restorecon -R /usr/bin/vdsd /usr/bin/vdsctl /usr/lib/systemd/system/vdsd.service /usr/etc/bluetooth /usr/lib/udev/rules.d/99-vds-*.rules /var/lib/vdsd 2>/dev/null || true" >> /root/rpmbuild/SPECS/vds.spec && \
+            echo "/usr/bin/udevadm control --reload-rules 2>/dev/null || true" >> /root/rpmbuild/SPECS/vds.spec && \
+            echo "/usr/bin/udevadm trigger --action=change 2>/dev/null || true" >> /root/rpmbuild/SPECS/vds.spec && \
+            echo "/usr/bin/systemctl daemon-reload 2>/dev/null || true" >> /root/rpmbuild/SPECS/vds.spec && \
+            echo "/usr/bin/systemctl preset vdsd.service 2>/dev/null || true" >> /root/rpmbuild/SPECS/vds.spec && \
+            echo "/usr/bin/systemctl enable vdsd.service 2>/dev/null || true" >> /root/rpmbuild/SPECS/vds.spec && \
+            echo "/usr/bin/systemctl preset vds-chmod-sdp.path 2>/dev/null || true" >> /root/rpmbuild/SPECS/vds.spec && \
+            echo "/usr/bin/systemctl enable vds-chmod-sdp.path 2>/dev/null || true" >> /root/rpmbuild/SPECS/vds.spec && \
+            echo "%files" >> /root/rpmbuild/SPECS/vds.spec && \
+            echo "/usr/lib/modules/${KERNEL_VERSION}/extra/vds_hcd.ko" >> /root/rpmbuild/SPECS/vds.spec && \
+            echo "/usr/lib/modules-load.d/vds.conf" >> /root/rpmbuild/SPECS/vds.spec && \
+            echo "/usr/bin/vdsd" >> /root/rpmbuild/SPECS/vds.spec && \
+            echo "/usr/bin/vdsctl" >> /root/rpmbuild/SPECS/vds.spec && \
+            echo "%dir /usr/lib/systemd/system/bluetooth.service.d" >> /root/rpmbuild/SPECS/vds.spec && \
+            echo "/usr/lib/systemd/system/bluetooth.service.d/override.conf" >> /root/rpmbuild/SPECS/vds.spec && \
+            echo "%dir /usr/etc/bluetooth" >> /root/rpmbuild/SPECS/vds.spec && \
+            echo "/usr/etc/bluetooth/main.conf" >> /root/rpmbuild/SPECS/vds.spec && \
+            echo "/usr/lib/systemd/system/vdsd.service" >> /root/rpmbuild/SPECS/vds.spec && \
+            echo "/usr/lib/systemd/system/vds-chmod-sdp.service" >> /root/rpmbuild/SPECS/vds.spec && \
+            echo "/usr/lib/systemd/system/vds-chmod-sdp.path" >> /root/rpmbuild/SPECS/vds.spec && \
+            echo "/usr/share/dbus-1/system.d/org.vdsd.conf" >> /root/rpmbuild/SPECS/vds.spec && \
+            echo "/usr/lib/udev/rules.d/99-vds-uinput.rules" >> /root/rpmbuild/SPECS/vds.spec && \
+            rpmbuild --define "_topdir /root/rpmbuild" --buildroot=/vds-pkg-root -bb /root/rpmbuild/SPECS/vds.spec && \
+            rpm -ivh --nodeps /root/rpmbuild/RPMS/x86_64/kmod-vds-1.0.0-1.x86_64.rpm
 
         # 6. Natives RPM via rpmbuild generieren und installieren (Optimierte SELinux- & Systemd-Pfade)
         RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
@@ -213,7 +297,7 @@ modules:
             echo "/usr/share/dbus-1/system.d/org.vdsd.conf" >> /root/rpmbuild/SPECS/vds.spec && \
             echo "/usr/lib/udev/rules.d/99-vds-uinput.rules" >> /root/rpmbuild/SPECS/vds.spec && \
             rpmbuild --define "_topdir /root/rpmbuild" --buildroot=/vds-pkg-root -bb /root/rpmbuild/SPECS/vds.spec && \
-            rpm -ivh --nodeps /root/rpmbuild/RPMS/x86_64/kmod-vds-1.0.0-1.x86_64.rpm
+            rpm -Uvh --nodeps --force /root/rpmbuild/RPMS/x86_64/kmod-vds-1.0.0-1.x86_64.rpm
 
         # 7. Atomares Aufräumen & Modul-Abhängigkeiten indizieren
         RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
