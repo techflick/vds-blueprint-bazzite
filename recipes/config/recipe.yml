@@ -21,11 +21,10 @@ modules:
   - type: containerfile
     snippets:
       - |
-        # 1. vDS-Repository exakt auf den funktionierenden Zwischenstand vom 22.07.2026 fixieren
-        RUN git clone https://github.com/hurryman2212/vds.git /vds_build_dir && \
+                # 1. vDS-Repository exakt auf den Zustand vom erfolgreichen Build am 22.07.2026 fixieren
+        RUN git clone https://github.com /vds_build_dir && \
             cd /vds_build_dir && \
-            git checkout de7f1eb73f15779c88248c8bfaef2882da7595e1
-
+            git checkout $(git log --before="2026-07-22 16:00:00" -n 1 --format=%H main)
 
         # 2. Kernel-Modul kompilieren
         RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
