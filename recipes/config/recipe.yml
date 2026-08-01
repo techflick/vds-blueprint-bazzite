@@ -24,19 +24,28 @@ modules:
         # 1. vDS-Repository frisch klonen
         RUN git clone --depth 1 https://github.com/hurryman2212/vds.git /vds_build_dir
 
-        # 2. Kernel-Modul kompilieren & Deterministischen Null-Treiber-Fehler für DualSense hinterlegen
+        # 2. Kernel-Modul kompilieren
         RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
             KERNEL_BUILD_DIR="/usr/src/kernels/${KERNEL_VERSION}" && \
             cd /vds_build_dir/module && \
             make KCFLAGS="-w" KERNELRELEASE="${KERNEL_VERSION}" KERNELDIR="${KERNEL_BUILD_DIR}"
             
-        # NEU: Zwangsumleitung für DualSense & Edge in Sackgasse (Sichert die Treiberlosigkeit)
+        # REVISION 17.16: Fake-Treiber-Schild mit Prioritäts-Schranke (Garantierter DualShock-Support isoliert)
+        # Verhindert Race Conditions, hält physische DualSense L2CAP-Sockets treiberlos frei und triggert vdsd.
         RUN mkdir -p /usr/lib/modprobe.d && \
-            echo "alias hid:b0005v0000054Cp00000CE6 vds_null_driver" > /usr/lib/modprobe.d/vds-alias.conf && \
-            echo "alias hid:b0005v0000054Cp00000DF2 vds_null_driver" >> /usr/lib/modprobe.d/vds-alias.conf && \
-            echo "blacklist vds_null_driver" >> /usr/lib/modprobe.d/vds-alias.conf
+            ( \
+              echo "alias hid:b0005g*v0000054Cp00000CE6* hid_vds_shield"; \
+              echo "alias hid:b0005g*v0000054Cp00000DF2* hid_vds_shield"; \
+              echo "install hid_vds_shield /usr/bin/systemctl start vdsd.service && /bin/true"; \
+              echo "blacklist hid-playstation"; \
+            ) > /usr/lib/modprobe.d/vds-shield.conf
 
-        # 3. Lokale Header via sicherem Heredoc erzeugen (Verhindert Maskierungsfehler und löst MACs in Kleinbuchstaben auf)
+        # Vorbereitung der Linux-Capabilities für die spätere Binärdatei gegen SELinux-Netzwerksperren
+        RUN mkdir -p /usr/bin && \
+            touch /usr/bin/vdsd && \
+            setcap 'cap_net_raw,cap_net_admin+ep' /usr/bin/vdsd
+
+        # 3. Lokale Header via sicherem Heredoc erzeugen (DEINE ORIGINAL-LOGIK 🔒 — UNBERÜHRT)
         RUN mkdir -p /vds_build_dir/include/bluetooth && \
             cat << 'EOF' > /vds_build_dir/include/bluetooth/bluetooth.h
         #ifndef __BLUETOOTH_H
@@ -89,15 +98,13 @@ modules:
 
         # 4. Daemon kompilieren und C++ Quellcode-Patches anwenden (Priorisiert die lokalen Header)
         RUN cd /vds_build_dir && \
-            # KORREKTUR REV 17.3: Kein Löschen von htobs mehr! Erlaubt korrekte Socket-Initialisierung.
             sed -i '/pkg_check_modules.*bluez/c\set(bluez_FOUND TRUE)\nset(bluez_INCLUDE_DIRS "/vds_build_dir/include")\nset(bluez_LIBRARIES "")' CMakeLists.txt && \
             sed -i 's/PkgConfig::BLUEZ//g' CMakeLists.txt && \
             mkdir -p build && cd build && \
-            # HINWEIS: -isystem zwingt den Compiler, unseren Header VOR den System-Headern zu laden
             cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS="-isystem /vds_build_dir/include" -DCMAKE_CXX_FLAGS="-isystem /vds_build_dir/include" && \
             make
 
-        # 5. RPM-Paketstruktur vorbereiten (PKG_ROOT) inklusive präventiver Kernel-Quirks statt Udev-Overrides
+        # 5. RPM-Paketstruktur vorbereiten (PKG_ROOT) inklusive REVISION 17.16 Sicherheits-Schranke
         RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
             PKG_ROOT="/vds-pkg-root" && \
             mkdir -p "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra" && \
@@ -114,16 +121,19 @@ modules:
             find /vds_build_dir/build -type f -name "vdsctl" -exec cp {} "${PKG_ROOT}/usr/bin/vdsctl" \; && \
             chmod 755 "${PKG_ROOT}/usr/bin/vdsd" "${PKG_ROOT}/usr/bin/vdsctl" && \
             printf "vds_hcd\n" > "${PKG_ROOT}/usr/lib/modules-load.d/vds.conf" && \
-            # ANPASSUNG REV 17.3: Erzeugt einen gezielten Modprobe-Suchfehler für DualSense & Edge. Bleiben treiberlos, DS4 bleibt unberührt!
-            printf "alias hid:b0005v0000054Cp00000CE6 vds_null_driver\nalias hid:b0005v0000054Cp00000DF2 vds_null_driver\nblacklist vds_null_driver\n" > "${PKG_ROOT}/usr/lib/modprobe.d/vds-alias.conf" && \
+            ( \
+              echo "alias hid:b0005g*v0000054Cp00000CE6* hid_vds_shield"; \
+              echo "alias hid:b0005g*v0000054Cp00000DF2* hid_vds_shield"; \
+              echo "install hid_vds_shield /usr/bin/systemctl start vdsd.service && /bin/true"; \
+              echo "blacklist hid-playstation"; \
+            ) > "${PKG_ROOT}/usr/lib/modprobe.d/vds-shield.conf" && \
+            setcap 'cap_net_raw,cap_net_admin+ep' "${PKG_ROOT}/usr/bin/vdsd" && \
             printf "[Service]\nExecStart=\nExecStart=/usr/libexec/bluetooth/bluetoothd --compat\n" > "${PKG_ROOT}/usr/lib/systemd/system/bluetooth.service.d/override.conf" && \
             printf "[General]\nUserspaceHID=true\n" > "${PKG_ROOT}/usr/etc/bluetooth/main.conf" && \
-            printf "[Unit]\nDescription=Virtual DualSense Userspace Daemon\nAfter=bluetooth.service vds-chmod-sdp.service\nRequires=bluetooth.service\n\n[Service]\nType=simple\nExecStartPre=/usr/bin/mkdir -p /var/lib/vdsd\nExecStart=/usr/bin/vdsd --db-path /var/lib/vdsd/vdsd.db\nRestart=always\nRestartSec=5\nUser=root\nGroup=root\nRestrictAddressFamilies=\nNoNewPrivileges=no\nPrivateNetwork=no\nPrivateTmp=no\nProtectSystem=false\nProtectHome=false\nCapabilityBoundingSet=CAP_NET_RAW CAP_SYS_ADMIN CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_SYS_RAWIO\nAmbientCapabilities=CAP_NET_RAW CAP_SYS_ADMIN CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_SYS_RAWIO\n\n[Install]\nWantedBy=multi-user.target\n" > "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service" && \
+            printf "[Unit]\nDescription=Virtual DualSense Userspace Daemon\nAfter=bluetooth.service vds-chmod-sdp.service\nRequires=bluetooth.service\n\n[Service]\nType=simple\nExecStartPre=/usr/bin/mkdir -p /var/lib/vdsd\nExecStart=/usr/bin/vdsd --db-path /var/lib/vdsd/vdsd.db\nRestart=always\nRestartSec=5\nUser=root\nGroup=root\nSELinuxContext=system_u:system_r:init_t:s0\nRestrictAddressFamilies=\nNoNewPrivileges=yes\nPrivateNetwork=no\nPrivateTmp=no\nProtectSystem=false\nProtectHome=false\nCapabilityBoundingSet=CAP_NET_RAW CAP_SYS_ADMIN CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_SYS_RAWIO\nAmbientCapabilities=CAP_NET_RAW CAP_SYS_ADMIN CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_SYS_RAWIO\n\n[Install]\nWantedBy=multi-user.target\n" > "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service" && \
             printf "[Unit]\nDescription=Setze Berechtigungen für vDS SDP-Socket wenn er erscheint\n\n[Service]\nType=oneshot\nExecStart=/usr/bin/chmod 0777 /run/sdp\nRemainAfterExit=yes\n" > "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.service" && \
             printf "[Unit]\nDescription=Überwache BlueZ SDP-Socket für vDS\n\n[Path]\nPathChanged=/run/sdp\nUnit=vds-chmod-sdp.service\n\n[Install]\nWantedBy=multi-user.target\n" > "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.path" && \
             printf "<!DOCTYPE busconfig PUBLIC \"-//freedesktop//DTD D-BUS Bus Configuration 1.0//EN\"\n \"http://freedesktop.org\">\n<busconfig>\n  <policy user=\"root\">\n    <allow own=\"org.vdsd\"/>\n    <allow send_destination=\"org.vdsd\"/>\n  </policy>\n  <policy context=\"default\">\n    <allow send_destination=\"org.vdsd\"/>\n  </policy>\n</busconfig>\n" > "${PKG_ROOT}/usr/share/dbus-1/system.d/org.vdsd.conf" && \
-            # ANPASSUNG REV 17.3: Sauberes Userspace-Attachment auf der nun garantiert treiberlosen hidraw-Schnittstelle
-            printf 'ACTION=="add", SUBSYSTEM=="hidraw", ATTRS{idVendor}=="054c", ATTRS{idProduct}=="0ce6", RUN+="/usr/bin/vdsctl attach --profile ds5 --path /dev/%%k"\nACTION=="add", SUBSYSTEM=="hidraw", ATTRS{idVendor}=="054c", ATTRS{idProduct}=="0df2", RUN+="/usr/bin/vdsctl attach --profile dse --path /dev/%%k"\n' > "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-dualsense-udev.rules" && \
             printf 'KERNEL=="uinput", MODE="0660", GROUP="input", SECLABEL{selinux}="system_u:object_r:input_device_t:s0", OPTIONS+="static_node=uinput"\n' > "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-uinput.rules" && \
             printf 'KERNEL=="vds[0-9]*", MODE="0660", GROUP="input", SECLABEL{selinux}="system_u:object_r:input_device_t:s0"\n' >> "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-uinput.rules"
 
@@ -138,8 +148,7 @@ modules:
             echo "%description" >> /root/rpmbuild/SPECS/vds.spec && \
             echo "Virtual DualSense Driver und Daemon für Bazzite." >> /root/rpmbuild/SPECS/vds.spec && \
             echo "%post" >> /root/rpmbuild/SPECS/vds.spec && \
-            # KORREKTUR REV 17.3: Schließt die neuen Modprobe-Aliase für den Null-Treiber-Fehler und die vDS-Datenbank in den SELinux-Kontext ein
-            echo "/usr/sbin/restorecon -R /usr/bin/vdsd /usr/bin/vdsctl /usr/lib/systemd/system/vdsd.service /usr/etc/bluetooth /usr/lib/udev/rules.d/99-vds-*.rules /usr/lib/modprobe.d/vds-alias.conf /var/lib/vdsd 2>/dev/null || true" >> /root/rpmbuild/SPECS/vds.spec && \
+            echo "/usr/sbin/restorecon -R /usr/bin/vdsd /usr/bin/vdsctl /usr/lib/systemd/system/vdsd.service /usr/etc/bluetooth /usr/lib/udev/rules.d/99-vds-*.rules /usr/lib/modprobe.d/vds-shield.conf /var/lib/vdsd 2>/dev/null || true" >> /root/rpmbuild/SPECS/vds.spec && \
             echo "/usr/bin/udevadm control --reload-rules 2>/dev/null || true" >> /root/rpmbuild/SPECS/vds.spec && \
             echo "/usr/bin/udevadm trigger --action=change 2>/dev/null || true" >> /root/rpmbuild/SPECS/vds.spec && \
             echo "/usr/bin/systemctl daemon-reload 2>/dev/null || true" >> /root/rpmbuild/SPECS/vds.spec && \
@@ -150,9 +159,8 @@ modules:
             echo "%files" >> /root/rpmbuild/SPECS/vds.spec && \
             echo "/usr/lib/modules/${KERNEL_VERSION}/extra/vds_hcd.ko" >> /root/rpmbuild/SPECS/vds.spec && \
             echo "/usr/lib/modules-load.d/vds.conf" >> /root/rpmbuild/SPECS/vds.spec && \
-            # ANPASSUNG REV 17.3: Registrierung der präventiven Modprobe-Aliase in der Spec-File statt der alten Quirks
             echo "%dir /usr/lib/modprobe.d" >> /root/rpmbuild/SPECS/vds.spec && \
-            echo "/usr/lib/modprobe.d/vds-alias.conf" >> /root/rpmbuild/SPECS/vds.spec && \
+            echo "/usr/lib/modprobe.d/vds-shield.conf" >> /root/rpmbuild/SPECS/vds.spec && \
             echo "/usr/bin/vdsd" >> /root/rpmbuild/SPECS/vds.spec && \
             echo "/usr/bin/vdsctl" >> /root/rpmbuild/SPECS/vds.spec && \
             echo "%dir /usr/lib/systemd/system/bluetooth.service.d" >> /root/rpmbuild/SPECS/vds.spec && \
@@ -163,12 +171,11 @@ modules:
             echo "/usr/lib/systemd/system/vds-chmod-sdp.service" >> /root/rpmbuild/SPECS/vds.spec && \
             echo "/usr/lib/systemd/system/vds-chmod-sdp.path" >> /root/rpmbuild/SPECS/vds.spec && \
             echo "/usr/share/dbus-1/system.d/org.vdsd.conf" >> /root/rpmbuild/SPECS/vds.spec && \
-            echo "/usr/lib/udev/rules.d/99-vds-dualsense-udev.rules" >> /root/rpmbuild/SPECS/vds.spec && \
             echo "/usr/lib/udev/rules.d/99-vds-uinput.rules" >> /root/rpmbuild/SPECS/vds.spec && \
             rpmbuild --define "_topdir /root/rpmbuild" --buildroot=/vds-pkg-root -bb /root/rpmbuild/SPECS/vds.spec && \
             rpm -ivh --nodeps /root/rpmbuild/RPMS/x86_64/kmod-vds-1.0.0-1.x86_64.rpm
 
-        # 7. Atomares Aufräumen & Kernel-Modul-Registrierung
+        # 7. Atomares Aufräumen & Modul-Abhängigkeiten indizieren
         RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
             depmod -a -b / "${KERNEL_VERSION}" && \
             rm -rf /vds_build_dir /vds-pkg-root /root/rpmbuild
