@@ -24,21 +24,17 @@ modules:
         # 1. vDS-Repository frisch klonen
         RUN git clone --depth 1 https://github.com/hurryman2212/vds.git /vds_build_dir
 
-        # 2. Kernel-Modul kompilieren
+        # 2. Kernel-Modul kompilieren & Deterministischen Null-Treiber-Fehler für DualSense hinterlegen
         RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
             KERNEL_BUILD_DIR="/usr/src/kernels/${KERNEL_VERSION}" && \
             cd /vds_build_dir/module && \
             make KCFLAGS="-w" KERNELRELEASE="${KERNEL_VERSION}" KERNELDIR="${KERNEL_BUILD_DIR}"
             
-        # NEU: Zwangsumleitung für DualSense & Edge in Sackgasse (Priorisierte Treiber-Sperre via install)
+        # NEU: Zwangsumleitung für DualSense & Edge in Sackgasse (Sichert die Treiberlosigkeit)
         RUN mkdir -p /usr/lib/modprobe.d && \
-            ( \
-              echo "install hid:b0005*v0000054Cp00000CE6* /bin/true"; \
-              echo "install hid:b0005*v0000054Cp00000DF2* /bin/true"; \
-              echo "alias hid:b0005*v0000054Cp00000CE6* vds_null_driver"; \
-              echo "alias hid:b0005*v0000054Cp00000DF2* vds_null_driver"; \
-              echo "blacklist vds_null_driver"; \
-            ) > /usr/lib/modprobe.d/vds-alias.conf
+            echo "alias hid:b0005v0000054Cp00000CE6 vds_null_driver" > /usr/lib/modprobe.d/vds-alias.conf && \
+            echo "alias hid:b0005v0000054Cp00000DF2 vds_null_driver" >> /usr/lib/modprobe.d/vds-alias.conf && \
+            echo "blacklist vds_null_driver" >> /usr/lib/modprobe.d/vds-alias.conf
 
         # 3. Lokale Header via sicherem Heredoc erzeugen (Verhindert Maskierungsfehler und löst MACs in Kleinbuchstaben auf)
         RUN mkdir -p /vds_build_dir/include/bluetooth && \
@@ -118,14 +114,8 @@ modules:
             find /vds_build_dir/build -type f -name "vdsctl" -exec cp {} "${PKG_ROOT}/usr/bin/vdsctl" \; && \
             chmod 755 "${PKG_ROOT}/usr/bin/vdsd" "${PKG_ROOT}/usr/bin/vdsctl" && \
             printf "vds_hcd\n" > "${PKG_ROOT}/usr/lib/modules-load.d/vds.conf" && \
-            # ANPASSUNG REV 17.3: Priorisierte Treiber-Sperre via install mit Wildcards (Garantiert absolute Treiberlosigkeit)
-            ( \
-              echo "install hid:b0005*v0000054Cp00000CE6* /bin/true"; \
-              echo "install hid:b0005*v0000054Cp00000DF2* /bin/true"; \
-              echo "alias hid:b0005*v0000054Cp00000CE6* vds_null_driver"; \
-              echo "alias hid:b0005*v0000054Cp00000DF2* vds_null_driver"; \
-              echo "blacklist vds_null_driver"; \
-            ) > "${PKG_ROOT}/usr/lib/modprobe.d/vds-alias.conf" && \
+            # ANPASSUNG REV 17.3: Erzeugt einen gezielten Modprobe-Suchfehler für DualSense & Edge. Bleiben treiberlos, DS4 bleibt unberührt!
+            printf "alias hid:b0005v0000054Cp00000CE6 vds_null_driver\nalias hid:b0005v0000054Cp00000DF2 vds_null_driver\nblacklist vds_null_driver\n" > "${PKG_ROOT}/usr/lib/modprobe.d/vds-alias.conf" && \
             printf "[Service]\nExecStart=\nExecStart=/usr/libexec/bluetooth/bluetoothd --compat\n" > "${PKG_ROOT}/usr/lib/systemd/system/bluetooth.service.d/override.conf" && \
             printf "[General]\nUserspaceHID=true\n" > "${PKG_ROOT}/usr/etc/bluetooth/main.conf" && \
             printf "[Unit]\nDescription=Virtual DualSense Userspace Daemon\nAfter=bluetooth.service vds-chmod-sdp.service\nRequires=bluetooth.service\n\n[Service]\nType=simple\nExecStartPre=/usr/bin/mkdir -p /var/lib/vdsd\nExecStart=/usr/bin/vdsd --db-path /var/lib/vdsd/vdsd.db\nRestart=always\nRestartSec=5\nUser=root\nGroup=root\nRestrictAddressFamilies=\nNoNewPrivileges=no\nPrivateNetwork=no\nPrivateTmp=no\nProtectSystem=false\nProtectHome=false\nCapabilityBoundingSet=CAP_NET_RAW CAP_SYS_ADMIN CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_SYS_RAWIO\nAmbientCapabilities=CAP_NET_RAW CAP_SYS_ADMIN CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_SYS_RAWIO\n\n[Install]\nWantedBy=multi-user.target\n" > "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service" && \
@@ -178,9 +168,7 @@ modules:
             rpmbuild --define "_topdir /root/rpmbuild" --buildroot=/vds-pkg-root -bb /root/rpmbuild/SPECS/vds.spec && \
             rpm -ivh --nodeps /root/rpmbuild/RPMS/x86_64/kmod-vds-1.0.0-1.x86_64.rpm
 
-        # 7. Atomares Aufräumen & Kmod/Initramfs-Brennen
+        # 7. Atomares Aufräumen & Kernel-Modul-Registrierung
         RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
             depmod -a -b / "${KERNEL_VERSION}" && \
-            # ANPASSUNG REV 17.3: Zwingt Dracut dazu, die veränderte vDS-Sackgasse direkt in das atomare Image einzubacken
-            dracut --regenerate-all --force && \
-            rm -rf /vds_build_dir /vds-pkg-root /root/root/rpmbuild
+            rm -rf /vds_build_dir /vds-pkg-root /root/rpmbuild
