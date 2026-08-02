@@ -54,8 +54,13 @@ modules:
         RUN cd /vds_build_dir && \
             sed -i '/pkg_check_modules.*bluez/c\set(bluez_FOUND TRUE)\nset(bluez_INCLUDE_DIRS "/usr/include")\nset(bluez_LIBRARIES "")' CMakeLists.txt && \
             sed -i 's/PkgConfig::BLUEZ//g' CMakeLists.txt && \
+            # Quellcode-Patch: Sicherstellen, dass die Struktur genullt und der Typ sauber gesetzt ist
+            sed -i '/struct sockaddr_l2/i \    memset(&addr, 0, sizeof(addr));' src/daemon.c || true && \
+            sed -i '/addr.l2_psm =/a \    addr.l2_bdaddr_type = 0;' src/daemon.c || true && \
             mkdir -p build && cd build && \
-            cmake .. -DCMAKE_BUILD_TYPE=Release && \
+            cmake .. -DCMAKE_BUILD_TYPE=Release \
+                     -DCMAKE_C_FLAGS="-I/usr/include -Wno-address-of-packed-member" \
+                     -DCMAKE_CXX_FLAGS="-I/usr/include -Wno-address-of-packed-member" && \
             make
             
         # 5. RPM-Paketstruktur vorbereiten (PKG_ROOT) inklusive Systemd- & SELinux-Härtung
