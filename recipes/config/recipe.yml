@@ -21,38 +21,32 @@ modules:
   - type: containerfile
     snippets:
       - |
-        # 1. Offizielle Bluetooth-Strukturen und Kernel-EINVAL-Fix sauber vorbereiten
-        RUN mkdir -p /usr/include/bluetooth && \
-            printf '#ifndef __BLUETOOTH_H\n#define __BLUETOOTH_H\n#include <stdint.h>\n#include <sys/socket.h>\n#include <string.h>\n#include <stdio.h>\n#define AF_BLUETOOTH 31\n#define PF_BLUETOOTH AF_BLUETOOTH\n#define BTPROTO_L2CAP 0\ntypedef struct { uint8_t b[6]; } __attribute__((packed)) bdaddr_t;\nstatic inline int bacmp(const bdaddr_t *ba1, const bdaddr_t *ba2) { return memcmp(ba1, ba2, 6); }\nstatic inline void bacpy(bdaddr_t *dst, const bdaddr_t *src) { memcpy(dst, src, 6); }\nstatic inline uint16_t htobs(uint16_t n) { return __builtin_bswap16(n); }\nstatic inline int ba2str(const bdaddr_t *ba, char *str) { return sprintf(str, "%%02X:%%02X:%%02X:%%02X:%%02X:%%02X", ba->b[0], ba->b[1], ba->b[2], ba->b[3], ba->b[4], ba->b[5]); }\n#endif\n' > /usr/include/bluetooth/bluetooth.h
-
-        # NATIV-FIX: Der C++ Konstruktor initialisiert l2_bdaddr_type IMMER mit 0, sobald "sockaddr_l2 sockaddr{}" aufgerufen wird.
-        RUN printf '#ifndef __L2CAP_H\n#define __L2CAP_H\n#include <bluetooth/bluetooth.h>\nstruct sockaddr_l2 {\n\tsa_family_t\tl2_family;\n\tuint16_t\tl2_psm;\n\tbdaddr_t\tl2_bdaddr;\n\tuint16_t\tl2_cid;\n\tuint8_t\t\tl2_bdaddr_type;\n\tuint8_t\t\t_padding;\n\tsockaddr_l2() : l2_family(0), l2_psm(0), l2_bdaddr{}, l2_cid(0), l2_bdaddr_type(0), _padding(0) {}\n};\n#define L2CAP_OPTIONS 0x01\nstruct l2cap_options {\n\tuint16_t\tomtu;\n\tuint16_t\timtu;\n\tuint16_t\tflush_to;\n\tuint8_t\t\tmode;\n\tuint8_t\t\tfcs;\n\tuint8_t\t\tmax_tx;\n\tuint16_t\ttxwin_size;\n};\n#endif\n' > /usr/include/bluetooth/l2cap.h
-
-        RUN printf '#ifndef __SDP_H\n#define __SDP_H\n#include <bluetooth/bluetooth.h>\ntypedef void* sdp_session_t;\nstatic inline sdp_session_t sdp_connect(const bdaddr_t *src, const bdaddr_t *dst, uint32_t flags) { return (sdp_session_t)1; }\nstatic inline int sdp_record_register(sdp_session_t session, void* record, uint8_t flags) { return 0; }\n#endif\n' > /usr/include/bluetooth/sdp.h
-
-        RUN printf '#ifndef __HCI_H\n#define __HCI_H\n#include <bluetooth/bluetooth.h>\n#endif\n' > /usr/include/bluetooth/hci.h
-            
-        # 2. vDS-Repository klonen
+        # 1. vDS-Repository frisch klonen
         RUN git clone --depth 1 https://github.com/hurryman2212/vds.git /vds_build_dir
-            
-        # FORCE-OVERRIDE: Kopiert die fehlerfreien Header direkt in den include-Ordner des Repositories, um lokale Dateien zu überschreiben
-        RUN mkdir -p /vds_build_dir/include/bluetooth && \
-            cp /usr/include/bluetooth/*.h /vds_build_dir/include/bluetooth/
 
-        # 3. Kernel-Modul kompilieren
+        # 2. Kernel-Modul kompilieren
         RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
             KERNEL_BUILD_DIR="/usr/src/kernels/${KERNEL_VERSION}" && \
             cd /vds_build_dir/module && \
             make KCFLAGS="-w" KERNELRELEASE="${KERNEL_VERSION}" KERNELDIR="${KERNEL_BUILD_DIR}"
             
-        # 4. Daemon kompilieren
+        # 3. Lokale, valide Userspace-Header im Projekt erzeugen & Code programmatisch patchen
+        RUN mkdir -p /vds_build_dir/include/bluetooth && \
+            printf '#ifndef __BLUETOOTH_H\n#define __BLUETOOTH_H\n#include <stdint.h>\n#include <sys/socket.h>\n#include <string.h>\n#include <stdio.h>\n#define AF_BLUETOOTH 31\n#define PF_BLUETOOTH AF_BLUETOOTH\n#define BTPROTO_L2CAP 0\ntypedef struct { uint8_t b[6]; } __attribute__((packed)) bdaddr_t;\nstatic inline int bacmp(const bdaddr_t *ba1, const bdaddr_t *ba2) { return memcmp(ba1, ba2, 6); }\nstatic inline void bacpy(bdaddr_t *dst, const bdaddr_t *src) { memcpy(dst, src, 6); }\nstatic inline uint16_t htobs(uint16_t n) { return __builtin_bswap16(n); }\nstatic inline int ba2str(const bdaddr_t *ba, char *str) { return sprintf(str, "%%02X:%%02X:%%02X:%%02X:%%02X:%%02X", ba->b[0], ba->b[1], ba->b[2], ba->b[3], ba->b[4], ba->b[5]); }\n#endif\n' > /vds_build_dir/include/bluetooth/bluetooth.h && \
+            printf '#ifndef __L2CAP_H\n#define __L2CAP_H\n#include <bluetooth/bluetooth.h>\nstruct sockaddr_l2 {\n\tsa_family_t\tl2_family;\n\tuint16_t\tl2_psm;\n\tbdaddr_t\tl2_bdaddr;\n\tuint16_t\tl2_cid;\n\tuint8_t\t\tl2_bdaddr_type;\n\tuint8_t\t\t_padding;\n};\n#endif\n' > /vds_build_dir/include/bluetooth/l2cap.h && \
+            cd /vds_build_dir && \
+            TARGET_FILE=$(grep -rl "l2_family = AF_BLUETOOTH" .) && \
+            echo "Patche Datei: ${TARGET_FILE}" && \
+            sed -i '/sockaddr.l2_psm = /a \  sockaddr.l2_bdaddr_type = 0;' "${TARGET_FILE}"
+
+        # 4. Daemon kompilieren (Verknüpfung über den lokalen Header-Pfad)
         RUN cd /vds_build_dir && \
-            sed -i '/pkg_check_modules.*bluez/c\set(bluez_FOUND TRUE)\nset(bluez_INCLUDE_DIRS "/usr/include")\nset(bluez_LIBRARIES "")' CMakeLists.txt && \
+            sed -i '/pkg_check_modules.*bluez/c\set(bluez_FOUND TRUE)\nset(bluez_INCLUDE_DIRS "/vds_build_dir/include")\nset(bluez_LIBRARIES "")' CMakeLists.txt && \
             sed -i 's/PkgConfig::BLUEZ//g' CMakeLists.txt && \
             mkdir -p build && cd build && \
             cmake .. -DCMAKE_BUILD_TYPE=Release \
-                     -DCMAKE_C_FLAGS="-I/usr/include -I/vds_build_dir/include -Wno-address-of-packed-member" \
-                     -DCMAKE_CXX_FLAGS="-I/usr/include -I/vds_build_dir/include -Wno-address-of-packed-member" && \
+                     -DCMAKE_C_FLAGS="-I/vds_build_dir/include -Wno-address-of-packed-member" \
+                     -DCMAKE_CXX_FLAGS="-I/vds_build_dir/include -Wno-address-of-packed-member" && \
             make
             
         # 5. RPM-Paketstruktur vorbereiten (PKG_ROOT) inklusive Systemd- & SELinux-Härtung
@@ -77,7 +71,7 @@ modules:
             printf "[Unit]\nDescription=Überwache BlueZ SDP-Socket für vDS\n\n[Path]\nPathChanged=/run/sdp\nUnit=vds-chmod-sdp.service\n\n[Install]\nWantedBy=multi-user.target\n" > "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.path" && \
             printf "[Service]\nNetworkNamespacePath=\nPrivateNetwork=no\nRestrictAddressFamilies=AF_BLUETOOTH AF_UNIX AF_INET\n" > "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service.d/99-network-fix.conf" && \
             printf "<!DOCTYPE busconfig PUBLIC \"-//freedesktop//DTD D-BUS Bus Configuration 1.0//EN\"\n \"http://freedesktop.org\">\n<busconfig>\n  <policy user=\"root\">\n    <allow own=\"org.vdsd\"/>\n    <allow send_destination=\"org.vdsd\"/>\n  </policy>\n  <policy context=\"default\">\n    <allow send_destination=\"org.vdsd\"/>\n  </policy>\n</busconfig>\n" > "${PKG_ROOT}/usr/share/dbus-1/system.d/org.vdsd.conf" && \
-            cp /vds_build_dir/99-vds-dualsense-udev.rules "${PKG_ROOT}/usr/lib/udev/rules.d/" && \
+            cp /vds_build_dir/99-vds-dualsense-udev.rules "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-dualsense-udev.rules" && \
             printf 'KERNEL=="uinput", MODE="0660", GROUP="input", SECLABEL{selinux}="system_u:object_r:input_device_t:s0", OPTIONS+="static_node=uinput"\n' > "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-uinput.rules" && \
             printf 'KERNEL=="vds[0-9]*", MODE="0660", GROUP="input", SECLABEL{selinux}="system_u:object_r:input_device_t:s0"\n' >> "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-uinput.rules"
 
@@ -93,4 +87,4 @@ modules:
             depmod -a -b / "${KERNEL_VERSION}" && \
             systemctl enable vdsd.service && \
             systemctl enable vds-chmod-sdp.path && \
-            rm -rf /vds_build_dir /vds-pkg-root /root/root/rpmbuild
+            rm -rf /vds_build_dir /vds-pkg-root /root/rpmbuild
