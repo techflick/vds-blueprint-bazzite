@@ -91,7 +91,7 @@ modules:
             cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS="-isystem /vds_build_dir/include" -DCMAKE_CXX_FLAGS="-isystem /vds_build_dir/include" && \
             make
 
-        # 5. RPM-Paketstruktur vorbereiten (PKG_ROOT) inklusive nativer Udev-Korrekturen
+        # 5. RPM-Paketstruktur vorbereiten (PKG_ROOT) inklusive nativer Udev-Korrekturen via driver_override
         RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
             PKG_ROOT="/vds-pkg-root" && \
             mkdir -p "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra" && \
@@ -113,8 +113,8 @@ modules:
             printf "[Unit]\nDescription=Setze Berechtigungen für vDS SDP-Socket wenn er erscheint\n\n[Service]\nType=oneshot\nExecStart=/usr/bin/chmod 0777 /run/sdp\nRemainAfterExit=yes\n" > "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.service" && \
             printf "[Unit]\nDescription=Überwache BlueZ SDP-Socket für vDS\n\n[Path]\nPathChanged=/run/sdp\nUnit=vds-chmod-sdp.service\n\n[Install]\nWantedBy=multi-user.target\n" > "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.path" && \
             printf "<!DOCTYPE busconfig PUBLIC \"-//freedesktop//DTD D-BUS Bus Configuration 1.0//EN\"\n \"http://freedesktop.org\">\n<busconfig>\n  <policy user=\"root\">\n    <allow own=\"org.vdsd\"/>\n    <allow send_destination=\"org.vdsd\"/>\n  </policy>\n  <policy context=\"default\">\n    <allow send_destination=\"org.vdsd\"/>\n  </policy>\n</busconfig>\n" > "${PKG_ROOT}/usr/share/dbus-1/system.d/org.vdsd.conf" && \
-            # ANPASSUNG: Dynamisches Unbind zur Laufzeit verhindert die Kernel-Blockade und übergibt das freie hidraw-Device sauber an den Client
-            printf 'SUBSYSTEM=="hid", DRIVER=="playstation", ATTRS{idVendor}=="054c", ATTRS{idProduct}=="05c4", GOTO="vds_exclusive_end"\nSUBSYSTEM=="hid", DRIVER=="playstation", ATTRS{idVendor}=="054c", ATTRS{idProduct}=="09cc", GOTO="vds_exclusive_end"\nSUBSYSTEM=="hid", DRIVER=="playstation", ATTRS{idVendor}=="054c", ATTRS{idProduct}=="0ce6|0df2", RUN+="/bin/sh -c '\''echo %%k > /sys/bus/hid/drivers/playstation/unbind'\''", GOTO="vds_trigger"\nGOTO="vds_exclusive_end"\nLABEL="vds_trigger"\nACTION=="add", SUBSYSTEM=="hidraw", KERNEL=="hidraw*", RUN+="/usr/bin/vdsctl attach --profile ds5 --path /dev/%%k"\nLABEL="vds_exclusive_end"\n' > "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-dualsense-udev.rules" && \
+            # ANPASSUNG REV 16.0: driver_override verhindert hid-playstation Bindung im Keim (Unterstützt natives & virtuelles UHID-Subsystem)
+            printf 'SUBSYSTEM=="hid", ATTRS{idVendor}=="054c", ATTRS{idProduct}=="0ce6", ACTION=="add", ATTR{driver_override}="dummy"\nSUBSYSTEM=="hid", ATTRS{idVendor}=="054c", ATTRS{idProduct}=="0df2", ACTION=="add", ATTR{driver_override}="dummy"\nACTION=="add", SUBSYSTEM=="hidraw", ATTRS{idVendor}=="054c", ATTRS{idProduct}=="0ce6", RUN+="/usr/bin/vdsctl attach --profile ds5 --path /dev/%%k"\nACTION=="add", SUBSYSTEM=="hidraw", ATTRS{idVendor}=="054c", ATTRS{idProduct}=="0df2", RUN+="/usr/bin/vdsctl attach --profile dse --path /dev/%%k"\n' > "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-dualsense-udev.rules" && \
             printf 'KERNEL=="uinput", MODE="0660", GROUP="input", SECLABEL{selinux}="system_u:object_r:input_device_t:s0", OPTIONS+="static_node=uinput"\n' > "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-uinput.rules" && \
             printf 'KERNEL=="vds[0-9]*", MODE="0660", GROUP="input", SECLABEL{selinux}="system_u:object_r:input_device_t:s0"\n' >> "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-uinput.rules"
 
