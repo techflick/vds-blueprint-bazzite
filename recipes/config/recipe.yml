@@ -113,8 +113,8 @@ modules:
             printf "[Unit]\nDescription=Setze Berechtigungen für vDS SDP-Socket wenn er erscheint\n\n[Service]\nType=oneshot\nExecStart=/usr/bin/chmod 0777 /run/sdp\nRemainAfterExit=yes\n" > "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.service" && \
             printf "[Unit]\nDescription=Überwache BlueZ SDP-Socket für vDS\n\n[Path]\nPathChanged=/run/sdp\nUnit=vds-chmod-sdp.service\n\n[Install]\nWantedBy=multi-user.target\n" > "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.path" && \
             printf "<!DOCTYPE busconfig PUBLIC \"-//freedesktop//DTD D-BUS Bus Configuration 1.0//EN\"\n \"http://freedesktop.org\">\n<busconfig>\n  <policy user=\"root\">\n    <allow own=\"org.vdsd\"/>\n    <allow send_destination=\"org.vdsd\"/>\n  </policy>\n  <policy context=\"default\">\n    <allow send_destination=\"org.vdsd\"/>\n  </policy>\n</busconfig>\n" > "${PKG_ROOT}/usr/share/dbus-1/system.d/org.vdsd.conf" && \
-            # KORREKTUR: Filterung schützt DualShock 3/4 (DRIVER==playstation) und nutzt die korrekte vDS-Flag-Syntax samt $env{HID_UNIQ}
-            printf 'SUBSYSTEM=="hid", DRIVER=="playstation", ATTRS{idVendor}=="054c", ATTRS{idProduct}=="05c4", GOTO="vds_exclusive_end"\nSUBSYSTEM=="hid", DRIVER=="playstation", ATTRS{idVendor}=="054c", ATTRS{idProduct}=="09cc", GOTO="vds_exclusive_end"\nACTION=="add", SUBSYSTEM=="hid", DRIVER=="playstation", ATTRS{idVendor}=="054c", ATTRS{idProduct}=="0ce6", RUN+="/usr/bin/vdsctl attach \$env{HID_UNIQ} --profile ds5"\nACTION=="add", SUBSYSTEM=="hid", DRIVER=="playstation", ATTRS{idVendor}=="054c", ATTRS{idProduct}=="0df2", RUN+="/usr/bin/vdsctl attach \$env{HID_UNIQ} --profile ds5"\nLABEL="vds_exclusive_end"\n' > "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-dualsense-udev.rules" && \
+            # ANPASSUNG: Dynamisches Unbind zur Laufzeit verhindert die Kernel-Blockade und übergibt das freie hidraw-Device sauber an den Client
+            printf 'SUBSYSTEM=="hid", DRIVER=="playstation", ATTRS{idVendor}=="054c", ATTRS{idProduct}=="05c4", GOTO="vds_exclusive_end"\nSUBSYSTEM=="hid", DRIVER=="playstation", ATTRS{idVendor}=="054c", ATTRS{idProduct}=="09cc", GOTO="vds_exclusive_end"\nSUBSYSTEM=="hid", DRIVER=="playstation", ATTRS{idVendor}=="054c", ATTRS{idProduct}=="0ce6|0df2", RUN+="/bin/sh -c '\''echo %%k > /sys/bus/hid/drivers/playstation/unbind'\''", GOTO="vds_trigger"\nGOTO="vds_exclusive_end"\nLABEL="vds_trigger"\nACTION=="add", SUBSYSTEM=="hidraw", KERNEL=="hidraw*", RUN+="/usr/bin/vdsctl attach --profile ds5 --path /dev/%%k"\nLABEL="vds_exclusive_end"\n' > "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-dualsense-udev.rules" && \
             printf 'KERNEL=="uinput", MODE="0660", GROUP="input", SECLABEL{selinux}="system_u:object_r:input_device_t:s0", OPTIONS+="static_node=uinput"\n' > "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-uinput.rules" && \
             printf 'KERNEL=="vds[0-9]*", MODE="0660", GROUP="input", SECLABEL{selinux}="system_u:object_r:input_device_t:s0"\n' >> "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-uinput.rules"
 
@@ -129,9 +129,10 @@ modules:
             echo "%description" >> /root/rpmbuild/SPECS/vds.spec && \
             echo "Virtual DualSense Driver und Daemon für Bazzite." >> /root/rpmbuild/SPECS/vds.spec && \
             echo "%post" >> /root/rpmbuild/SPECS/vds.spec && \
-            # Verhindert Fehler, falls SELinux-Kontexte im GitHub-Runner nicht geladen werden können
-            echo "/usr/sbin/restorecon -R /usr/bin/vdsd /usr/bin/vdsctl /usr/lib/systemd/system/vdsd.service /usr/etc/bluetooth /usr/lib/udev/rules.d/99-vds-*.rules 2>/dev/null || true" >> /root/rpmbuild/SPECS/vds.spec && \
+            # KORREKTUR: Schließt die vDS-Datenbank im beschreibbaren Bazzite-Pfad in den SELinux-Kontext ein
+            echo "/usr/sbin/restorecon -R /usr/bin/vdsd /usr/bin/vdsctl /usr/lib/systemd/system/vdsd.service /usr/etc/bluetooth /usr/lib/udev/rules.d/99-vds-*.rules /var/lib/vdsd 2>/dev/null || true" >> /root/rpmbuild/SPECS/vds.spec && \
             echo "/usr/bin/udevadm control --reload-rules 2>/dev/null || true" >> /root/rpmbuild/SPECS/vds.spec && \
+            echo "/usr/bin/udevadm trigger --action=change 2>/dev/null || true" >> /root/rpmbuild/SPECS/vds.spec && \
             echo "/usr/bin/systemctl daemon-reload 2>/dev/null || true" >> /root/rpmbuild/SPECS/vds.spec && \
             echo "/usr/bin/systemctl preset vdsd.service 2>/dev/null || true" >> /root/rpmbuild/SPECS/vds.spec && \
             echo "/usr/bin/systemctl enable vdsd.service 2>/dev/null || true" >> /root/rpmbuild/SPECS/vds.spec && \
