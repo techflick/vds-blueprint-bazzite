@@ -30,13 +30,13 @@ modules:
             cd /vds_build_dir/module && \
             make KCFLAGS="-w" KERNELRELEASE="${KERNEL_VERSION}" KERNELDIR="${KERNEL_BUILD_DIR}"
             
-        # NEU: Zwangsumleitung für DualSense & Edge in Sackgasse (Priorisierte Treiber-Sperre via install)
+        # REVISION 17.4: Präzisions-Schranke via Modprobe unter Erhalt des hidraw-Knotens (DualShock-Support garantiert)
         RUN mkdir -p /usr/lib/modprobe.d && \
             ( \
-              echo "install hid:b0005*v0000054Cp00000CE6* /bin/true"; \
-              echo "install hid:b0005*v0000054Cp00000DF2* /bin/true"; \
-              echo "alias hid:b0005*v0000054Cp00000CE6* vds_null_driver"; \
-              echo "alias hid:b0005*v0000054Cp00000DF2* vds_null_driver"; \
+              echo "install hid:b0005g*v0000054Cp00000CE6* /bin/true"; \
+              echo "install hid:b0005g*v0000054Cp00000DF2* /bin/true"; \
+              echo "alias hid:b0005g*v0000054Cp00000CE6* vds_null_driver"; \
+              echo "alias hid:b0005g*v0000054Cp00000DF2* vds_null_driver"; \
               echo "blacklist vds_null_driver"; \
             ) > /usr/lib/modprobe.d/vds-alias.conf
 
@@ -117,10 +117,10 @@ modules:
             chmod 755 "${PKG_ROOT}/usr/bin/vdsd" "${PKG_ROOT}/usr/bin/vdsctl" && \
             printf "vds_hcd\n" > "${PKG_ROOT}/usr/lib/modules-load.d/vds.conf" && \
             ( \
-              echo "install hid:b0005*v0000054Cp00000CE6* /bin/true"; \
-              echo "install hid:b0005*v0000054Cp00000DF2* /bin/true"; \
-              echo "alias hid:b0005*v0000054Cp00000CE6* vds_null_driver"; \
-              echo "alias hid:b0005*v0000054Cp00000DF2* vds_null_driver"; \
+              echo "install hid:b0005g*v0000054Cp00000CE6* /bin/true"; \
+              echo "install hid:b0005g*v0000054Cp00000DF2* /bin/true"; \
+              echo "alias hid:b0005g*v0000054Cp00000CE6* vds_null_driver"; \
+              echo "alias hid:b0005g*v0000054Cp00000DF2* vds_null_driver"; \
               echo "blacklist vds_null_driver"; \
             ) > "${PKG_ROOT}/usr/lib/modprobe.d/vds-alias.conf" && \
             printf "[Service]\nExecStart=\nExecStart=/usr/libexec/bluetooth/bluetoothd --compat\n" > "${PKG_ROOT}/usr/lib/systemd/system/bluetooth.service.d/override.conf" && \
@@ -129,7 +129,7 @@ modules:
             printf "[Unit]\nDescription=Setze Berechtigungen für vDS SDP-Socket wenn er erscheint\n\n[Service]\nType=oneshot\nExecStart=/usr/bin/chmod 0777 /run/sdp\nRemainAfterExit=yes\n" > "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.service" && \
             printf "[Unit]\nDescription=Überwache BlueZ SDP-Socket für vDS\n\n[Path]\nPathChanged=/run/sdp\nUnit=vds-chmod-sdp.service\n\n[Install]\nWantedBy=multi-user.target\n" > "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.path" && \
             printf "<!DOCTYPE busconfig PUBLIC \"-//freedesktop//DTD D-BUS Bus Configuration 1.0//EN\"\n \"http://freedesktop.org\">\n<busconfig>\n  <policy user=\"root\">\n    <allow own=\"org.vdsd\"/>\n    <allow send_destination=\"org.vdsd\"/>\n  </policy>\n  <policy context=\"default\">\n    <allow send_destination=\"org.vdsd\"/>\n  </policy>\n</busconfig>\n" > "${PKG_ROOT}/usr/share/dbus-1/system.d/org.vdsd.conf" && \
-            printf 'ACTION=="add", SUBSYSTEM=="hidraw", ATTRS{idVendor}=="054c", ATTRS{idProduct}=="0ce6", RUN+="/usr/bin/vdsctl attach --profile ds5 --path /dev/%%k"\nACTION=="add", SUBSYSTEM=="hidraw", ATTRS{idVendor}=="054c", ATTRS{idProduct}=="0df2", RUN+="/usr/bin/vdsctl attach --profile dse --path /dev/%%k"\n' > "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-dualsense-udev.rules" && \
+            printf 'ACTION=="add", SUBSYSTEM=="hidraw", ATTRS{idVendor}=="054c", ATTRS{idProduct}=="0ce6", RUN+="/usr/bin/vdsctl attach --profile ds5 --path /dev/\$kernel"\nACTION=="add", SUBSYSTEM=="hidraw", ATTRS{idVendor}=="054c", ATTRS{idProduct}=="0df2", RUN+="/usr/bin/vdsctl attach --profile dse --path /dev/\$kernel"\n' > "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-dualsense-udev.rules" && \
             printf 'KERNEL=="uinput", MODE="0660", GROUP="input", SECLABEL{selinux}="system_u:object_r:input_device_t:s0", OPTIONS+="static_node=uinput"\n' > "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-uinput.rules" && \
             printf 'KERNEL=="vds[0-9]*", MODE="0660", GROUP="input", SECLABEL{selinux}="system_u:object_r:input_device_t:s0"\n' >> "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-uinput.rules"
 
@@ -172,8 +172,7 @@ modules:
             rpmbuild --define "_topdir /root/rpmbuild" --buildroot=/vds-pkg-root -bb /root/rpmbuild/SPECS/vds.spec && \
             rpm -ivh --nodeps /root/rpmbuild/RPMS/x86_64/kmod-vds-1.0.0-1.x86_64.rpm
 
-        # 7. Atomares Aufräumen & Kmod/Initramfs-Brennen
+        # 7. Atomares Aufräumen & Modul-Abhängigkeiten indizieren
         RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
             depmod -a -b / "${KERNEL_VERSION}" && \
-            dracut --regenerate-all --force && \
             rm -rf /vds_build_dir /vds-pkg-root /root/rpmbuild
