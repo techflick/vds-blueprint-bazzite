@@ -93,11 +93,9 @@ modules:
 
         # 4. Daemon kompilieren und C++ Quellcode-Patches anwenden (Priorisiert die lokalen Header)
         RUN cd /vds_build_dir && \
-            # KORREKTUR REV 17.3: Kein Löschen von htobs mehr! Erlaubt korrekte Socket-Initialisierung.
             sed -i '/pkg_check_modules.*bluez/c\set(bluez_FOUND TRUE)\nset(bluez_INCLUDE_DIRS "/vds_build_dir/include")\nset(bluez_LIBRARIES "")' CMakeLists.txt && \
             sed -i 's/PkgConfig::BLUEZ//g' CMakeLists.txt && \
             mkdir -p build && cd build && \
-            # HINWEIS: -isystem zwingt den Compiler, unseren Header VOR den System-Headern zu laden
             cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS="-isystem /vds_build_dir/include" -DCMAKE_CXX_FLAGS="-isystem /vds_build_dir/include" && \
             make
 
@@ -118,7 +116,6 @@ modules:
             find /vds_build_dir/build -type f -name "vdsctl" -exec cp {} "${PKG_ROOT}/usr/bin/vdsctl" \; && \
             chmod 755 "${PKG_ROOT}/usr/bin/vdsd" "${PKG_ROOT}/usr/bin/vdsctl" && \
             printf "vds_hcd\n" > "${PKG_ROOT}/usr/lib/modules-load.d/vds.conf" && \
-            # ANPASSUNG REV 17.3: Priorisierte Treiber-Sperre via install mit Wildcards (Garantiert absolute Treiberlosigkeit)
             ( \
               echo "install hid:b0005*v0000054Cp00000CE6* /bin/true"; \
               echo "install hid:b0005*v0000054Cp00000DF2* /bin/true"; \
@@ -132,7 +129,6 @@ modules:
             printf "[Unit]\nDescription=Setze Berechtigungen für vDS SDP-Socket wenn er erscheint\n\n[Service]\nType=oneshot\nExecStart=/usr/bin/chmod 0777 /run/sdp\nRemainAfterExit=yes\n" > "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.service" && \
             printf "[Unit]\nDescription=Überwache BlueZ SDP-Socket für vDS\n\n[Path]\nPathChanged=/run/sdp\nUnit=vds-chmod-sdp.service\n\n[Install]\nWantedBy=multi-user.target\n" > "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.path" && \
             printf "<!DOCTYPE busconfig PUBLIC \"-//freedesktop//DTD D-BUS Bus Configuration 1.0//EN\"\n \"http://freedesktop.org\">\n<busconfig>\n  <policy user=\"root\">\n    <allow own=\"org.vdsd\"/>\n    <allow send_destination=\"org.vdsd\"/>\n  </policy>\n  <policy context=\"default\">\n    <allow send_destination=\"org.vdsd\"/>\n  </policy>\n</busconfig>\n" > "${PKG_ROOT}/usr/share/dbus-1/system.d/org.vdsd.conf" && \
-            # ANPASSUNG REV 17.3: Sauberes Userspace-Attachment auf der nun garantiert treiberlosen hidraw-Schnittstelle
             printf 'ACTION=="add", SUBSYSTEM=="hidraw", ATTRS{idVendor}=="054c", ATTRS{idProduct}=="0ce6", RUN+="/usr/bin/vdsctl attach --profile ds5 --path /dev/%%k"\nACTION=="add", SUBSYSTEM=="hidraw", ATTRS{idVendor}=="054c", ATTRS{idProduct}=="0df2", RUN+="/usr/bin/vdsctl attach --profile dse --path /dev/%%k"\n' > "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-dualsense-udev.rules" && \
             printf 'KERNEL=="uinput", MODE="0660", GROUP="input", SECLABEL{selinux}="system_u:object_r:input_device_t:s0", OPTIONS+="static_node=uinput"\n' > "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-uinput.rules" && \
             printf 'KERNEL=="vds[0-9]*", MODE="0660", GROUP="input", SECLABEL{selinux}="system_u:object_r:input_device_t:s0"\n' >> "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-uinput.rules"
@@ -148,7 +144,6 @@ modules:
             echo "%description" >> /root/rpmbuild/SPECS/vds.spec && \
             echo "Virtual DualSense Driver und Daemon für Bazzite." >> /root/rpmbuild/SPECS/vds.spec && \
             echo "%post" >> /root/rpmbuild/SPECS/vds.spec && \
-            # KORREKTUR REV 17.3: Schließt die neuen Modprobe-Aliase für den Null-Treiber-Fehler und die vDS-Datenbank in den SELinux-Kontext ein
             echo "/usr/sbin/restorecon -R /usr/bin/vdsd /usr/bin/vdsctl /usr/lib/systemd/system/vdsd.service /usr/etc/bluetooth /usr/lib/udev/rules.d/99-vds-*.rules /usr/lib/modprobe.d/vds-alias.conf /var/lib/vdsd 2>/dev/null || true" >> /root/rpmbuild/SPECS/vds.spec && \
             echo "/usr/bin/udevadm control --reload-rules 2>/dev/null || true" >> /root/rpmbuild/SPECS/vds.spec && \
             echo "/usr/bin/udevadm trigger --action=change 2>/dev/null || true" >> /root/rpmbuild/SPECS/vds.spec && \
@@ -160,7 +155,6 @@ modules:
             echo "%files" >> /root/rpmbuild/SPECS/vds.spec && \
             echo "/usr/lib/modules/${KERNEL_VERSION}/extra/vds_hcd.ko" >> /root/rpmbuild/SPECS/vds.spec && \
             echo "/usr/lib/modules-load.d/vds.conf" >> /root/rpmbuild/SPECS/vds.spec && \
-            # ANPASSUNG REV 17.3: Registrierung der präventiven Modprobe-Aliase in der Spec-File statt der alten Quirks
             echo "%dir /usr/lib/modprobe.d" >> /root/rpmbuild/SPECS/vds.spec && \
             echo "/usr/lib/modprobe.d/vds-alias.conf" >> /root/rpmbuild/SPECS/vds.spec && \
             echo "/usr/bin/vdsd" >> /root/rpmbuild/SPECS/vds.spec && \
@@ -181,6 +175,5 @@ modules:
         # 7. Atomares Aufräumen & Kmod/Initramfs-Brennen
         RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
             depmod -a -b / "${KERNEL_VERSION}" && \
-            # ANPASSUNG REV 17.3: Zwingt Dracut dazu, die veränderte vDS-Sackgasse direkt in das atomare Image einzubacken
             dracut --regenerate-all --force && \
-            rm -rf /vds_build_dir /vds-pkg-root /root/root/rpmbuild
+            rm -rf /vds_build_dir /vds-pkg-root /root/rpmbuild
