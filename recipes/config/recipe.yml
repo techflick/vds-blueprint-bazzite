@@ -149,10 +149,7 @@ modules:
             echo "%description" >> /root/rpmbuild/SPECS/vds.spec && \
             echo "Virtual DualSense Driver und Daemon für Bazzite." >> /root/rpmbuild/SPECS/vds.spec && \
             echo "%post" >> /root/rpmbuild/SPECS/vds.spec && \
-            \
-            # SELINUX: Pfad auf /var/lib/vds für korrekten Kontext-Reset angepasst
             echo "/usr/sbin/restorecon -R /usr/bin/vdsd /usr/bin/vdsctl /usr/lib/systemd/system/vdsd.service /usr/etc/bluetooth /usr/lib/udev/rules.d/99-vds-*.rules /var/lib/vds 2>/dev/null || true" >> /root/rpmbuild/SPECS/vds.spec && \
-            \
             echo "/usr/bin/udevadm control --reload-rules 2>/dev/null || true" >> /root/rpmbuild/SPECS/vds.spec && \
             echo "/usr/bin/udevadm trigger --action=change 2>/dev/null || true" >> /root/rpmbuild/SPECS/vds.spec && \
             echo "/usr/bin/systemctl daemon-reload 2>/dev/null || true" >> /root/rpmbuild/SPECS/vds.spec && \
@@ -161,7 +158,7 @@ modules:
             echo "/usr/bin/systemctl preset vds-chmod-sdp.path 2>/dev/null || true" >> /root/rpmbuild/SPECS/vds.spec && \
             echo "/usr/bin/systemctl enable vds-chmod-sdp.path 2>/dev/null || true" >> /root/rpmbuild/SPECS/vds.spec && \
             echo "%files" >> /root/rpmbuild/SPECS/vds.spec && \
-            echo "/usr/lib/modules/${KERNEL_VERSION}/extra/vds_hcd.ko" >> /root/rpmbuild/SPECS/vds.spec && \
+            echo "/usr/lib/modules/\${KERNEL_VERSION}/extra/vds_hcd.ko" >> /root/rpmbuild/SPECS/vds.spec && \
             echo "/usr/lib/modules-load.d/vds.conf" >> /root/rpmbuild/SPECS/vds.spec && \
             echo "/usr/bin/vdsd" >> /root/rpmbuild/SPECS/vds.spec && \
             echo "/usr/bin/vdsctl" >> /root/rpmbuild/SPECS/vds.spec && \
@@ -172,14 +169,16 @@ modules:
             echo "/usr/lib/systemd/system/vdsd.service" >> /root/rpmbuild/SPECS/vds.spec && \
             echo "/usr/lib/systemd/system/vds-chmod-sdp.service" >> /root/rpmbuild/SPECS/vds.spec && \
             echo "/usr/lib/systemd/system/vds-chmod-sdp.path" >> /root/rpmbuild/SPECS/vds.spec && \
-            \
-            # D-BUS: Pfad im RPM an org.vds.conf angepasst
             echo "/usr/share/dbus-1/system.d/org.vds.conf" >> /root/rpmbuild/SPECS/vds.spec && \
-            \
             echo "/usr/lib/udev/rules.d/99-vds-dualsense-udev.rules" >> /root/rpmbuild/SPECS/vds.spec && \
             echo "/usr/lib/udev/rules.d/99-vds-uinput.rules" >> /root/rpmbuild/SPECS/vds.spec && \
             rpmbuild --define "_topdir /root/rpmbuild" --buildroot=/vds-pkg-root -bb /root/rpmbuild/SPECS/vds.spec && \
             rpm -ivh --nodeps /root/rpmbuild/RPMS/x86_64/kmod-vds-1.0.0-1.x86_64.rpm
+
+        # 7. Atomares Aufräumen & Modul-Abhängigkeiten indizieren
+        RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
+            depmod -a -b / "${KERNEL_VERSION}" && \
+            rm -rf /vds_build_dir /vds-pkg-root /root/root/rpmbuild
 
         # 7. Atomares Aufräumen & Modul-Abhängigkeiten indizieren
         RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
