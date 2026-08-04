@@ -1,6 +1,6 @@
 # yaml-language-server: $schema=https://blue-build.org
 name: mein-bazzite-vds
-description: "Mein persönliches Bazzite mit nativer Integration des vDS Treibers und Daemons ohne Distrobox."
+description: "Mein persönliches Bazzite mit nativer Integration des vDS Treibers und Daemons (v0.4.0) ohne Distrobox."
 
 base-image: ghcr.io/ublue-os/bazzite
 image-version: latest
@@ -21,7 +21,7 @@ modules:
   - type: containerfile
     snippets:
       - |
-        # 1. vDS-Repository frisch klonen
+        # 1. vDS-Repository frisch klonen (Zieht automatisch die aktuelle Version 0.4.0)
         RUN git clone --depth 1 https://github.com/hurryman2212/vds.git /vds_build_dir
 
         # 2. Kernel-Modul kompilieren
@@ -30,7 +30,7 @@ modules:
             cd /vds_build_dir/module && \
             make KCFLAGS="-w" KERNELRELEASE="${KERNEL_VERSION}" KERNELDIR="${KERNEL_BUILD_DIR}"
             
-        # REVISION 17.6: Präzisions-Schranke via Sysfs Driver Override & uaccess-Rechte
+        # Präzisions-Schranke via Sysfs Driver Override & uaccess-Rechte
         # Zwingt den Kernel, /dev/hidrawX zu erzeugen, schneidet hid-playstation/hid-generic aber rigoros den Weg ab.
         RUN mkdir -p /usr/lib/udev/rules.d && \
             ( \
@@ -91,7 +91,7 @@ modules:
         #endif
         EOF
 
-        # 4. Daemon kompilieren und C++ Quellcode-Patches anwenden (Priorisiert die lokalen Header)
+        # 4. Daemon kompilieren (Priorisiert die lokalen Header)
         RUN cd /vds_build_dir && \
             sed -i '/pkg_check_modules.*bluez/c\set(bluez_FOUND TRUE)\nset(bluez_INCLUDE_DIRS "/vds_build_dir/include")\nset(bluez_LIBRARIES "")' CMakeLists.txt && \
             sed -i 's/PkgConfig::BLUEZ//g' CMakeLists.txt && \
@@ -99,7 +99,7 @@ modules:
             cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS="-isystem /vds_build_dir/include" -DCMAKE_CXX_FLAGS="-isystem /vds_build_dir/include" && \
             make
 
-        # 5. RPM-Paketstruktur vorbereiten (PKG_ROOT) inklusive korrekter Driver-Override Schranke für das RPM
+        # 5. RPM-Paketstruktur vorbereiten (PKG_ROOT) angepasst auf v0.4.0 Standard-Strukturen
         RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
             PKG_ROOT="/vds-pkg-root" && \
             mkdir -p "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra" && \
@@ -118,20 +118,27 @@ modules:
             printf "vds_hcd\n" > "${PKG_ROOT}/usr/lib/modules-load.d/vds.conf" && \
             printf "[Service]\nExecStart=\nExecStart=/usr/libexec/bluetooth/bluetoothd --compat\n" > "${PKG_ROOT}/usr/lib/systemd/system/bluetooth.service.d/override.conf" && \
             printf "[General]\nUserspaceHID=true\n" > "${PKG_ROOT}/usr/etc/bluetooth/main.conf" && \
-            printf "[Unit]\nDescription=Virtual DualSense Userspace Daemon\nAfter=bluetooth.service vds-chmod-sdp.service\nRequires=bluetooth.service\n\n[Service]\nType=simple\nExecStartPre=/usr/bin/mkdir -p /var/lib/vdsd\nExecStart=/usr/bin/vdsd --db-path /var/lib/vdsd/vdsd.db\nRestart=always\nRestartSec=5\nUser=root\nGroup=root\nRestrictAddressFamilies=\nNoNewPrivileges=no\nPrivateNetwork=no\nPrivateTmp=no\nProtectSystem=false\nProtectHome=false\nCapabilityBoundingSet=CAP_NET_RAW CAP_SYS_ADMIN CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_SYS_RAWIO\nAmbientCapabilities=CAP_NET_RAW CAP_SYS_ADMIN CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_SYS_RAWIO\n\n[Install]\nWantedBy=multi-user.target\n" > "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service" && \
+            \
+            # SYSTEMD-UNIT: Nutzung von /var/lib/vds (JSONL Format) & Entfernung von --db-path.
+            printf "[Unit]\nDescription=Virtual DualSense Userspace Daemon (v0.4.0 Native)\nAfter=bluetooth.service vds-chmod-sdp.service\nRequires=bluetooth.service\n\n[Service]\nType=simple\nExecStartPre=/usr/bin/mkdir -p /var/lib/vds\nExecStart=/usr/bin/vdsd\nRestart=always\nRestartSec=5\nUser=root\nGroup=root\nRestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_BLUETOOTH\nNoNewPrivileges=no\nPrivateNetwork=no\nPrivateTmp=no\nProtectSystem=false\nProtectHome=false\nCapabilityBoundingSet=CAP_NET_RAW CAP_SYS_ADMIN CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_SYS_RAWIO\nAmbientCapabilities=CAP_NET_RAW CAP_SYS_ADMIN CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_SYS_RAWIO\n\n[Install]\nWantedBy=multi-user.target\n" > "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service" && \
+            \
             printf "[Unit]\nDescription=Setze Berechtigungen für vDS SDP-Socket wenn er erscheint\n\n[Service]\nType=oneshot\nExecStart=/usr/bin/chmod 0777 /run/sdp\nRemainAfterExit=yes\n" > "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.service" && \
             printf "[Unit]\nDescription=Überwache BlueZ SDP-Socket für vDS\n\n[Path]\nPathChanged=/run/sdp\nUnit=vds-chmod-sdp.service\n\n[Install]\nWantedBy=multi-user.target\n" > "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.path" && \
-            printf "<!DOCTYPE busconfig PUBLIC \"-//freedesktop//DTD D-BUS Bus Configuration 1.0//EN\"\n \"http://freedesktop.org\">\n<busconfig>\n  <policy user=\"root\">\n    <allow own=\"org.vdsd\"/>\n    <allow send_destination=\"org.vdsd\"/>\n  </policy>\n  <policy context=\"default\">\n    <allow send_destination=\"org.vdsd\"/>\n  </policy>\n</busconfig>\n" > "${PKG_ROOT}/usr/share/dbus-1/system.d/org.vdsd.conf" && \
+            \
+            # D-BUS: Erlaubnisse an den v0.4.0 Bezeichner (org.vds) angepasst
+            printf "<!DOCTYPE busconfig PUBLIC \"-//freedesktop//DTD D-BUS Bus Configuration 1.0//EN\"\n \"http://freedesktop.org\">\n<busconfig>\n  <policy user=\"root\">\n    <allow own=\"org.vds\"/>\n    <allow send_destination=\"org.vds\"/>\n  </policy>\n  <policy context=\"default\">\n    <allow send_destination=\"org.vds\"/>\n  </policy>\n</busconfig>\n" > "${PKG_ROOT}/usr/share/dbus-1/system.d/org.vds.conf" && \
+            \
+            # UDEV-RULES: Anpassung an die neue v0.4.0 Syntax (Entfernung von --path)
             ( \
               echo 'SUBSYSTEM=="hid", ATTRS{modalias}=="hid:b0005g*v0000054Cp00000CE6*", ATTR{driver_override}="dummy"'; \
               echo 'SUBSYSTEM=="hid", ATTRS{modalias}=="hid:b0005g*v0000054Cp00000DF2*", ATTR{driver_override}="dummy"'; \
-              echo 'KERNEL=="hidraw*", ATTRS{modalias}=="hid:b0005g*v0000054Cp00000CE6*", MODE="0660", TAG+="uaccess", RUN+="/usr/bin/vdsctl attach --profile ds5 --path /dev/\$kernel"'; \
-              echo 'KERNEL=="hidraw*", ATTRS{modalias}=="hid:b0005g*v0000054Cp00000DF2*", MODE="0660", TAG+="uaccess", RUN+="/usr/bin/vdsctl attach --profile dse --path /dev/\$kernel"'; \
+              echo 'KERNEL=="hidraw*", ATTRS{modalias}=="hid:b0005g*v0000054Cp00000CE6*", MODE="0660", TAG+="uaccess", RUN+="/usr/bin/vdsctl attach --profile ds5 --ports 0"'; \
+              echo 'KERNEL=="hidraw*", ATTRS{modalias}=="hid:b0005g*v0000054Cp00000DF2*", MODE="0660", TAG+="uaccess", RUN+="/usr/bin/vdsctl attach --profile dse --ports 1"'; \
             ) > "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-dualsense-udev.rules" && \
             printf 'KERNEL=="uinput", MODE="0660", GROUP="input", SECLABEL{selinux}="system_u:object_r:input_device_t:s0", OPTIONS+="static_node=uinput"\n' > "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-uinput.rules" && \
             printf 'KERNEL=="vds[0-9]*", MODE="0660", GROUP="input", SECLABEL{selinux}="system_u:object_r:input_device_t:s0"\n' >> "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-uinput.rules"
 
-        # 6. Natives RPM via rpmbuild generieren und installieren (Optimierte SELinux- & Systemd-Pfade)
+# 6. Natives RPM via rpmbuild generieren und installieren (Optimierte SELinux- & Systemd-Pfade)
         RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
             mkdir -p /root/rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS} && \
             echo "Name: kmod-vds" > /root/rpmbuild/SPECS/vds.spec && \
@@ -142,7 +149,10 @@ modules:
             echo "%description" >> /root/rpmbuild/SPECS/vds.spec && \
             echo "Virtual DualSense Driver und Daemon für Bazzite." >> /root/rpmbuild/SPECS/vds.spec && \
             echo "%post" >> /root/rpmbuild/SPECS/vds.spec && \
-            echo "/usr/sbin/restorecon -R /usr/bin/vdsd /usr/bin/vdsctl /usr/lib/systemd/system/vdsd.service /usr/etc/bluetooth /usr/lib/udev/rules.d/99-vds-*.rules /var/lib/vdsd 2>/dev/null || true" >> /root/rpmbuild/SPECS/vds.spec && \
+            \
+            # SELINUX: Pfad auf /var/lib/vds für korrekten Kontext-Reset angepasst
+            echo "/usr/sbin/restorecon -R /usr/bin/vdsd /usr/bin/vdsctl /usr/lib/systemd/system/vdsd.service /usr/etc/bluetooth /usr/lib/udev/rules.d/99-vds-*.rules /var/lib/vds 2>/dev/null || true" >> /root/rpmbuild/SPECS/vds.spec && \
+            \
             echo "/usr/bin/udevadm control --reload-rules 2>/dev/null || true" >> /root/rpmbuild/SPECS/vds.spec && \
             echo "/usr/bin/udevadm trigger --action=change 2>/dev/null || true" >> /root/rpmbuild/SPECS/vds.spec && \
             echo "/usr/bin/systemctl daemon-reload 2>/dev/null || true" >> /root/rpmbuild/SPECS/vds.spec && \
@@ -162,7 +172,10 @@ modules:
             echo "/usr/lib/systemd/system/vdsd.service" >> /root/rpmbuild/SPECS/vds.spec && \
             echo "/usr/lib/systemd/system/vds-chmod-sdp.service" >> /root/rpmbuild/SPECS/vds.spec && \
             echo "/usr/lib/systemd/system/vds-chmod-sdp.path" >> /root/rpmbuild/SPECS/vds.spec && \
-            echo "/usr/share/dbus-1/system.d/org.vdsd.conf" >> /root/rpmbuild/SPECS/vds.spec && \
+            \
+            # D-BUS: Pfad im RPM an org.vds.conf angepasst
+            echo "/usr/share/dbus-1/system.d/org.vds.conf" >> /root/rpmbuild/SPECS/vds.spec && \
+            \
             echo "/usr/lib/udev/rules.d/99-vds-dualsense-udev.rules" >> /root/rpmbuild/SPECS/vds.spec && \
             echo "/usr/lib/udev/rules.d/99-vds-uinput.rules" >> /root/rpmbuild/SPECS/vds.spec && \
             rpmbuild --define "_topdir /root/rpmbuild" --buildroot=/vds-pkg-root -bb /root/rpmbuild/SPECS/vds.spec && \
