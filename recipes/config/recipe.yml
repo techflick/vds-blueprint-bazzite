@@ -92,7 +92,7 @@ modules:
         EOF
 
 # REVISION 18.27 - DAEMON PATCH & EMBEDDED SYSTEMD OVERRIDE (SELINUX COMPATIBLE)
-# 4. Daemon patchen & kompilieren (Weichen-Injektion und Header-Priorisierung)
+## 4. Daemon patchen & kompilieren (Weichen-Injektion und Header-Priorisierung)
         RUN cd /vds_build_dir && \
             sed -i '/pkg_check_modules.*bluez/c\set(bluez_FOUND TRUE)\nset(bluez_INCLUDE_DIRS "/vds_build_dir/include")\nset(bluez_LIBRARIES "")' CMakeLists.txt && \
             sed -i 's/PkgConfig::BLUEZ//g' CMakeLists.txt && \
