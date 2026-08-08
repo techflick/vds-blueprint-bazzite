@@ -134,7 +134,7 @@ modules:
             cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS="-isystem /vds_build_dir/include" -DCMAKE_CXX_FLAGS="-isystem /vds_build_dir/include" && \
             make
             
-        # 5. RPM-Paketstruktur vorbereiten (PKG_ROOT) - Anpassungen für v0.4.0 Sandbox & Pfade
+         # 5. RPM-Paketstruktur vorbereiten (PKG_ROOT) - Anpassungen für v0.4.0 Sandbox & Pfade
         RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
             PKG_ROOT="/vds-pkg-root" && \
             mkdir -p "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra" && \
@@ -161,7 +161,8 @@ modules:
               echo ''; \
               echo '[Service]'; \
               echo 'Type=simple'; \
-              echo 'ExecStartPre=/usr/bin/mkdir -p /var/lib/vdsd'; \
+              echo 'ExecStartPre=/usr/bin/mkdir -p /var/lib/vds'; \
+              echo 'ExecStartPre=/usr/sbin/restorecon -R /var/lib/vds'; \
               echo 'ExecStart=/usr/bin/vdsd'; \
               echo 'Restart=always'; \
               echo 'RestartSec=5'; \
@@ -186,13 +187,13 @@ modules:
             ( \
               echo 'SUBSYSTEM=="hid", ATTRS{modalias}=="hid:b0005g*v0000054Cp00000CE6*", ATTR{driver_override}="dummy"'; \
               echo 'SUBSYSTEM=="hid", ATTRS{modalias}=="hid:b0005g*v0000054Cp00000DF2*", ATTR{driver_override}="dummy"'; \
-              echo 'KERNEL=="hidraw*", ATTRS{modalias}=="hid:b0005g*v0000054Cp00000CE6*", MODE="0660", TAG+="uaccess", RUN+="/usr/bin/vdsctl attach --profile ds5 --ports 0"'; \
-              echo 'KERNEL=="hidraw*", ATTRS{modalias}=="hid:b0005g*v0000054Cp00000DF2*", MODE="0660", TAG+="uaccess", RUN+="/usr/bin/vdsctl attach --profile dse --ports 1"'; \
+              echo 'KERNEL=="hidraw*", ATTRS{modalias}=="hid:b0005g*v0000054Cp00000CE6*", MODE="0660", TAG+="uaccess"'; \
+              echo 'KERNEL=="hidraw*", ATTRS{modalias}=="hid:b0005g*v0000054Cp00000DF2*", MODE="0660", TAG+="uaccess"'; \
             ) > "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-dualsense-udev.rules" && \
             printf 'KERNEL=="uinput", MODE="0660", GROUP="input", SECLABEL{selinux}="system_u:object_r:input_device_t:s0", OPTIONS+="static_node=uinput"\n' > "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-uinput.rules" && \
             printf 'KERNEL=="vds[0-9]*", MODE="0660", GROUP="input", SECLABEL{selinux}="system_u:object_r:input_device_t:s0"\n' >> "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-uinput.rules"
 
-        # 6. Natives RPM via rpmbuild generieren und installieren
+         # 6. Natives RPM via rpmbuild generieren und installieren
         RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
             mkdir -p /root/rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS} && \
             echo "Name: kmod-vds" > /root/rpmbuild/SPECS/vds.spec && \
@@ -203,7 +204,7 @@ modules:
             echo "%description" >> /root/rpmbuild/SPECS/vds.spec && \
             echo "Virtual DualSense Driver und Daemon für Bazzite." >> /root/rpmbuild/SPECS/vds.spec && \
             echo "%post" >> /root/rpmbuild/SPECS/vds.spec && \
-            echo "/usr/sbin/restorecon -R /usr/bin/vdsd /usr/bin/vdsctl /usr/lib/systemd/system/vdsd.service /usr/etc/bluetooth /usr/lib/udev/rules.d/99-vds-*.rules /var/lib/vdsd 2>/dev/null || true" >> /root/rpmbuild/SPECS/vds.spec && \
+            echo "/usr/sbin/restorecon -R /usr/bin/vdsd /usr/bin/vdsctl /usr/lib/systemd/system/vdsd.service /usr/etc/bluetooth /usr/lib/udev/rules.d/99-vds-*.rules /var/lib/vds 2>/dev/null || true" >> /root/rpmbuild/SPECS/vds.spec && \
             echo "/usr/bin/udevadm control --reload-rules 2>/dev/null || true" >> /root/rpmbuild/SPECS/vds.spec && \
             echo "/usr/bin/udevadm trigger --action=change 2>/dev/null || true" >> /root/rpmbuild/SPECS/vds.spec && \
             echo "/usr/bin/systemctl daemon-reload 2>/dev/null || true" >> /root/rpmbuild/SPECS/vds.spec && \
