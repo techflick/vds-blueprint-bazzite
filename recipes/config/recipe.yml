@@ -96,7 +96,7 @@ modules:
         RUN cd /vds_build_dir && \
             sed -i '/pkg_check_modules.*bluez/c\set(bluez_FOUND TRUE)\nset(bluez_INCLUDE_DIRS "/vds_build_dir/include")\nset(bluez_LIBRARIES "")' CMakeLists.txt && \
             sed -i 's/PkgConfig::BLUEZ//g' CMakeLists.txt && \
-            sed -i -E 's/handle_uinput_fallback\(([^,]+),\s*([^,]+),\s*(true|false)\);/run_uinput_proxy_worker(\1, \2);/g' vdsd.cc && \
+            sed -i -E 's/handle_uinput_fallback\(([^,]+),\s*([^,]+),\s*(true|false)\);/run_uinput_proxy_worker(\1, \2);/g' src/platform/linux/vdsd.cc && \
             printf '%s\n' \
             '#include <sys/poll.h>' \
             '#include <fcntl.h>' \
@@ -129,7 +129,7 @@ modules:
             '            break;' \
             '        }' \
             '    }' \
-            '}' >> vdsd.cc && \
+            '}' >> src/platform/linux/vdsd.cc && \
             mkdir -p build && cd build && \
             cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS="-isystem /vds_build_dir/include" -DCMAKE_CXX_FLAGS="-isystem /vds_build_dir/include" && \
             make
