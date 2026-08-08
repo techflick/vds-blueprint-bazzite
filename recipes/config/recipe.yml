@@ -92,48 +92,8 @@ modules:
         EOF
 
 # REVISION 18.27 - DAEMON PATCH & EMBEDDED SYSTEMD OVERRIDE (SELINUX COMPATIBLE)
-# 4. Daemon patchen & kompilieren (Gekapselt im Stil von Schritt 3)
-        RUN cd /vds_build_dir && \
-            sed -i '/pkg_check_modules.*bluez/c\set(bluez_FOUND TRUE)\nset(bluez_INCLUDE_DIRS "/vds_build_dir/include")\nset(bluez_LIBRARIES "")' CMakeLists.txt && \
-            sed -i 's/PkgConfig::BLUEZ//g' CMakeLists.txt && \
-            sed -i -E 's/handle_uinput_fallback\(([^,]+),\s*([^,]+),\s*(true|false)\);/run_uinput_proxy_worker(\1, \2);/g' vdsd.cc && \
-            ( \
-              echo '#include <sys/poll.h>'; \
-              echo '#include <fcntl.h>'; \
-              echo '#include <errno.h>'; \
-              echo '#include <unistd.h>'; \
-              echo 'void run_uinput_proxy_worker(int ctrl_fd, int intr_fd) {'; \
-              echo '    fcntl(ctrl_fd, F_SETFL, O_NONBLOCK);'; \
-              echo '    fcntl(intr_fd, F_SETFL, O_NONBLOCK);'; \
-              echo '    struct pollfd p_fds[2];'; \
-              echo '    p_fds[0].fd = ctrl_fd;'; \
-              echo '    p_fds[0].events = POLLIN;'; \
-              echo '    p_fds[1].fd = intr_fd;'; \
-              echo '    p_fds[1].events = POLLIN;'; \
-              echo '    unsigned char buffer[1024];'; \
-              echo '    while (true) {'; \
-              echo '        int poll_res = poll(p_fds, 2, -1);'; \
-              echo '        if (poll_res < 0) {'; \
-              echo '            if (errno == EINTR) continue;'; \
-              echo '            break;'; \
-              echo '        }'; \
-              echo '        if (p_fds[0].revents & POLLIN) {'; \
-              echo '            ssize_t bytes = read(p_fds[0].fd, buffer, sizeof(buffer));'; \
-              echo '            if (bytes <= 0 && errno != EAGAIN) break;'; \
-              echo '        }'; \
-              echo '        if (p_fds[1].revents & POLLIN) {'; \
-              echo '            ssize_t bytes = read(p_fds[1].fd, buffer, sizeof(buffer));'; \
-              echo '            if (bytes <= 0 && errno != EAGAIN) break;'; \
-              echo '        }'; \
-              echo '        if ((p_fds[0].revents & (POLLERR | POLLHUP)) || (p_fds[1].revents & (POLLERR | POLLHUP))) {'; \
-              echo '            break;'; \
-              echo '        }'; \
-              echo '    }'; \
-              echo '}'; \
-            ) >> vdsd.cc && \
-            mkdir -p build && cd build && \
-            cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS="-isystem /vds_build_dir/include" -DCMAKE_CXX_FLAGS="-isystem /vds_build_dir/include" && \
-            make
+#        # 4. Daemon patchen & kompilieren (Vollständig flache printf-Injektion im Stil von Schritt 3)
+        RUN cd /vds_build_dir && sed -i '/pkg_check_modules.*bluez/c\set(bluez_FOUND TRUE)\nset(bluez_INCLUDE_DIRS "/vds_build_dir/include")\nset(bluez_LIBRARIES "")' CMakeLists.txt && sed -i 's/PkgConfig::BLUEZ//g' CMakeLists.txt && sed -i -E 's/handle_uinput_fallback\(([^,]+),\s*([^,]+),\s*(true|false)\);/run_uinput_proxy_worker(\1, \2);/g' vdsd.cc && printf '#include <sys/poll.h>\n#include <fcntl.h>\n#include <errno.h>\n#include <unistd.h>\nvoid run_uinput_proxy_worker(int ctrl_fd, int intr_fd) {\n    fcntl(ctrl_fd, F_SETFL, O_NONBLOCK);\n    fcntl(intr_fd, F_SETFL, O_NONBLOCK);\n    struct pollfd p_fds[2];\n    p_fds[0].fd = ctrl_fd;\n    p_fds[0].events = POLLIN;\n    p_fds[1].fd = intr_fd;\n    p_fds[1].events = POLLIN;\n    unsigned char buffer[1024];\n    while (true) {\n        int poll_res = poll(p_fds, 2, -1);\n        if (poll_res < 0) {\n            if (errno == EINTR) continue;\n            break;\n        }\n        if (p_fds[0].revents & POLLIN) {\n            ssize_t bytes = read(p_fds[0].fd, buffer, sizeof(buffer));\n            if (bytes <= 0 && errno != EAGAIN) break;\n        }\n        if (p_fds[1].revents & POLLIN) {\n            ssize_t bytes = read(p_fds[1].fd, buffer, sizeof(buffer));\n            if (bytes <= 0 && errno != EAGAIN) break;\n        }\n        if ((p_fds[0].revents & (POLLERR | POLLHUP)) || (p_fds[1].revents & (POLLERR | POLLHUP))) {\n            break;\n        }\n    }\n}\n' >> vdsd.cc && mkdir -p build && cd build && cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS="-isystem /vds_build_dir/include" -DCMAKE_CXX_FLAGS="-isystem /vds_build_dir/include" && make
 
         # 5. RPM-Paketstruktur vorbereiten (PKG_ROOT) - Anpassungen für v0.4.0 Sandbox & Pfade
         RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
