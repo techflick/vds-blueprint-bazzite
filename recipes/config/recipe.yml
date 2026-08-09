@@ -23,7 +23,7 @@ modules:
   - type: containerfile
     snippets:
       - |
-        # Block 1: vDS-Repository frisch klonen (Version 0.4.0)
+        # Block 1: vDS-Repository frisch klonen (Version 0.4.0 Upstream)
         RUN git clone --depth 1 https://github.com/hurryman2212/vds.git /vds_build_dir
 
         # Block 2: Kernel-Modul für die aktive Bazzite-Kernelversion bauen
@@ -32,62 +32,6 @@ modules:
             cd /vds_build_dir/module && \
             make KCFLAGS="-w" KERNELRELEASE="${KERNEL_VERSION}" KERNELDIR="${KERNEL_BUILD_DIR}"
             
-        # Block 3: Lokale Header erzeugen (Ihr Original-Fix gegen den Bazzite/BlueZ-Paketkonflikt)
-        RUN mkdir -p /vds_build_dir/include/bluetooth && \
-            cat << 'EOF' > /vds_build_dir/include/bluetooth/bluetooth.h
-        #ifndef __BLUETOOTH_H
-        #define __BLUETOOTH_H
-        #include <stdint.h>
-        #include <sys/socket.h>
-        #include <string.h>
-        #include <stdio.h>
-        #ifndef AF_BLUETOOTH
-        #define AF_BLUETOOTH 31
-        #endif
-        #ifndef PF_BLUETOOTH
-        #define PF_BLUETOOTH AF_BLUETOOTH
-        #endif
-        #define BTPROTO_L2CAP 0
-        typedef struct { uint8_t b[6]; } __attribute__((packed)) bdaddr_t;
-        static inline int bacmp(const bdaddr_t *ba1, const bdaddr_t *ba2) { return memcmp(ba1, ba2, 6); }
-        static inline void bacpy(bdaddr_t *dst, const bdaddr_t *src) { memcpy(dst, src, 6); }
-        static inline uint16_t htobs(uint16_t n) { return n; }
-        static inline int ba2str(const bdaddr_t *ba, char *str) { 
-            return sprintf(str, "%02x:%02x:%02x:%02x:%02x:%02x", ba->b[5], ba->b[4], ba->b[3], ba->b[2], ba->b[1], ba->b[0]); 
-        }
-        #endif
-        EOF
-
-        RUN cat << 'EOF' > /vds_build_dir/include/bluetooth/l2cap.h
-        #ifndef __L2CAP_H
-        #define __L2CAP_H
-        #include <bluetooth/bluetooth.h>
-        #ifdef __cplusplus
-        extern "C" {
-        #endif
-        struct sockaddr_l2 {
-        	sa_family_t l2_family;
-        	uint16_t l2_psm;
-        	bdaddr_t l2_bdaddr;
-        	uint16_t l2_cid;
-        	uint8_t l2_bdaddr_type;
-        };
-        #ifdef __cplusplus
-        }
-        #endif
-        #ifdef __cplusplus
-        static_assert(sizeof(struct sockaddr_l2) == 14, "KRITISCH: Struktur-Groesse weicht von 14 Byte ab!");
-        #else
-        _Static_assert(sizeof(struct sockaddr_l2) == 14, "KRITISCH: Struktur-Groesse weicht von 14 Byte ab!");
-        #endif
-        #endif
-        EOF
-
-        # Block 4: CMake zwingen, die lokalen Header zu fressen und die pkg-config Suche zu überspringen
-        RUN cd /vds_build_dir && \
-            sed -i '/pkg_check_modules.*bluez/c\set(bluez_FOUND TRUE)\nset(bluez_INCLUDE_DIRS "/vds_build_dir/include")\nset(bluez_LIBRARIES "")' CMakeLists.txt && \
-            sed -i 's/PkgConfig::BLUEZ//g' CMakeLists.txt
-
         # Block 3: Lokale Header erzeugen (Exakte 1:1 Kopie des funktionierenden Original-Rezepts)
         RUN mkdir -p /vds_build_dir/include/bluetooth && \
             cat << 'EOF' > /vds_build_dir/include/bluetooth/bluetooth.h
@@ -139,6 +83,69 @@ modules:
         #endif
         EOF
 
+        # Block 3b: CMake zwingen, die lokalen Header zu fressen und die pkg-config Suche zu überspringen
+        RUN cd /vds_build_dir && \
+            sed -i '/pkg_check_modules.*bluez/c\set(bluez_FOUND TRUE)\nset(bluez_INCLUDE_DIRS "/vds_build_dir/include")\nset(bluez_LIBRARIES "")' CMakeLists.txt && \
+            sed -i 's/PkgConfig::BLUEZ//g' CMakeLists.txt
+
+        # Block 3c: Den originalen v0.4.0 Daemon fehlerfrei kompilieren
+        RUN cd /vds_build_dir && \
+            mkdir -p build && cd build && \
+            cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS="-isystem /vds_build_dir/include" -DCMAKE_CXX_FLAGS="-isystem /vds_build_dir/include" && \
+            make -j$(nproc)
+
+        # Block 4: PKG_ROOT Verzeichnisse erstellen & Binärdateien/Modul einsortieren
+        RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
+            PKG_ROOT="/vds-pkg-root" && \
+            mkdir -p "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra" && \
+            mkdir -p "${PKG_ROOT}/usr/lib/modules-load.d" && \
+            mkdir -p "${PKG_ROOT}/usr/lib/modprobe.d" && \
+            mkdir -p "${PKG_ROOT}/usr/bin" && \
+            mkdir -p "${PKG_ROOT}/usr/lib/systemd/system/bluetooth.service.d" && \
+            mkdir -p "${PKG_ROOT}/usr/lib/systemd/system" && \
+            mkdir -p "${PKG_ROOT}/usr/share/dbus-1/system.d" && \
+            mkdir -p "${PKG_ROOT}/usr/lib/udev/rules.d" && \
+            mkdir -p "${PKG_ROOT}/usr/etc/bluetooth" && \
+            cp /vds_build_dir/module/vds_hcd.ko "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra/" && \
+            chmod 644 "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra/vds_hcd.ko" && \
+            cp /vds_build_dir/build/vdsd "${PKG_ROOT}/usr/bin/vdsd" && \
+            cp /vds_build_dir/build/vdsctl "${PKG_ROOT}/usr/bin/vdsctl" && \
+            chmod 755 "${PKG_ROOT}/usr/bin/vdsd" "${PKG_ROOT}/usr/bin/vdsctl"
+
+        # Block 5: Systemd-Dienste mit automatischer SELinux-Kontext-Zuweisung (chcon Fix)
+        RUN PKG_ROOT="/vds-pkg-root" && \
+            printf "vds_hcd\n" > "${PKG_ROOT}/usr/lib/modules-load.d/vds.conf" && \
+            printf "[Service]\nExecStart=\nExecStart=/usr/libexec/bluetooth/bluetoothd --compat\n" > "${PKG_ROOT}/usr/lib/systemd/system/bluetooth.service.d/override.conf" && \
+            printf "[General]\nUserspaceHID=true\n" > "${PKG_ROOT}/usr/etc/bluetooth/main.conf" && \
+            ( \
+              echo '[Unit]'; \
+              echo 'Description=Virtual DualSense Userspace Daemon (v0.4.0 Native)'; \
+              echo 'After=bluetooth.service vds-chmod-sdp.service'; \
+              echo 'Requires=bluetooth.service'; \
+              echo ''; \
+              echo '[Service]'; \
+              echo 'Type=simple'; \
+              echo 'ExecStartPre=/usr/bin/mkdir -p /var/lib/vdsd'; \
+              echo 'ExecStartPre=/usr/bin/chcon -R -t bluetooth_var_lib_t /var/lib/vdsd'; \
+              echo 'ExecStart=/usr/bin/vdsd'; \
+              echo 'Restart=always'; \
+              echo 'RestartSec=5'; \
+              echo 'User=root'; \
+              echo 'Group=root'; \
+              echo 'RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_BLUETOOTH AF_NETLINK'; \
+              echo 'NoNewPrivileges=no'; \
+              echo 'PrivateNetwork=no'; \
+              echo 'PrivateDevices=no'; \
+              echo 'PrivateTmp=no'; \
+              echo 'ProtectSystem=false'; \
+              echo 'ProtectHome=false'; \
+              echo 'CapabilityBoundingSet=CAP_NET_RAW CAP_SYS_ADMIN CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_SYS_RAWIO'; \
+              echo 'AmbientCapabilities=CAP_NET_RAW CAP_SYS_ADMIN CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_SYS_RAWIO'; \
+              echo ''; \
+              echo '[Install]'; \
+              echo 'WantedBy=multi-user.target'; \
+            ) > "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service"
+
         # Block 6: SDP-Berechtigungshelfer, D-Bus-Policy und Hardware-Weichen generieren
         RUN PKG_ROOT="/vds-pkg-root" && \
             printf "[Unit]\nDescription=Setze Berechtigungen für vDS SDP-Socket wenn er erscheint\n\n[Service]\nType=oneshot\nExecStart=/usr/bin/chmod 0777 /run/sdp\nRemainAfterExit=yes\n" > "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.service" && \
@@ -152,7 +159,7 @@ modules:
             ) > "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-dualsense-udev.rules" && \
             printf 'KERNEL=="uinput", MODE="0660", GROUP="input", SECLABEL{selinux}="system_u:object_r:input_device_t:s0", OPTIONS+="static_node=uinput"\n' > "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-uinput.rules" && \
             printf 'KERNEL=="vds[0-9]*", MODE="0660", GROUP="input", SECLABEL{selinux}="system_u:object_r:input_device_t:s0"\n' >> "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-uinput.rules"
-        
+
         # Block 7: Natives RPM via rpmbuild paketieren und direkt im OCI-Image installieren
         RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
             mkdir -p /root/rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS} && \
@@ -190,11 +197,11 @@ modules:
             rpmbuild --define "_topdir /root/rpmbuild" --buildroot=/vds-pkg-root -bb /root/rpmbuild/SPECS/vds.spec && \
             rpm -ivh --nodeps /root/rpmbuild/RPMS/x86_64/kmod-vds-1.0.0-1.x86_64.rpm
 
-        # Block 8: Kernel-Abhängigkeiten neu indizieren (Für automatisches Laden von vds_hcd.ko)
-        RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
+        # Block 8: Kernel-Abhängigkeiten neu indizieren (Sichert das automatische Laden von vds_hcd.ko beim Booten)
+        RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.#### .ARCH}\n' | head -n 1) && \
             depmod -a -b / "${KERNEL_VERSION}"
 
-        # Block 9: Unwiderrufliche Fixierung der Systemd-Infrastruktur via Service-Override (Schritt 7)
+        # Block 9: Unwiderrufliche Fixierung der Systemd-Infrastruktur auf dem Host via Service-Override (Schritt 7)
         RUN mkdir -p /etc/systemd/system/vdsd.service.d && \
             ( \
               echo '[Service]'; \
