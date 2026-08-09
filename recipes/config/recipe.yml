@@ -23,7 +23,7 @@ modules:
     snippets:
       - |
         # Block 1: vDS-Repository frisch klonen (Version 0.4.0 Upstream)
-        RUN git clone --depth 1 https://github.com/bluez/bluez.git /vds_build_dir
+        RUN git clone --depth 1 https://github.com/hurryman2212/vds.git /vds_build_dir
 
         # Block 2: Kernel-Modul für die aktive Bazzite-Kernelversion bauen
         RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
