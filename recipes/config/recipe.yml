@@ -123,7 +123,7 @@ modules:
               echo '[Service]'; \
               echo 'Type=simple'; \
               echo 'ExecStartPre=/usr/bin/mkdir -p /var/lib/vdsd'; \
-              echo 'ExecStartPre=/usr/bin/chmod 666 /dev/uhid'; \ # Hebelt SELinux für uhid aus
+              echo 'ExecStartPre=/usr/bin/chmod 666 /dev/uhid'; \
               echo 'ExecStart=/usr/bin/vdsd'; \
               echo 'Restart=always'; \
               echo 'RestartSec=5'; \
@@ -136,7 +136,7 @@ modules:
               echo 'PrivateDevices=no'; \
               echo 'PrivateNetwork=no'; \
               echo 'ReadWritePaths=/'; \
-              echo 'RestrictAddressFamilies=AF_NETLINK AF_UNIX AF_INET AF_INET6'; \ # Erlaubt udev-monitor
+              echo 'RestrictAddressFamilies=AF_NETLINK AF_UNIX AF_INET AF_INET6'; \
               echo 'RestrictNetworkInterfaces='; \
               echo 'IPAddressDeny='; \
               echo 'NoNewPrivileges=no'; \
