@@ -19,12 +19,13 @@ modules:
       - rpm-build
       - systemd-devel
       - libudev-devel
+      - bluez-libs-devel
 
   - type: containerfile
     snippets:
       - |
         # Block 1: vDS-Repository frisch klonen (Version 0.4.0)
-        RUN git clone --depth 1 https://github.com/hurryman2212/vds.git /vds_build_dir
+        RUN git clone --depth 1 https://github.com /vds_build_dir
 
         # Block 2: Kernel-Modul für die aktive Bazzite-Kernelversion bauen
         RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
@@ -55,7 +56,7 @@ modules:
             cp /vds_build_dir/build/vdsctl "${PKG_ROOT}/usr/bin/vdsctl" && \
             chmod 755 "${PKG_ROOT}/usr/bin/vdsd" "${PKG_ROOT}/usr/bin/vdsctl"
 
-        # Block 5: Systemd-Dienste, Udev-Regeln und BlueZ-Konfiguration schreiben
+        # Block 5: Systemd-Dienste mit automatischer SELinux-Kontext-Zuweisung (chcon Fix)
         RUN PKG_ROOT="/vds-pkg-root" && \
             printf "vds_hcd\n" > "${PKG_ROOT}/usr/lib/modules-load.d/vds.conf" && \
             printf "[Service]\nExecStart=\nExecStart=/usr/libexec/bluetooth/bluetoothd --compat\n" > "${PKG_ROOT}/usr/lib/systemd/system/bluetooth.service.d/override.conf" && \
@@ -69,7 +70,7 @@ modules:
               echo '[Service]'; \
               echo 'Type=simple'; \
               echo 'ExecStartPre=/usr/bin/mkdir -p /var/lib/vdsd'; \
-              echo 'ExecStartPre=/usr/sbin/restorecon -R /var/lib/vdsd'; \
+              echo 'ExecStartPre=/usr/bin/chcon -R -t bluetooth_var_lib_t /var/lib/vdsd'; \
               echo 'ExecStart=/usr/bin/vdsd'; \
               echo 'Restart=always'; \
               echo 'RestartSec=5'; \
@@ -102,7 +103,7 @@ modules:
             ) > "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-dualsense-udev.rules" && \
             printf 'KERNEL=="uinput", MODE="0660", GROUP="input", SECLABEL{selinux}="system_u:object_r:input_device_t:s0", OPTIONS+="static_node=uinput"\n' > "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-uinput.rules" && \
             printf 'KERNEL=="vds[0-9]*", MODE="0660", GROUP="input", SECLABEL{selinux}="system_u:object_r:input_device_t:s0"\n' >> "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-uinput.rules"
-
+        
         # Block 7: Natives RPM via rpmbuild paketieren und direkt im OCI-Image installieren
         RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
             mkdir -p /root/rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS} && \
