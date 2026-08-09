@@ -161,8 +161,9 @@ modules:
             printf 'KERNEL=="uinput", MODE="0660", GROUP="input", SECLABEL{selinux}="system_u:object_r:input_device_t:s0", OPTIONS+="static_node=uinput"\n' > "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-uinput.rules" && \
             printf 'KERNEL=="vds[0-9]*", MODE="0660", GROUP="input", SECLABEL{selinux}="system_u:object_r:input_device_t:s0"\n' >> "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-uinput.rules"
 
-        # Block 7: Natives RPM via rpmbuild paketieren
-        RUN mkdir -p /root/rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS} && \
+         Block 7: Natives RPM via rpmbuild paketieren
+        RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
+            mkdir -p /root/rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS} && \
             echo "Name: kmod-vds" > /root/rpmbuild/SPECS/vds.spec && \
             echo "Version: 1.0.0" >> /root/rpmbuild/SPECS/vds.spec && \
             echo "Release: 1" >> /root/rpmbuild/SPECS/vds.spec && \
@@ -180,7 +181,7 @@ modules:
             echo "/usr/bin/systemctl preset vds-chmod-sdp.path 2>/dev/null || true" >> /root/rpmbuild/SPECS/vds.spec && \
             echo "/usr/bin/systemctl enable vds-chmod-sdp.path 2>/dev/null || true" >> /root/rpmbuild/SPECS/vds.spec && \
             echo "%files" >> /root/rpmbuild/SPECS/vds.spec && \
-            echo "/usr/lib/modules/\$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1)/extra/vds_hcd.ko" >> /root/rpmbuild/SPECS/vds.spec && \
+            echo "/usr/lib/modules/${KERNEL_VERSION}/extra/vds_hcd.ko" >> /root/rpmbuild/SPECS/vds.spec && \
             echo "/usr/lib/modules-load.d/vds.conf" >> /root/rpmbuild/SPECS/vds.spec && \
             echo "/usr/bin/vdsd" >> /root/rpmbuild/SPECS/vds.spec && \
             echo "/usr/bin/vdsctl" >> /root/rpmbuild/SPECS/vds.spec && \
