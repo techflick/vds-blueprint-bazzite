@@ -94,7 +94,7 @@ modules:
             make -j$(nproc)
 
         # Block 4: PKG_ROOT Verzeichnisse erstellen & Binärdateien/Modul einsortieren
-        RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
+         RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
             PKG_ROOT="/vds-pkg-root" && \
             mkdir -p "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra" && \
             mkdir -p "${PKG_ROOT}/usr/lib/modules-load.d" && \
@@ -104,7 +104,8 @@ modules:
             mkdir -p "${PKG_ROOT}/usr/lib/systemd/system" && \
             mkdir -p "${PKG_ROOT}/usr/share/dbus-1/system.d" && \
             mkdir -p "${PKG_ROOT}/usr/lib/udev/rules.d" && \
-            mkdir -p "${PKG_ROOT}/usr/etc/bluetooth" && \
+            # KORREKTUR: Pfad geändert auf /etc (ohne /usr davor)
+            mkdir -p "${PKG_ROOT}/etc/bluetooth" && \
             cp /vds_build_dir/module/vds_hcd.ko "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra/" && \
             chmod 644 "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra/vds_hcd.ko" && \
             cp /vds_build_dir/build/vdsd "${PKG_ROOT}/usr/bin/vdsd" && \
@@ -154,12 +155,10 @@ modules:
             printf "[Unit]\nDescription=Überwache BlueZ SDP-Socket für vDS\n\n[Path]\nPathChanged=/run/sdp\nUnit=vds-chmod-sdp.service\n\n[Install]\nWantedBy=multi-user.target\n" > "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.path" && \
             printf "<!DOCTYPE busconfig PUBLIC \"-//freedesktop//DTD D-BUS Bus Configuration 1.0//EN\"\n \"http://freedesktop.org\">\n<busconfig>\n  <policy user=\"root\">\n    <allow own=\"org.vds\"/>\n    <allow send_destination=\"org.vds\"/>\n  </policy>\n  <policy context=\"default\">\n    <allow send_destination=\"org.vds\"/>\n  </policy>\n</busconfig>\n" > "${PKG_ROOT}/usr/share/dbus-1/system.d/org.vds.conf" && \
             ( \
-              # KORREKTUR: Wir blockieren den Zugriff für normale Userspaces komplett.
-              # Nur root (vdsd) darf den echten Controller exklusiv über hidraw auslesen. Steam sieht ihn nicht mehr.
               echo 'SUBSYSTEM=="hidraw", ATTRS{idVendor}=="054c", ATTRS{idProduct}=="0ce6", MODE="0600", GROUP="root"'; \
               echo 'SUBSYSTEM=="hidraw", ATTRS{idVendor}=="054c", ATTRS{idProduct}=="0df2", MODE="0600", GROUP="root"'; \
             ) > "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-dualsense-udev.rules" && \
-            # KORREKTUR: BlueZ zwingen, UserspaceHID=true zu nutzen (Gehört in input.conf)
+            # KORREKTUR: Nur noch input.conf erzeugen, keine main.conf mehr!
             mkdir -p "${PKG_ROOT}/etc/bluetooth" && \
             printf "[General]\nUserspaceHID=true\n" > "${PKG_ROOT}/etc/bluetooth/input.conf" && \
             printf 'KERNEL=="uinput", MODE="0660", GROUP="input", SECLABEL{selinux}="system_u:object_r:input_device_t:s0", OPTIONS+="static_node=uinput"\n' > "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-uinput.rules" && \
@@ -191,9 +190,8 @@ modules:
             echo "/usr/bin/vdsctl" >> /root/rpmbuild/SPECS/vds.spec && \
             echo "%dir /usr/lib/systemd/system/bluetooth.service.d" >> /root/rpmbuild/SPECS/vds.spec && \
             echo "/usr/lib/systemd/system/bluetooth.service.d/override.conf" >> /root/rpmbuild/SPECS/vds.spec && \
-            # KORREKTUR: Pfad im RPM Spec-File angepasst auf /etc/bluetooth/input.conf
-            echo "%dir /etc/bluetooth" >> /root/rpmbuild/SPECS/vds.spec && \
-            echo "/etc/bluetooth/input.conf" >> /root/rpmbuild/SPECS/vds.spec && \
+            # KORREKTUR: Definiere das Verzeichnis /etc/bluetooth als flüchtig, verpacke aber die input.conf
+            echo "%config(noreplace) /etc/bluetooth/input.conf" >> /root/rpmbuild/SPECS/vds.spec && \
             echo "/usr/lib/systemd/system/vdsd.service" >> /root/rpmbuild/SPECS/vds.spec && \
             echo "/usr/lib/systemd/system/vds-chmod-sdp.service" >> /root/rpmbuild/SPECS/vds.spec && \
             echo "/usr/lib/systemd/system/vds-chmod-sdp.path" >> /root/rpmbuild/SPECS/vds.spec && \
