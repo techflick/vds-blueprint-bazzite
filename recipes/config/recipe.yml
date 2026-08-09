@@ -111,11 +111,9 @@ modules:
             cp /vds_build_dir/build/vdsctl "${PKG_ROOT}/usr/bin/vdsctl" && \
             chmod 755 "${PKG_ROOT}/usr/bin/vdsd" "${PKG_ROOT}/usr/bin/vdsctl"
 
-        # Block 5: Systemd-Dienste generieren und Bluetooth Core-Konfiguration
+        # Block 5: Systemd-Dienste generieren und Bereitstellung der vDS-Infrastruktur
         RUN PKG_ROOT="/vds-pkg-root" && \
             printf "vds_hcd\n" > "${PKG_ROOT}/usr/lib/modules-load.d/vds.conf" && \
-            printf "[Service]\nExecStart=\nExecStart=/usr/libexec/bluetooth/bluetoothd --compat\n" > "${PKG_ROOT}/usr/lib/systemd/system/bluetooth.service.d/override.conf" && \
-            printf "[General]\nClassicBondedOnly=false\nUserspaceHID=true\n" > "${PKG_ROOT}/usr/etc/bluetooth/main.conf" && \
             ( \
               echo '[Unit]'; \
               echo 'Description=Virtual DualSense Userspace Daemon (v0.4.0 Native)'; \
@@ -157,11 +155,10 @@ modules:
               echo 'SUBSYSTEM=="hidraw", ATTRS{idVendor}=="054c", ATTRS{idProduct}=="0ce6", MODE="0600", GROUP="root"'; \
               echo 'SUBSYSTEM=="hidraw", ATTRS{idVendor}=="054c", ATTRS{idProduct}=="0df2", MODE="0600", GROUP="root"'; \
             ) > "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-dualsense-udev.rules" && \
-            printf "[General]\nUserspaceHID=true\n" > "${PKG_ROOT}/usr/etc/bluetooth/input.conf" && \
             printf 'KERNEL=="uinput", MODE="0660", GROUP="input", SECLABEL{selinux}="system_u:object_r:input_device_t:s0", OPTIONS+="static_node=uinput"\n' > "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-uinput.rules" && \
             printf 'KERNEL=="vds[0-9]*", MODE="0660", GROUP="input", SECLABEL{selinux}="system_u:object_r:input_device_t:s0"\n' >> "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-uinput.rules"
 
-        # Block 7: Natives RPM via rpmbuild paketieren (KORRIGIERT FÜR BAZZITE/OSTREE)
+        # Block 7: Natives RPM via rpmbuild paketieren (KORRIGIERT FÜR HOST-OVERRIDES IN /ETC)
         RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
             mkdir -p /root/rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS} && \
             echo "Name: kmod-vds" > /root/rpmbuild/SPECS/vds.spec && \
@@ -172,7 +169,15 @@ modules:
             echo "%description" >> /root/rpmbuild/SPECS/vds.spec && \
             echo "Virtual DualSense Driver und Daemon für Bazzite." >> /root/rpmbuild/SPECS/vds.spec && \
             echo "%post" >> /root/rpmbuild/SPECS/vds.spec && \
-            echo "/usr/sbin/restorecon -R /usr/bin/vdsd /usr/bin/vdsctl /usr/lib/systemd/system/vdsd.service /usr/etc/bluetooth /usr/lib/udev/rules.d/99-vds-*.rules /var/lib/vdsd 2>/dev/null || true" >> /root/rpmbuild/SPECS/vds.spec && \
+            echo "# 1. BlueZ Konfigurationen erzwingen" >> /root/rpmbuild/SPECS/vds.spec && \
+            echo "mkdir -p /etc/bluetooth" >> /root/rpmbuild/SPECS/vds.spec && \
+            echo "grep -q 'UserspaceHID=true' /etc/bluetooth/input.conf 2>/dev/null || echo -e '[General]\nUserspaceHID=true' >> /etc/bluetooth/input.conf" >> /root/rpmbuild/SPECS/vds.spec && \
+            echo "grep -q 'UserspaceHID=true' /etc/bluetooth/main.conf 2>/dev/null || echo -e '[General]\nClassicBondedOnly=false\nUserspaceHID=true' >> /etc/bluetooth/main.conf" >> /root/rpmbuild/SPECS/vds.spec && \
+            echo "# 2. Bluetooth-Dienst im Host Dateisystem patchen (--compat)" >> /root/rpmbuild/SPECS/vds.spec && \
+            echo "mkdir -p /etc/systemd/system/bluetooth.service.d" >> /root/rpmbuild/SPECS/vds.spec && \
+            echo -e "[Service]\nExecStart=\nExecStart=/usr/libexec/bluetooth/bluetoothd --compat" > /etc/systemd/system/bluetooth.service.d/override.conf && \
+            echo "# 3. Sicherheitskontexte, Udev-Ketten und Services aktivieren" >> /root/rpmbuild/SPECS/vds.spec && \
+            echo "/usr/sbin/restorecon -R /usr/bin/vdsd /usr/bin/vdsctl /usr/lib/systemd/system/vdsd.service /usr/lib/udev/rules.d/99-vds-*.rules /var/lib/vdsd 2>/dev/null || true" >> /root/rpmbuild/SPECS/vds.spec && \
             echo "/usr/bin/udevadm control --reload-rules 2>/dev/null || true" >> /root/rpmbuild/SPECS/vds.spec && \
             echo "/usr/bin/udevadm trigger --action=change 2>/dev/null || true" >> /root/rpmbuild/SPECS/vds.spec && \
             echo "/usr/bin/systemctl daemon-reload 2>/dev/null || true" >> /root/rpmbuild/SPECS/vds.spec && \
@@ -185,11 +190,6 @@ modules:
             echo "/usr/lib/modules-load.d/vds.conf" >> /root/rpmbuild/SPECS/vds.spec && \
             echo "/usr/bin/vdsd" >> /root/rpmbuild/SPECS/vds.spec && \
             echo "/usr/bin/vdsctl" >> /root/rpmbuild/SPECS/vds.spec && \
-            echo "%dir /usr/lib/systemd/system/bluetooth.service.d" >> /root/rpmbuild/SPECS/vds.spec && \
-            echo "/usr/lib/systemd/system/bluetooth.service.d/override.conf" >> /root/rpmbuild/SPECS/vds.spec && \
-            echo "%dir /usr/etc/bluetooth" >> /root/rpmbuild/SPECS/vds.spec && \
-            echo "/usr/etc/bluetooth/main.conf" >> /root/rpmbuild/SPECS/vds.spec && \
-            echo "/usr/etc/bluetooth/input.conf" >> /root/rpmbuild/SPECS/vds.spec && \
             echo "/usr/lib/systemd/system/vdsd.service" >> /root/rpmbuild/SPECS/vds.spec && \
             echo "/usr/lib/systemd/system/vds-chmod-sdp.service" >> /root/rpmbuild/SPECS/vds.spec && \
             echo "/usr/lib/systemd/system/vds-chmod-sdp.path" >> /root/rpmbuild/SPECS/vds.spec && \
