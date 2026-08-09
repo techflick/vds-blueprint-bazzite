@@ -163,7 +163,7 @@ modules:
             printf 'KERNEL=="uinput", MODE="0660", GROUP="input", SECLABEL{selinux}="system_u:object_r:input_device_t:s0", OPTIONS+="static_node=uinput"\n' > "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-uinput.rules" && \
             printf 'KERNEL=="vds[0-9]*", MODE="0660", GROUP="input", SECLABEL{selinux}="system_u:object_r:input_device_t:s0"\n' >> "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-uinput.rules"
 
-        # Block 7: Natives RPM via rpmbuild paketieren (SAUBER & MINIMAL)
+        # Block 7: Natives RPM via rpmbuild paketieren (SAUBER & STRUKTURIERT)
         RUN mkdir -p /root/rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS} && \
             ( \
               echo 'Name: kmod-vds'; \
@@ -176,8 +176,8 @@ modules:
               echo 'Virtual DualSense Driver und Daemon fuer Bazzite.'; \
               echo ''; \
               echo '%post'; \
-              echo 'mkdir -p /etc/bluetooth' >> /root/rpmbuild/SPECS/vds.spec; \
-              echo 'cp -n /usr/share/vdsd/main.conf /etc/bluetooth/main.conf 2>/dev/null || true' >> /root/rpmbuild/SPECS/vds.spec; \
+              echo 'mkdir -p /etc/bluetooth'; \
+              echo 'cp -n /usr/share/vdsd/main.conf /etc/bluetooth/main.conf 2>/dev/null || true'; \
               echo 'exit 0'; \
               echo ''; \
               echo '%files'; \
@@ -195,31 +195,18 @@ modules:
               echo '/usr/share/vdsd/main.conf'; \
             ) > /root/rpmbuild/SPECS/vds.spec && \
             rpmbuild --define "_topdir /root/rpmbuild" --buildroot=/vds-pkg-root -bb /root/rpmbuild/SPECS/vds.spec && \
-            rpm -ivh --nodeps /root/rpmbuild/RPMS/x86_64/kmod-vds-1.0.0-1.x86_64.rpm && \
-            systemctl enable vdsd.service && \
-            systemctl enable vds-chmod-sdp.path
+            rpm -ivh --nodeps /root/rpmbuild/RPMS/x86_64/kmod-vds-1.0.0-1.x86_64.rpm
 
-        # Block 8: Kernel-Abhängigkeiten neu indizieren
+        # Block 8: Kernel-Abhängigkeiten neu indizieren & Systemd-Services via Symlink erzwingen
         RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
-            depmod -a -b / "${KERNEL_VERSION}"
-            
-        # Block 9: KORREKTUR - Unwiderrufliche Fixierung auf dem Host via schreibgeschütztem /usr Override
-        RUN mkdir -p /usr/lib/systemd/system/vdsd.service.d && \
-            ( \
-              echo '[Service]'; \
-              echo 'ProtectSystem=false'; \
-              echo 'ProtectHome=false'; \
-              echo 'PrivateTmp=no'; \
-              echo 'PrivateDevices=no'; \
-              echo 'PrivateNetwork=no'; \
-              echo 'ReadWritePaths=/'; \
-              echo 'RestrictAddressFamilies='; \
-              echo 'RestrictNetworkInterfaces='; \
-              echo 'IPAddressDeny='; \
-              echo 'NoNewPrivileges=no'; \
-              echo 'CapabilityBoundingSet=CAP_NET_RAW CAP_SYS_ADMIN CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_SYS_RAWIO'; \
-              echo 'AmbientCapabilities=CAP_NET_RAW CAP_SYS_ADMIN CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_SYS_RAWIO'; \
-            ) > /usr/lib/systemd/system/vdsd.service.d/override.conf
+            depmod -a -b / "${KERNEL_VERSION}" && \
+            # ERSETZT SYSTEMCTL ENABLE (Zwingt Bazzite die Dienste beim Booten zu starten)
+            mkdir -p /usr/lib/systemd/system/multi-user.target.wants && \
+            ln -sf /usr/lib/systemd/system/vdsd.service /usr/lib/systemd/system/multi-user.target.wants/vdsd.service && \
+            ln -sf /usr/lib/systemd/system/vds-chmod-sdp.path /usr/lib/systemd/system/multi-user.target.wants/vds-chmod-sdp.path
+
+        # Block 9: KORREKTUR - Alten fehlerhaften Host-Override restlos entfernen
+        RUN rm -rf /usr/lib/systemd/system/vdsd.service.d
 
         # Block 10: Temporäre Build-Verzeichnisse rückstandslos entfernen
         RUN rm -rf /vds_build_dir /vds-pkg-root /root/rpmbuild
