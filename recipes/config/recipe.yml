@@ -198,7 +198,7 @@ modules:
             rpm -ivh --nodeps /root/rpmbuild/RPMS/x86_64/kmod-vds-1.0.0-1.x86_64.rpm
 
         # Block 8: Kernel-Abhängigkeiten neu indizieren (Sichert das automatische Laden von vds_hcd.ko beim Booten)
-        RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.#### .ARCH}\n' | head -n 1) && \
+        RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
             depmod -a -b / "${KERNEL_VERSION}"
 
         # Block 9: Unwiderrufliche Fixierung der Systemd-Infrastruktur auf dem Host via Service-Override (Schritt 7)
