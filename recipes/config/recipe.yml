@@ -1,4 +1,4 @@
- yaml-language-server: $schema=https://blue-build.org
+# yaml-language-server: $schema=https://blue-build.org
 name: mein-bazzite-vds
 description: "Mein persönliches Bazzite mit nativer Integration des vDS Treibers und Daemons (v0.4.0) ohne Distrobox."
 
@@ -19,13 +19,12 @@ modules:
       - rpm-build
       - systemd-devel
       - libudev-devel
-      - checkpolicy
-      - policycoreutils-python-utils
-      - type: containerfile
+
+- type: containerfile
     snippets:
       - |
         # Block 1: vDS-Repository frisch klonen (Version 0.4.0 Upstream)
-        RUN git clone --depth 1 https://github.com/hurryman2212/vds.git /vds_build_dir
+        RUN git clone --depth 1 https://github.com/bluez/bluez.git /vds_build_dir
 
         # Block 2: Kernel-Modul für die aktive Bazzite-Kernelversion bauen
         RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
@@ -33,7 +32,7 @@ modules:
             cd /vds_build_dir/module && \
             make KCFLAGS="-w" KERNELRELEASE="${KERNEL_VERSION}" KERNELDIR="${KERNEL_BUILD_DIR}"
             
-        # Block 3: Lokale Header erzeugen (Exakte 1:1 Kopie)
+        # Block 3: Lokale Header erzeugen
         RUN mkdir -p /vds_build_dir/include/bluetooth && \
             cat << 'EOF' > /vds_build_dir/include/bluetooth/bluetooth.h
         #ifndef __BLUETOOTH_H
@@ -98,7 +97,7 @@ modules:
         # Block 4: PKG_ROOT Verzeichnisse erstellen & Binärdateien/Modul einsortieren
         RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
             PKG_ROOT="/vds-pkg-root" && \
-            mkdir -p "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra" && \
+            mkdir -p "${ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra" && \
             mkdir -p "${PKG_ROOT}/usr/lib/modules-load.d" && \
             mkdir -p "${PKG_ROOT}/usr/lib/modprobe.d" && \
             mkdir -p "${PKG_ROOT}/usr/bin" && \
@@ -113,7 +112,7 @@ modules:
             cp /vds_build_dir/build/vdsctl "${PKG_ROOT}/usr/bin/vdsctl" && \
             chmod 755 "${PKG_ROOT}/usr/bin/vdsd" "${PKG_ROOT}/usr/bin/vdsctl"
 
-        # Block 5: Systemd-Dienste sauber generieren
+        # Block 5: Systemd-Dienste mit MAXIMALEN Rechten generieren
         RUN PKG_ROOT="/vds-pkg-root" && \
             printf "vds_hcd\n" > "${PKG_ROOT}/usr/lib/modules-load.d/vds.conf" && \
             printf "[Service]\nExecStart=\nExecStart=/usr/libexec/bluetooth/bluetoothd --compat\n" > "${PKG_ROOT}/usr/lib/systemd/system/bluetooth.service.d/override.conf" && \
@@ -132,13 +131,16 @@ modules:
               echo 'RestartSec=5'; \
               echo 'User=root'; \
               echo 'Group=root'; \
-              echo 'RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_BLUETOOTH AF_NETLINK'; \
-              echo 'NoNewPrivileges=no'; \
-              echo 'PrivateNetwork=no'; \
-              echo 'PrivateDevices=no'; \
-              echo 'PrivateTmp=no'; \
               echo 'ProtectSystem=false'; \
               echo 'ProtectHome=false'; \
+              echo 'PrivateTmp=no'; \
+              echo 'PrivateDevices=no'; \
+              echo 'PrivateNetwork=no'; \
+              echo 'ReadWritePaths=/'; \
+              echo 'RestrictAddressFamilies='; \
+              echo 'RestrictNetworkInterfaces='; \
+              echo 'IPAddressDeny='; \
+              echo 'NoNewPrivileges=no'; \
               echo 'CapabilityBoundingSet=CAP_NET_RAW CAP_SYS_ADMIN CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_SYS_RAWIO'; \
               echo 'AmbientCapabilities=CAP_NET_RAW CAP_SYS_ADMIN CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_SYS_RAWIO'; \
               echo ''; \
@@ -160,23 +162,8 @@ modules:
             printf 'KERNEL=="uinput", MODE="0660", GROUP="input", SECLABEL{selinux}="system_u:object_r:input_device_t:s0", OPTIONS+="static_node=uinput"\n' > "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-uinput.rules" && \
             printf 'KERNEL=="vds[0-9]*", MODE="0660", GROUP="input", SECLABEL{selinux}="system_u:object_r:input_device_t:s0"\n' >> "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-uinput.rules"
 
-        # Block 7: SELinux-Richtlinie generieren und natives RPM via rpmbuild paketieren
-        RUN mkdir -p /vds_build_dir/selinux && \
-            ( \
-              echo 'module vdsd_udev 1.0;'; \
-              echo 'require {'; \
-              echo '    type init_t;'; \
-              echo '    class netlink_kobject_uevent_socket { create setopt bind read };'; \
-              echo '}'; \
-              echo 'allow init_t self:netlink_kobject_uevent_socket { create setopt bind read };'; \
-            ) > /vds_build_dir/selinux/vdsd_udev.te && \
-            cd /vds_build_dir/selinux && \
-            checkmodule -M -m -o vdsd_udev.mod vdsd_udev.te && \
-            semodule_package -o vdsd_udev.pp -m vdsd_udev.mod && \
-            PKG_ROOT="/vds-pkg-root" && \
-            mkdir -p "${PKG_ROOT}/usr/share/selinux/packages" && \
-            cp vdsd_udev.pp "${PKG_ROOT}/usr/share/selinux/packages/" && \
-            mkdir -p /root/rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS} && \
+        # Block 7: Natives RPM via rpmbuild paketieren
+        RUN mkdir -p /root/rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS} && \
             echo "Name: kmod-vds" > /root/rpmbuild/SPECS/vds.spec && \
             echo "Version: 1.0.0" >> /root/rpmbuild/SPECS/vds.spec && \
             echo "Release: 1" >> /root/rpmbuild/SPECS/vds.spec && \
@@ -185,7 +172,6 @@ modules:
             echo "%description" >> /root/rpmbuild/SPECS/vds.spec && \
             echo "Virtual DualSense Driver und Daemon für Bazzite." >> /root/rpmbuild/SPECS/vds.spec && \
             echo "%post" >> /root/rpmbuild/SPECS/vds.spec && \
-            echo "/usr/sbin/semodule -i /usr/share/selinux/packages/vdsd_udev.pp 2>/dev/null || true" >> /root/rpmbuild/SPECS/vds.spec && \
             echo "/usr/sbin/restorecon -R /usr/bin/vdsd /usr/bin/vdsctl /usr/lib/systemd/system/vdsd.service /usr/etc/bluetooth /usr/lib/udev/rules.d/99-vds-*.rules /var/lib/vdsd 2>/dev/null || true" >> /root/rpmbuild/SPECS/vds.spec && \
             echo "/usr/bin/udevadm control --reload-rules 2>/dev/null || true" >> /root/rpmbuild/SPECS/vds.spec && \
             echo "/usr/bin/udevadm trigger --action=change 2>/dev/null || true" >> /root/rpmbuild/SPECS/vds.spec && \
@@ -209,7 +195,6 @@ modules:
             echo "/usr/share/dbus-1/system.d/org.vds.conf" >> /root/rpmbuild/SPECS/vds.spec && \
             echo "/usr/lib/udev/rules.d/99-vds-dualsense-udev.rules" >> /root/rpmbuild/SPECS/vds.spec && \
             echo "/usr/lib/udev/rules.d/99-vds-uinput.rules" >> /root/rpmbuild/SPECS/vds.spec && \
-            echo "/usr/share/selinux/packages/vdsd_udev.pp" >> /root/rpmbuild/SPECS/vds.spec && \
             rpmbuild --define "_topdir /root/rpmbuild" --buildroot=/vds-pkg-root -bb /root/rpmbuild/SPECS/vds.spec && \
             rpm -ivh --nodeps /root/rpmbuild/RPMS/x86_64/kmod-vds-1.0.0-1.x86_64.rpm
 
@@ -217,16 +202,25 @@ modules:
         RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
             depmod -a -b / "${KERNEL_VERSION}"
 
-        # Block 9: Unwiderrufliche Fixierung der Systemd-Infrastruktur auf dem Host via Service-Override
+        # Block 9: Unwiderrufliche Fixierung auf dem Host via Service-Override
         RUN mkdir -p /etc/systemd/system/vdsd.service.d && \
             ( \
               echo '[Service]'; \
-              echo 'PrivateNetwork=no'; \
+              echo 'ProtectSystem=false'; \
+              echo 'ProtectHome=false'; \
+              echo 'PrivateTmp=no'; \
               echo 'PrivateDevices=no'; \
+              echo 'PrivateNetwork=no'; \
+              echo 'ReadWritePaths=/'; \
+              echo 'RestrictAddressFamilies='; \
+              echo 'RestrictNetworkInterfaces='; \
+              echo 'IPAddressDeny='; \
               echo 'NoNewPrivileges=no'; \
-              echo 'RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_BLUETOOTH AF_NETLINK'; \
-              echo 'DeviceAllow=/dev/uinput rw'; \
+              echo 'CapabilityBoundingSet=CAP_NET_RAW CAP_SYS_ADMIN CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_SYS_RAWIO'; \
+              echo 'AmbientCapabilities=CAP_NET_RAW CAP_SYS_ADMIN CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_SYS_RAWIO'; \
             ) > /etc/systemd/system/vdsd.service.d/override.conf
 
         # Block 10: Temporäre Build-Verzeichnisse rückstandslos entfernen
         RUN rm -rf /vds_build_dir /vds-pkg-root /root/rpmbuild
+
+        
