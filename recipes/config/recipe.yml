@@ -94,7 +94,7 @@ modules:
             make -j$(nproc)
 
         # Block 4: PKG_ROOT Verzeichnisse erstellen & Binärdateien/Modul einsortieren
-         RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
+        RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
             PKG_ROOT="/vds-pkg-root" && \
             mkdir -p "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra" && \
             mkdir -p "${PKG_ROOT}/usr/lib/modules-load.d" && \
@@ -104,19 +104,18 @@ modules:
             mkdir -p "${PKG_ROOT}/usr/lib/systemd/system" && \
             mkdir -p "${PKG_ROOT}/usr/share/dbus-1/system.d" && \
             mkdir -p "${PKG_ROOT}/usr/lib/udev/rules.d" && \
-            # KORREKTUR: Pfad geändert auf /etc (ohne /usr davor)
-            mkdir -p "${PKG_ROOT}/etc/bluetooth" && \
+            mkdir -p "${PKG_ROOT}/usr/etc/bluetooth" && \
             cp /vds_build_dir/module/vds_hcd.ko "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra/" && \
             chmod 644 "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra/vds_hcd.ko" && \
             cp /vds_build_dir/build/vdsd "${PKG_ROOT}/usr/bin/vdsd" && \
             cp /vds_build_dir/build/vdsctl "${PKG_ROOT}/usr/bin/vdsctl" && \
             chmod 755 "${PKG_ROOT}/usr/bin/vdsd" "${PKG_ROOT}/usr/bin/vdsctl"
 
-        # Block 5: Systemd-Dienste mit MAXIMALEN Rechten generieren
+        # Block 5: Systemd-Dienste generieren und Bluetooth Core-Konfiguration
         RUN PKG_ROOT="/vds-pkg-root" && \
             printf "vds_hcd\n" > "${PKG_ROOT}/usr/lib/modules-load.d/vds.conf" && \
             printf "[Service]\nExecStart=\nExecStart=/usr/libexec/bluetooth/bluetoothd --compat\n" > "${PKG_ROOT}/usr/lib/systemd/system/bluetooth.service.d/override.conf" && \
-            printf "[General]\nUserspaceHID=true\n" > "${PKG_ROOT}/usr/etc/bluetooth/main.conf" && \
+            printf "[General]\nClassicBondedOnly=false\nUserspaceHID=true\n" > "${PKG_ROOT}/usr/etc/bluetooth/main.conf" && \
             ( \
               echo '[Unit]'; \
               echo 'Description=Virtual DualSense Userspace Daemon (v0.4.0 Native)'; \
@@ -158,13 +157,11 @@ modules:
               echo 'SUBSYSTEM=="hidraw", ATTRS{idVendor}=="054c", ATTRS{idProduct}=="0ce6", MODE="0600", GROUP="root"'; \
               echo 'SUBSYSTEM=="hidraw", ATTRS{idVendor}=="054c", ATTRS{idProduct}=="0df2", MODE="0600", GROUP="root"'; \
             ) > "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-dualsense-udev.rules" && \
-            # KORREKTUR: Nur noch input.conf erzeugen, keine main.conf mehr!
-            mkdir -p "${PKG_ROOT}/etc/bluetooth" && \
-            printf "[General]\nUserspaceHID=true\n" > "${PKG_ROOT}/etc/bluetooth/input.conf" && \
+            printf "[General]\nUserspaceHID=true\n" > "${PKG_ROOT}/usr/etc/bluetooth/input.conf" && \
             printf 'KERNEL=="uinput", MODE="0660", GROUP="input", SECLABEL{selinux}="system_u:object_r:input_device_t:s0", OPTIONS+="static_node=uinput"\n' > "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-uinput.rules" && \
             printf 'KERNEL=="vds[0-9]*", MODE="0660", GROUP="input", SECLABEL{selinux}="system_u:object_r:input_device_t:s0"\n' >> "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-uinput.rules"
 
-        # Block 7: Natives RPM via rpmbuild paketieren
+        # Block 7: Natives RPM via rpmbuild paketieren (KORRIGIERT FÜR BAZZITE/OSTREE)
         RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
             mkdir -p /root/rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS} && \
             echo "Name: kmod-vds" > /root/rpmbuild/SPECS/vds.spec && \
@@ -175,7 +172,7 @@ modules:
             echo "%description" >> /root/rpmbuild/SPECS/vds.spec && \
             echo "Virtual DualSense Driver und Daemon für Bazzite." >> /root/rpmbuild/SPECS/vds.spec && \
             echo "%post" >> /root/rpmbuild/SPECS/vds.spec && \
-            echo "/usr/sbin/restorecon -R /usr/bin/vdsd /usr/bin/vdsctl /usr/lib/systemd/system/vdsd.service /etc/bluetooth /usr/lib/udev/rules.d/99-vds-*.rules /var/lib/vdsd 2>/dev/null || true" >> /root/rpmbuild/SPECS/vds.spec && \
+            echo "/usr/sbin/restorecon -R /usr/bin/vdsd /usr/bin/vdsctl /usr/lib/systemd/system/vdsd.service /usr/etc/bluetooth /usr/lib/udev/rules.d/99-vds-*.rules /var/lib/vdsd 2>/dev/null || true" >> /root/rpmbuild/SPECS/vds.spec && \
             echo "/usr/bin/udevadm control --reload-rules 2>/dev/null || true" >> /root/rpmbuild/SPECS/vds.spec && \
             echo "/usr/bin/udevadm trigger --action=change 2>/dev/null || true" >> /root/rpmbuild/SPECS/vds.spec && \
             echo "/usr/bin/systemctl daemon-reload 2>/dev/null || true" >> /root/rpmbuild/SPECS/vds.spec && \
@@ -190,8 +187,9 @@ modules:
             echo "/usr/bin/vdsctl" >> /root/rpmbuild/SPECS/vds.spec && \
             echo "%dir /usr/lib/systemd/system/bluetooth.service.d" >> /root/rpmbuild/SPECS/vds.spec && \
             echo "/usr/lib/systemd/system/bluetooth.service.d/override.conf" >> /root/rpmbuild/SPECS/vds.spec && \
-            # KORREKTUR: Definiere das Verzeichnis /etc/bluetooth als flüchtig, verpacke aber die input.conf
-            echo "%config(noreplace) /etc/bluetooth/input.conf" >> /root/rpmbuild/SPECS/vds.spec && \
+            echo "%dir /usr/etc/bluetooth" >> /root/rpmbuild/SPECS/vds.spec && \
+            echo "/usr/etc/bluetooth/main.conf" >> /root/rpmbuild/SPECS/vds.spec && \
+            echo "/usr/etc/bluetooth/input.conf" >> /root/rpmbuild/SPECS/vds.spec && \
             echo "/usr/lib/systemd/system/vdsd.service" >> /root/rpmbuild/SPECS/vds.spec && \
             echo "/usr/lib/systemd/system/vds-chmod-sdp.service" >> /root/rpmbuild/SPECS/vds.spec && \
             echo "/usr/lib/systemd/system/vds-chmod-sdp.path" >> /root/rpmbuild/SPECS/vds.spec && \
@@ -201,10 +199,10 @@ modules:
             rpmbuild --define "_topdir /root/rpmbuild" --buildroot=/vds-pkg-root -bb /root/rpmbuild/SPECS/vds.spec && \
             rpm -ivh --nodeps /root/rpmbuild/RPMS/x86_64/kmod-vds-1.0.0-1.x86_64.rpm
 
-        # Block 8: Kernel-Abhängigkeiten neu indizieren (Für das Live-System im Image verankern)
+        # Block 8: Kernel-Abhängigkeiten neu indizieren
         RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
             depmod -a -b / "${KERNEL_VERSION}"
-
+            
         # Block 9: KORREKTUR - Unwiderrufliche Fixierung auf dem Host via schreibgeschütztem /usr Override
         RUN mkdir -p /usr/lib/systemd/system/vdsd.service.d && \
             ( \
