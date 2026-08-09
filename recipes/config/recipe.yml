@@ -138,7 +138,7 @@ modules:
               echo 'PrivateDevices=no'; \
               echo 'PrivateNetwork=no'; \
               echo 'ReadWritePaths=/'; \
-              echo 'RestrictAddressFamilies=AF_NETLINK AF_UNIX AF_INET AF_INET6'; \
+              echo 'RestrictAddressFamilies=AF_NETLINK AF_UNIX AF_INET AF_INET6 AF_BLUETOOTH'; \
               echo 'RestrictNetworkInterfaces='; \
               echo 'IPAddressDeny='; \
               echo 'NoNewPrivileges=no'; \
@@ -158,9 +158,9 @@ modules:
             printf "[General]\nClassicBondedOnly=false\n" > "${PKG_ROOT}/usr/share/vdsd/main.conf" && \
             printf "<!DOCTYPE busconfig PUBLIC \"-//freedesktop//DTD D-BUS Bus Configuration 1.0//EN\"\n \"http://freedesktop.org\">\n<busconfig>\n  <policy user=\"root\">\n    <allow own=\"org.vds\"/>\n    <allow send_destination=\"org.vds\"/>\n  </policy>\n  <policy context=\"default\">\n    <allow send_destination=\"org.vds\"/>\n  </policy>\n</busconfig>\n" > "${PKG_ROOT}/usr/share/dbus-1/system.d/org.vds.conf" && \
             ( \
-              echo 'SUBSYSTEM=="hidraw", ATTRS{idVendor}=="054c", ATTRS{idProduct}=="0ce6", MODE="0660", GROUP="input", TAG+="systemd", ENV{SYSTEMD_WANTS}+="vdsd@$attr{uniq}.service"'; \
-              echo 'SUBSYSTEM=="hidraw", ATTRS{idVendor}=="054c", ATTRS{idProduct}=="0df2", MODE="0660", GROUP="input", TAG+="systemd", ENV{SYSTEMD_WANTS}+="vdsd@$attr{uniq}.service"'; \
-            ) > "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-dualsense-udev.rules" && \
+              echo '# Robustes Koppel-Matching ueber das verlaessliche Input-Subsystem (Extrahiert MAC via uniq)'; \
+              echo 'SUBSYSTEM=="input", KERNEL=="event*", ATTRS{name}=="*DualSense*", ACTION=="add", TAG+="systemd", ENV{SYSTEMD_WANTS}+="vdsd@$attr{uniq}.service"'; \
+            ) > "${ROOT}/usr/lib/udev/rules.d/99-vds-dualsense-udev.rules" && \
             printf 'KERNEL=="uinput", MODE="0660", GROUP="input", SECLABEL{selinux}="system_u:object_r:input_device_t:s0", OPTIONS+="static_node=uinput"\n' > "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-uinput.rules" && \
             printf 'KERNEL=="vds[0-9]*", MODE="0660", GROUP="input", TAG+="systemd", SECLABEL{selinux}="system_u:object_r:input_device_t:s0"\n' >> "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-uinput.rules"
         
@@ -201,9 +201,8 @@ modules:
         # Block 8: Kernel-Abhängigkeiten neu indizieren & Systemd-Services via Symlink erzwingen
         RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
             depmod -a -b / "${KERNEL_VERSION}" && \
-            # ERSETZT SYSTEMCTL ENABLE (Zwingt Bazzite die Dienste beim Booten zu starten)
+            # Zwingt Bazzite, die Überwachungspfade beim Booten direkt zu laden
             mkdir -p /usr/lib/systemd/system/multi-user.target.wants && \
-            ln -sf /usr/lib/systemd/system/vdsd.service /usr/lib/systemd/system/multi-user.target.wants/vdsd.service && \
             ln -sf /usr/lib/systemd/system/vds-chmod-sdp.path /usr/lib/systemd/system/multi-user.target.wants/vds-chmod-sdp.path
 
         # Block 9: KORREKTUR - Alten fehlerhaften Host-Override restlos entfernen
