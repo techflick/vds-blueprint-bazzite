@@ -96,7 +96,7 @@ modules:
         # Block 4: PKG_ROOT Verzeichnisse erstellen & Binärdateien/Modul einsortieren
         RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
             PKG_ROOT="/vds-pkg-root" && \
-            mkdir -p "${ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra" && \
+            mkdir -p "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra" && \
             mkdir -p "${PKG_ROOT}/usr/lib/modules-load.d" && \
             mkdir -p "${PKG_ROOT}/usr/lib/modprobe.d" && \
             mkdir -p "${PKG_ROOT}/usr/bin" && \
