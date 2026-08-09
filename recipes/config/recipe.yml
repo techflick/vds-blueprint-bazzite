@@ -160,7 +160,7 @@ modules:
             ( \
               echo '# Robustes Koppel-Matching ueber das verlaessliche Input-Subsystem (Extrahiert MAC via uniq)'; \
               echo 'SUBSYSTEM=="input", KERNEL=="event*", ATTRS{name}=="*DualSense*", ACTION=="add", TAG+="systemd", ENV{SYSTEMD_WANTS}+="vdsd@$attr{uniq}.service"'; \
-            ) > "${ROOT}/usr/lib/udev/rules.d/99-vds-dualsense-udev.rules" && \
+            ) > "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-dualsense-udev.rules" && \
             printf 'KERNEL=="uinput", MODE="0660", GROUP="input", SECLABEL{selinux}="system_u:object_r:input_device_t:s0", OPTIONS+="static_node=uinput"\n' > "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-uinput.rules" && \
             printf 'KERNEL=="vds[0-9]*", MODE="0660", GROUP="input", TAG+="systemd", SECLABEL{selinux}="system_u:object_r:input_device_t:s0"\n' >> "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-uinput.rules"
         
