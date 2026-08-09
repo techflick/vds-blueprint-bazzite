@@ -111,7 +111,7 @@ modules:
             cp /vds_build_dir/build/vdsctl "${PKG_ROOT}/usr/bin/vdsctl" && \
             chmod 755 "${PKG_ROOT}/usr/bin/vdsd" "${PKG_ROOT}/usr/bin/vdsctl"
 
-        # Block 5: Systemd-Dienste generieren und Bereitstellung der vDS-Infrastruktur
+        # Block 5: Systemd-Dienst für vDS reparieren (LÖST DEN UDEV-MONITOR-FEHLER)
         RUN PKG_ROOT="/vds-pkg-root" && \
             printf "vds_hcd\n" > "${PKG_ROOT}/usr/lib/modules-load.d/vds.conf" && \
             ( \
@@ -123,18 +123,20 @@ modules:
               echo '[Service]'; \
               echo 'Type=simple'; \
               echo 'ExecStartPre=/usr/bin/mkdir -p /var/lib/vdsd'; \
+              echo 'ExecStartPre=/usr/bin/chmod 666 /dev/uhid'; \ # Hebelt SELinux für uhid aus
               echo 'ExecStart=/usr/bin/vdsd'; \
               echo 'Restart=always'; \
               echo 'RestartSec=5'; \
               echo 'User=root'; \
               echo 'Group=root'; \
+              echo '# Systemd-Isolierungen komplett aufheben'; \
               echo 'ProtectSystem=false'; \
               echo 'ProtectHome=false'; \
               echo 'PrivateTmp=no'; \
               echo 'PrivateDevices=no'; \
               echo 'PrivateNetwork=no'; \
               echo 'ReadWritePaths=/'; \
-              echo 'RestrictAddressFamilies='; \
+              echo 'RestrictAddressFamilies=AF_NETLINK AF_UNIX AF_INET AF_INET6'; \ # Erlaubt udev-monitor
               echo 'RestrictNetworkInterfaces='; \
               echo 'IPAddressDeny='; \
               echo 'NoNewPrivileges=no'; \
@@ -145,11 +147,14 @@ modules:
               echo 'WantedBy=multi-user.target'; \
             ) > "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service"
 
-        # Block 6: SDP-Berechtigungshelfer, D-Bus-Policy und Hardware-Weichen
-        RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
-            PKG_ROOT="/vds-pkg-root" && \
+        # Block 6: SDP-Berechtigungshelfer und die fehlende main.conf anlegen
+        RUN PKG_ROOT="/vds-pkg-root" && \
             printf "[Unit]\nDescription=Setze Berechtigungen für vDS SDP-Socket wenn er erscheint\n\n[Service]\nType=oneshot\nExecStart=/usr/bin/chmod 0777 /run/sdp\nRemainAfterExit=yes\n" > "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.service" && \
             printf "[Unit]\nDescription=Überwache BlueZ SDP-Socket für vDS\n\n[Path]\nPathChanged=/run/sdp\nUnit=vds-chmod-sdp.service\n\n[Install]\nWantedBy=multi-user.target\n" > "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.path" && \
+            # Das wichtige BlueZ --compat Drop-In erstellen
+            printf "[Service]\nExecStart=\nExecStart=/usr/libexec/bluetooth/bluetoothd --compat\n" > "${PKG_ROOT}/usr/lib/systemd/system/bluetooth.service.d/override.conf" && \
+            # NUR noch die fehlende main.conf als Vorlage vorbereiten
+            printf "[General]\nClassicBondedOnly=false\n" > "${PKG_ROOT}/usr/share/vdsd/main.conf" && \
             printf "<!DOCTYPE busconfig PUBLIC \"-//freedesktop//DTD D-BUS Bus Configuration 1.0//EN\"\n \"http://freedesktop.org\">\n<busconfig>\n  <policy user=\"root\">\n    <allow own=\"org.vds\"/>\n    <allow send_destination=\"org.vds\"/>\n  </policy>\n  <policy context=\"default\">\n    <allow send_destination=\"org.vds\"/>\n  </policy>\n</busconfig>\n" > "${PKG_ROOT}/usr/share/dbus-1/system.d/org.vds.conf" && \
             ( \
               echo 'SUBSYSTEM=="hidraw", ATTRS{idVendor}=="054c", ATTRS{idProduct}=="0ce6", MODE="0600", GROUP="root"'; \
@@ -158,46 +163,41 @@ modules:
             printf 'KERNEL=="uinput", MODE="0660", GROUP="input", SECLABEL{selinux}="system_u:object_r:input_device_t:s0", OPTIONS+="static_node=uinput"\n' > "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-uinput.rules" && \
             printf 'KERNEL=="vds[0-9]*", MODE="0660", GROUP="input", SECLABEL{selinux}="system_u:object_r:input_device_t:s0"\n' >> "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-uinput.rules"
 
-        # Block 7: Natives RPM via rpmbuild paketieren (KORRIGIERT FÜR BUILD-UMGEBUNG)
-        RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
-            mkdir -p /root/rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS} && \
-            echo "Name: kmod-vds" > /root/rpmbuild/SPECS/vds.spec && \
-            echo "Version: 1.0.0" >> /root/rpmbuild/SPECS/vds.spec && \
-            echo "Release: 1" >> /root/rpmbuild/SPECS/vds.spec && \
-            echo "Summary: Virtual DualSense Driver" >> /root/rpmbuild/SPECS/vds.spec && \
-            echo "License: MIT" >> /root/rpmbuild/SPECS/vds.spec && \
-            echo "%description" >> /root/rpmbuild/SPECS/vds.spec && \
-            echo "Virtual DualSense Driver und Daemon für Bazzite." >> /root/rpmbuild/SPECS/vds.spec && \
-            echo "%post" >> /root/rpmbuild/SPECS/vds.spec && \
-            echo "# 1. BlueZ Konfigurationen erzwingen" >> /root/rpmbuild/SPECS/vds.spec && \
-            echo "mkdir -p /etc/bluetooth" >> /root/rpmbuild/SPECS/vds.spec && \
-            echo "grep -q 'UserspaceHID=true' /etc/bluetooth/input.conf 2>/dev/null || echo -e '[General]\nUserspaceHID=true' >> /etc/bluetooth/input.conf" >> /root/rpmbuild/SPECS/vds.spec && \
-            echo "grep -q 'UserspaceHID=true' /etc/bluetooth/main.conf 2>/dev/null || echo -e '[General]\nClassicBondedOnly=false\nUserspaceHID=true' >> /etc/bluetooth/main.conf" >> /root/rpmbuild/SPECS/vds.spec && \
-            echo "# 2. Bluetooth-Dienst im Host Dateisystem patchen (--compat)" >> /root/rpmbuild/SPECS/vds.spec && \
-            echo "mkdir -p /etc/systemd/system/bluetooth.service.d" >> /root/rpmbuild/SPECS/vds.spec && \
-            echo "echo -e '[Service]\nExecStart=\nExecStart=/usr/libexec/bluetooth/bluetoothd --compat' > /etc/systemd/system/bluetooth.service.d/override.conf" >> /root/rpmbuild/SPECS/vds.spec && \
-            echo "# 3. Sicherheitskontexte, Udev-Ketten und Services aktivieren" >> /root/rpmbuild/SPECS/vds.spec && \
-            echo "/usr/sbin/restorecon -R /usr/bin/vdsd /usr/bin/vdsctl /usr/lib/systemd/system/vdsd.service /usr/lib/udev/rules.d/99-vds-*.rules /var/lib/vdsd 2>/dev/null || true" >> /root/rpmbuild/SPECS/vds.spec && \
-            echo "/usr/bin/udevadm control --reload-rules 2>/dev/null || true" >> /root/rpmbuild/SPECS/vds.spec && \
-            echo "/usr/bin/udevadm trigger --action=change 2>/dev/null || true" >> /root/rpmbuild/SPECS/vds.spec && \
-            echo "/usr/bin/systemctl daemon-reload 2>/dev/null || true" >> /root/rpmbuild/SPECS/vds.spec && \
-            echo "/usr/bin/systemctl preset vdsd.service 2>/dev/null || true" >> /root/rpmbuild/SPECS/vds.spec && \
-            echo "/usr/bin/systemctl enable vdsd.service 2>/dev/null || true" >> /root/rpmbuild/SPECS/vds.spec && \
-            echo "/usr/bin/systemctl preset vds-chmod-sdp.path 2>/dev/null || true" >> /root/rpmbuild/SPECS/vds.spec && \
-            echo "/usr/bin/systemctl enable vds-chmod-sdp.path 2>/dev/null || true" >> /root/rpmbuild/SPECS/vds.spec && \
-            echo "%files" >> /root/rpmbuild/SPECS/vds.spec && \
-            echo "/usr/lib/modules/${KERNEL_VERSION}/extra/vds_hcd.ko" >> /root/rpmbuild/SPECS/vds.spec && \
-            echo "/usr/lib/modules-load.d/vds.conf" >> /root/rpmbuild/SPECS/vds.spec && \
-            echo "/usr/bin/vdsd" >> /root/rpmbuild/SPECS/vds.spec && \
-            echo "/usr/bin/vdsctl" >> /root/rpmbuild/SPECS/vds.spec && \
-            echo "/usr/lib/systemd/system/vdsd.service" >> /root/rpmbuild/SPECS/vds.spec && \
-            echo "/usr/lib/systemd/system/vds-chmod-sdp.service" >> /root/rpmbuild/SPECS/vds.spec && \
-            echo "/usr/lib/systemd/system/vds-chmod-sdp.path" >> /root/rpmbuild/SPECS/vds.spec && \
-            echo "/usr/share/dbus-1/system.d/org.vds.conf" >> /root/rpmbuild/SPECS/vds.spec && \
-            echo "/usr/lib/udev/rules.d/99-vds-dualsense-udev.rules" >> /root/rpmbuild/SPECS/vds.spec && \
-            echo "/usr/lib/udev/rules.d/99-vds-uinput.rules" >> /root/rpmbuild/SPECS/vds.spec && \
+        # Block 7: Natives RPM via rpmbuild paketieren (SAUBER & MINIMAL)
+        RUN mkdir -p /root/rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS} && \
+            ( \
+              echo 'Name: kmod-vds'; \
+              echo 'Version: 1.0.0'; \
+              echo 'Release: 1'; \
+              echo 'Summary: Virtual DualSense Driver'; \
+              echo 'License: MIT'; \
+              echo ''; \
+              echo '%description'; \
+              echo 'Virtual DualSense Driver und Daemon fuer Bazzite.'; \
+              echo ''; \
+              echo '%post'; \
+              echo 'mkdir -p /etc/bluetooth' >> /root/rpmbuild/SPECS/vds.spec; \
+              echo 'cp -n /usr/share/vdsd/main.conf /etc/bluetooth/main.conf 2>/dev/null || true' >> /root/rpmbuild/SPECS/vds.spec; \
+              echo 'exit 0'; \
+              echo ''; \
+              echo '%files'; \
+              echo '/usr/lib/modules/'$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1)'/extra/vds_hcd.ko'; \
+              echo '/usr/lib/modules-load.d/vds.conf'; \
+              echo '/usr/bin/vdsd'; \
+              echo '/usr/bin/vdsctl'; \
+              echo '/usr/lib/systemd/system/vdsd.service'; \
+              echo '/usr/lib/systemd/system/vds-chmod-sdp.service'; \
+              echo '/usr/lib/systemd/system/vds-chmod-sdp.path'; \
+              echo '/usr/share/dbus-1/system.d/org.vds.conf'; \
+              echo '/usr/lib/udev/rules.d/99-vds-dualsense-udev.rules'; \
+              echo '/usr/lib/udev/rules.d/99-vds-uinput.rules'; \
+              echo '/usr/lib/systemd/system/bluetooth.service.d/override.conf'; \
+              echo '/usr/share/vdsd/main.conf'; \
+            ) > /root/rpmbuild/SPECS/vds.spec && \
             rpmbuild --define "_topdir /root/rpmbuild" --buildroot=/vds-pkg-root -bb /root/rpmbuild/SPECS/vds.spec && \
-            rpm -ivh --nodeps /root/rpmbuild/RPMS/x86_64/kmod-vds-1.0.0-1.x86_64.rpm
+            rpm -ivh --nodeps /root/rpmbuild/RPMS/x86_64/kmod-vds-1.0.0-1.x86_64.rpm && \
+            systemctl enable vdsd.service && \
+            systemctl enable vds-chmod-sdp.path
 
         # Block 8: Kernel-Abhängigkeiten neu indizieren
         RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
