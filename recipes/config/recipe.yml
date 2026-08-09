@@ -1,7 +1,6 @@
 # yaml-language-server: $schema=https://blue-build.org
 name: mein-bazzite-vds
 description: "Mein persönliches Bazzite mit nativer Integration des vDS Treibers und Daemons (v0.4.0) ohne Distrobox."
-
 base-image: ghcr.io/ublue-os/bazzite
 image-version: latest
 
@@ -20,7 +19,7 @@ modules:
       - systemd-devel
       - libudev-devel
 
-- type: containerfile
+  - type: containerfile
     snippets:
       - |
         # Block 1: vDS-Repository frisch klonen (Version 0.4.0 Upstream)
