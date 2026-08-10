@@ -25,7 +25,7 @@ modules:
         # Block 1: vDS-Repository frisch klonen (Version 0.4.0 Upstream)
         RUN git clone --depth 1 https://github.com/hurryman2212/vds.git /vds_build_dir
 
-        # Block 2: Kernel-Modul für die active Bazzite-Kernelversion bauen
+        # Block 2: Kernel-Modul für die aktive Bazzite-Kernelversion bauen
         RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
             KERNEL_BUILD_DIR="/usr/src/kernels/${KERNEL_VERSION}" && \
             cd /vds_build_dir/module && \
@@ -82,12 +82,12 @@ modules:
         #endif
         EOF
 
-        # Block 3b: CMake zwingen, die lokalen Header zu fressen und die pkg-config Suche zu überspringen
+        # Block 3b: CMake zwingen, die lokalen Header zu nutzen und die pkg-config Suche zu überspringen
         RUN cd /vds_build_dir && \
             sed -i '/pkg_check_modules.*bluez/c\set(bluez_FOUND TRUE)\nset(bluez_INCLUDE_DIRS "/vds_build_dir/include")\nset(bluez_LIBRARIES "")' CMakeLists.txt && \
             sed -i 's/PkgConfig::BLUEZ//g' CMakeLists.txt
 
-        # Block 3c: Den originalen v0.4.0 Daemon fehlerfrei kompilieren
+        # Block 3c: Den originalen v0.4.0 Daemon kompilieren
         RUN cd /vds_build_dir && \
             mkdir -p build && cd build && \
             cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS="-isystem /vds_build_dir/include" -DCMAKE_CXX_FLAGS="-isystem /vds_build_dir/include" && \
@@ -110,7 +110,7 @@ modules:
             cp /vds_build_dir/build/vdsctl "${PKG_ROOT}/usr/bin/vdsctl" && \
             chmod 755 "${PKG_ROOT}/usr/bin/vdsd" "${PKG_ROOT}/usr/bin/vdsctl"
 
-            # Block 5: Monolithischer Haupt-Dienst (Argumentlos, liest DB)
+        # Block 5: Monolithischer Haupt-Dienst (Argumentlos, liest DB)
         RUN PKG_ROOT="/vds-pkg-root" && \
             printf "vds_hcd\n" > "${PKG_ROOT}/usr/lib/modules-load.d/vds.conf" && \
             ( \
@@ -146,26 +146,30 @@ modules:
               echo 'WantedBy=multi-user.target'; \
             ) > "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service"
 
-        # Block 6: BlueZ-Compat-Override und automatische MAC-Registrierung mit sofortigem Bluetooth-Kick via udev
+        # Block 6: BlueZ-Compat-Override, Udev-Kette & Proton-Namensspoofing
         RUN PKG_ROOT="/vds-pkg-root" && \
-            printf "[Unit]\nDescription=Setze Berechtigungen für vDS SDP-Socket wenn er erscheint\n\n[Service]\nType=oneshot\nExecStart=/usr/bin/chmod 0777 /run/sdp\nRemainAfterExit=yes\n" > "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.service" && \
-            printf "[Unit]\nDescription=Überwache BlueZ SDP-Socket für vDS\n\n[Path]\nPathChanged=/run/sdp\nUnit=vds-chmod-sdp.service\n\n[Install]\nWantedBy=multi-user.target\n" > "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.path" && \
-            printf "[Service]\nExecStart=\nExecStart=/usr/libexec/bluetooth/bluetoothd --compat\n" > "${PKG_ROOT}/usr/lib/systemd/system/bluetooth.service.d/override.conf" && \
-            printf "[General]\nClassicBondedOnly=false\n" > "${PKG_ROOT}/usr/share/vdsd/main.conf" && \
-            printf "<!DOCTYPE busconfig PUBLIC \"-//freedesktop//DTD D-BUS Bus Configuration 1.0//EN\"\n \"http://freedesktop.org\">\n<busconfig>\n  <policy user=\"root\">\n    <allow own=\"org.vds\"/>\n    <allow send_destination=\"org.vds\"/>\n  </policy>\n  <policy context=\"default\">\n    <allow send_destination=\"org.vds\"/>\n  </policy>\n</busconfig>\n" > "${PKG_ROOT}/usr/share/dbus-1/system.d/org.vds.conf" && \
-            ( \
-              echo '# Isoliert strikt den Haupt-Controller im input-Subsystem'; \
-              echo 'SUBSYSTEM=="input", KERNEL=="event*", ATTR{name}!="DualSense Wireless Controller", GOTO="vds_end"'; \
-              echo '# Registriert die MAC asynchron in der SQLite-Datenbank'; \
-              echo 'SUBSYSTEM=="input", KERNEL=="event*", ACTION=="add", RUN+="/usr/bin/vdsctl attach \$env{ID_UNIQ}"'; \
-              echo '# Wunsch-Feature: Trennt den Controller sofort nach der Registrierung via BlueZ D-Bus, damit er neu verbunden werden kann'; \
-              echo 'SUBSYSTEM=="input", KERNEL=="event*", ACTION=="add", RUN+="/bin/sh -c '\''DEV_PATH=\$(echo \$env{ID_UNIQ} | tr \":\" \"_\"); busctl call org.bluez /org/bluez/hci0/dev_\$DEV_PATH org.bluez.Device1 Disconnect'\''"'; \
-              echo 'LABEL="vds_end"'; \
-            ) > "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-dualsense-udev.rules" && \
-            printf 'KERNEL=="uinput", MODE="0660", GROUP="input", OPTIONS+="static_node=uinput"\n' > "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-uinput.rules" && \
-            printf 'KERNEL=="vds[0-9]*", MODE="0660", GROUP="input", TAG+="systemd"\n' >> "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-uinput.rules"
+               printf "[Unit]\nDescription=Setze Berechtigungen für vDS SDP-Socket wenn er erscheint\n\n[Service]\nType=oneshot\nExecStart=/usr/bin/chmod 0777 /run/sdp\nRemainAfterExit=yes\n" > "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.service" && \
+               printf "[Unit]\nDescription=Überwache BlueZ SDP-Socket für vDS\n\n[Path]\nPathChanged=/run/sdp\nUnit=vds-chmod-sdp.service\n\n[Install]\nWantedBy=multi-user.target\n" > "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.path" && \
+               printf "[Service]\nExecStart=\nExecStart=/usr/libexec/bluetooth/bluetoothd --compat\n" > "${PKG_ROOT}/usr/lib/systemd/system/bluetooth.service.d/override.conf" && \
+               printf "[General]\nClassicBondedOnly=false\n" > "${PKG_ROOT}/usr/share/vdsd/main.conf" && \
+               printf "<!DOCTYPE busconfig PUBLIC \"-//freedesktop//DTD D-BUS Bus Configuration 1.0//EN\"\n \"http://freedesktop.org\">\n<busconfig>\n  <policy user=\"root\">\n    <allow own=\"org.vds\"/>\n    <allow send_destination=\"org.vds\"/>\n  </policy>\n  <policy context=\"default\">\n    <allow send_destination=\"org.vds\"/>\n  </policy>\n</busconfig>\n" > "${PKG_ROOT}/usr/share/dbus-1/system.d/org.vds.conf" && \
+               ( \
+                 echo '# Isoliert strikt den Haupt-Controller im input-Subsystem'; \
+                 echo 'SUBSYSTEM=="input", KERNEL=="event*", ATTR{name}!="DualSense Wireless Controller", GOTO="vds_end"'; \
+                 echo '# Registriert die MAC asynchron in der SQLite-Datenbank'; \
+                 echo 'SUBSYSTEM=="input", KERNEL=="event*", ACTION=="add", RUN+="/usr/bin/vdsctl attach \$env{ID_UNIQ}"'; \
+                 echo '# Wunsch-Feature: Trennt den Controller sofort nach der Registrierung via BlueZ D-Bus'; \
+                 echo 'SUBSYSTEM=="input", KERNEL=="event*", ACTION=="add", RUN+="/bin/sh -c '\''DEV_PATH=\$(echo \$env{ID_UNIQ} | tr \":\" \"_\"); busctl call org.bluez /org/bluez/hci0/dev_\$DEV_PATH org.bluez.Device1 Disconnect'\''"'; \
+                 echo 'LABEL="vds_end"'; \
+               ) > "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-dualsense-udev.rules" && \
+               ( \
+                 echo '# Proton-Korrektur: Zwingt das emulierte ALSA-Audiogerät auf den offiziellen Sony-String'; \
+                 echo 'SUBSYSTEM=="sound", KERNELS=="usb-vds_hcd*", ATTR{id}="WirelessController"'; \
+               ) > "${PKG_ROOT}/usr/lib/udev/rules.d/95-vds-alsa-spoof.rules" && \
+               printf 'KERNEL=="uinput", MODE="0660", GROUP="input", OPTIONS+="static_node=uinput"\n' > "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-uinput.rules" && \
+               printf 'KERNEL=="vds[0-9]*", MODE="0660", GROUP="input", TAG+="systemd"\n' >> "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-uinput.rules"
 
-        # Block 7: Natives RPM via rpmbuild paketieren (SAUBER & STRUKTURIERT)
+        # Block 7: Natives RPM via rpmbuild paketieren (Inklusive ALSA-Fix)
         RUN mkdir -p /root/rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS} && \
             ( \
               echo 'Name: kmod-vds'; \
@@ -175,7 +179,7 @@ modules:
               echo 'License: MIT'; \
               echo ''; \
               echo '%description'; \
-              echo 'Virtual DualSense Driver und Daemon fuer Bazzite.'; \
+              echo 'Virtual DualSense Driver und Daemon fuer Bazzite mit Proton-Korrektur.'; \
               echo ''; \
               echo '%post'; \
               echo 'mkdir -p /etc/bluetooth'; \
@@ -193,6 +197,7 @@ modules:
               echo '/usr/share/dbus-1/system.d/org.vds.conf'; \
               echo '/usr/lib/udev/rules.d/99-vds-uinput.rules'; \
               echo '/usr/lib/udev/rules.d/99-vds-dualsense-udev.rules'; \
+              echo '/usr/lib/udev/rules.d/95-vds-alsa-spoof.rules'; \
               echo '/usr/lib/systemd/system/bluetooth.service.d/override.conf'; \
               echo '/usr/share/vdsd/main.conf'; \
             ) > /root/rpmbuild/SPECS/vds.spec && \
@@ -206,7 +211,7 @@ modules:
             ln -sf /usr/lib/systemd/system/vds-chmod-sdp.path /usr/lib/systemd/system/multi-user.target.wants/vds-chmod-sdp.path && \
             ln -sf /usr/lib/systemd/system/vdsd.service /usr/lib/systemd/system/multi-user.target.wants/vdsd.service
 
-        # Block 9: KORREKTUR - Alten fehlerhaften Host-Override restlos entfernen
+        # Block 9: Alten fehlerhaften Host-Override restlos entfernen
         RUN rm -rf /usr/lib/systemd/system/vdsd.service.d
 
         # Block 10: Temporäre Build-Verzeichnisse rückstandslos entfernen
