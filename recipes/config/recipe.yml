@@ -25,12 +25,12 @@ modules:
         # Block 1: vDS-Repository frisch klonen (Version 0.4.0 Upstream)
         RUN git clone --depth 1 https://github.com/hurryman2212/vds.git /vds_build_dir
 
-        # Block 2: Kernel-Modul für die aktive Bazzite-Kernelversion bauen
+        # Block 2: Kernel-Modul für die active Bazzite-Kernelversion bauen
         RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
             KERNEL_BUILD_DIR="/usr/src/kernels/${KERNEL_VERSION}" && \
             cd /vds_build_dir/module && \
             make KCFLAGS="-w" KERNELRELEASE="${KERNEL_VERSION}" KERNELDIR="${KERNEL_BUILD_DIR}"
-            
+
         # Block 3: Lokale Header erzeugen
         RUN mkdir -p /vds_build_dir/include/bluetooth && \
             cat << 'EOF' > /vds_build_dir/include/bluetooth/bluetooth.h
@@ -98,34 +98,33 @@ modules:
             PKG_ROOT="/vds-pkg-root" && \
             mkdir -p "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra" && \
             mkdir -p "${PKG_ROOT}/usr/lib/modules-load.d" && \
-            mkdir -p "${PKG_ROOT}/usr/lib/modprobe.d" && \
             mkdir -p "${PKG_ROOT}/usr/bin" && \
             mkdir -p "${PKG_ROOT}/usr/lib/systemd/system/bluetooth.service.d" && \
             mkdir -p "${PKG_ROOT}/usr/lib/systemd/system" && \
             mkdir -p "${PKG_ROOT}/usr/share/dbus-1/system.d" && \
             mkdir -p "${PKG_ROOT}/usr/lib/udev/rules.d" && \
-            mkdir -p "${PKG_ROOT}/usr/etc/bluetooth" && \
+            mkdir -p "${PKG_ROOT}/usr/share/vdsd" && \
             cp /vds_build_dir/module/vds_hcd.ko "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra/" && \
             chmod 644 "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra/vds_hcd.ko" && \
             cp /vds_build_dir/build/vdsd "${PKG_ROOT}/usr/bin/vdsd" && \
             cp /vds_build_dir/build/vdsctl "${PKG_ROOT}/usr/bin/vdsctl" && \
             chmod 755 "${PKG_ROOT}/usr/bin/vdsd" "${PKG_ROOT}/usr/bin/vdsctl"
 
-        # Block 5: Systemd-Dienst als Instanz-Template für vDS konfigurieren
+            # Block 5: Monolithischer Haupt-Dienst (Argumentlos, liest DB)
         RUN PKG_ROOT="/vds-pkg-root" && \
             printf "vds_hcd\n" > "${PKG_ROOT}/usr/lib/modules-load.d/vds.conf" && \
             ( \
               echo '[Unit]'; \
-              echo 'Description=Virtual DualSense Userspace Daemon (v0.4.0 Native) for %I'; \
+              echo 'Description=Virtual DualSense Userspace Daemon (v0.4.0 Nativ)'; \
               echo 'After=bluetooth.service vds-chmod-sdp.service systemd-udevd.service'; \
               echo 'Wants=systemd-udevd.service'; \
               echo 'Requires=bluetooth.service'; \
               echo ''; \
               echo '[Service]'; \
               echo 'Type=simple'; \
-              echo 'ExecStartPre=/usr/bin/mkdir -p /var/lib/vdsd'; \
+              echo 'ExecStartPre=/usr/bin/mkdir -p /var/lib/vds'; \
               echo 'ExecStartPre=/usr/bin/chmod 666 /dev/uhid'; \
-              echo 'ExecStart=/usr/bin/vdsd --mac %I'; \
+              echo 'ExecStart=/usr/bin/vdsd'; \
               echo 'Restart=always'; \
               echo 'RestartSec=5'; \
               echo 'User=root'; \
@@ -145,25 +144,27 @@ modules:
               echo ''; \
               echo '[Install]'; \
               echo 'WantedBy=multi-user.target'; \
-            ) > "${PKG_ROOT}/usr/lib/systemd/system/vdsd@.service"
+            ) > "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service"
 
-        # Block 6: SDP-Berechtigungshelfer, main.conf und dynamische udev-Verknüpfungen anlegen
+        # Block 6: BlueZ-Compat-Override und automatische MAC-Registrierung mit sofortigem Bluetooth-Kick via udev
         RUN PKG_ROOT="/vds-pkg-root" && \
             printf "[Unit]\nDescription=Setze Berechtigungen für vDS SDP-Socket wenn er erscheint\n\n[Service]\nType=oneshot\nExecStart=/usr/bin/chmod 0777 /run/sdp\nRemainAfterExit=yes\n" > "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.service" && \
             printf "[Unit]\nDescription=Überwache BlueZ SDP-Socket für vDS\n\n[Path]\nPathChanged=/run/sdp\nUnit=vds-chmod-sdp.service\n\n[Install]\nWantedBy=multi-user.target\n" > "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.path" && \
             printf "[Service]\nExecStart=\nExecStart=/usr/libexec/bluetooth/bluetoothd --compat\n" > "${PKG_ROOT}/usr/lib/systemd/system/bluetooth.service.d/override.conf" && \
-            mkdir -p "${PKG_ROOT}/usr/share/vdsd" && \
             printf "[General]\nClassicBondedOnly=false\n" > "${PKG_ROOT}/usr/share/vdsd/main.conf" && \
             printf "<!DOCTYPE busconfig PUBLIC \"-//freedesktop//DTD D-BUS Bus Configuration 1.0//EN\"\n \"http://freedesktop.org\">\n<busconfig>\n  <policy user=\"root\">\n    <allow own=\"org.vds\"/>\n    <allow send_destination=\"org.vds\"/>\n  </policy>\n  <policy context=\"default\">\n    <allow send_destination=\"org.vds\"/>\n  </policy>\n</busconfig>\n" > "${PKG_ROOT}/usr/share/dbus-1/system.d/org.vds.conf" && \
             ( \
-              echo '# Robustes Koppel-Matching über das verlässliche Input-Subsystem (Extrahiert MAC via uniq)'; \
-              echo 'SUBSYSTEM=="input", KERNEL=="event*", ENV{ID_INPUT_JOYSTICK}!="1", GOTO="vds_end"'; \
-              echo 'SUBSYSTEM=="input", KERNEL=="event*", ATTR{name}=="DualSense Wireless Controller", ACTION=="add", TAG+="systemd", ENV{SYSTEMD_WANTS}+="vdsd@$attr{uniq}.service"'; \
+              echo '# Isoliert strikt den Haupt-Controller im input-Subsystem'; \
+              echo 'SUBSYSTEM=="input", KERNEL=="event*", ATTR{name}!="DualSense Wireless Controller", GOTO="vds_end"'; \
+              echo '# Registriert die MAC asynchron in der SQLite-Datenbank'; \
+              echo 'SUBSYSTEM=="input", KERNEL=="event*", ACTION=="add", RUN+="/usr/bin/vdsctl attach \$env{ID_UNIQ}"'; \
+              echo '# Wunsch-Feature: Trennt den Controller sofort nach der Registrierung via BlueZ D-Bus, damit er neu verbunden werden kann'; \
+              echo 'SUBSYSTEM=="input", KERNEL=="event*", ACTION=="add", RUN+="/bin/sh -c '\''DEV_PATH=\$(echo \$env{ID_UNIQ} | tr \":\" \"_\"); busctl call org.bluez /org/bluez/hci0/dev_\$DEV_PATH org.bluez.Device1 Disconnect'\''"'; \
               echo 'LABEL="vds_end"'; \
             ) > "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-dualsense-udev.rules" && \
-            printf 'KERNEL=="uinput", MODE="0660", GROUP="input", SECLABEL{selinux}="system_u:object_r:input_device_t:s0", OPTIONS+="static_node=uinput"\n' > "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-uinput.rules" && \
-            printf 'KERNEL=="vds[0-9]*", MODE="0660", GROUP="input", TAG+="systemd", SECLABEL{selinux}="system_u:object_r:input_device_t:s0"\n' >> "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-uinput.rules"
-        
+            printf 'KERNEL=="uinput", MODE="0660", GROUP="input", OPTIONS+="static_node=uinput"\n' > "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-uinput.rules" && \
+            printf 'KERNEL=="vds[0-9]*", MODE="0660", GROUP="input", TAG+="systemd"\n' >> "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-uinput.rules"
+
         # Block 7: Natives RPM via rpmbuild paketieren (SAUBER & STRUKTURIERT)
         RUN mkdir -p /root/rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS} && \
             ( \
@@ -186,29 +187,27 @@ modules:
               echo '/usr/lib/modules-load.d/vds.conf'; \
               echo '/usr/bin/vdsd'; \
               echo '/usr/bin/vdsctl'; \
-              echo '/usr/lib/systemd/system/vdsd@.service'; \
+              echo '/usr/lib/systemd/system/vdsd.service'; \
               echo '/usr/lib/systemd/system/vds-chmod-sdp.service'; \
               echo '/usr/lib/systemd/system/vds-chmod-sdp.path'; \
               echo '/usr/share/dbus-1/system.d/org.vds.conf'; \
-              echo '/usr/lib/udev/rules.d/99-vds-dualsense-udev.rules'; \
               echo '/usr/lib/udev/rules.d/99-vds-uinput.rules'; \
+              echo '/usr/lib/udev/rules.d/99-vds-dualsense-udev.rules'; \
               echo '/usr/lib/systemd/system/bluetooth.service.d/override.conf'; \
               echo '/usr/share/vdsd/main.conf'; \
             ) > /root/rpmbuild/SPECS/vds.spec && \
             rpmbuild --define "_topdir /root/rpmbuild" --buildroot=/vds-pkg-root -bb /root/rpmbuild/SPECS/vds.spec && \
             rpm -ivh --nodeps /root/rpmbuild/RPMS/x86_64/kmod-vds-1.0.0-1.x86_64.rpm
 
-        # Block 8: Kernel-Abhängigkeiten neu indizieren & Systemd-Services via Symlink erzwingen
+        # Block 8: Kernel-Abhängigkeiten neu indizieren & Systemd-Services via Symlink aktivieren
         RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
             depmod -a -b / "${KERNEL_VERSION}" && \
-            # Zwingt Bazzite, die Überwachungspfade beim Booten direkt zu laden
             mkdir -p /usr/lib/systemd/system/multi-user.target.wants && \
-            ln -sf /usr/lib/systemd/system/vds-chmod-sdp.path /usr/lib/systemd/system/multi-user.target.wants/vds-chmod-sdp.path
+            ln -sf /usr/lib/systemd/system/vds-chmod-sdp.path /usr/lib/systemd/system/multi-user.target.wants/vds-chmod-sdp.path && \
+            ln -sf /usr/lib/systemd/system/vdsd.service /usr/lib/systemd/system/multi-user.target.wants/vdsd.service
 
         # Block 9: KORREKTUR - Alten fehlerhaften Host-Override restlos entfernen
         RUN rm -rf /usr/lib/systemd/system/vdsd.service.d
 
         # Block 10: Temporäre Build-Verzeichnisse rückstandslos entfernen
         RUN rm -rf /vds_build_dir /vds-pkg-root /root/rpmbuild
-
-        
