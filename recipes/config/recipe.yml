@@ -169,7 +169,33 @@ modules:
                printf 'KERNEL=="uinput", MODE="0660", GROUP="input", OPTIONS+="static_node=uinput"\n' > "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-uinput.rules" && \
                printf 'KERNEL=="vds[0-9]*", MODE="0660", GROUP="input", TAG+="systemd"\n' >> "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-uinput.rules"
 
-        # Block 7: Natives RPM via rpmbuild paketieren (Inklusive ALSA-Fix)
+        # Block 6b: WirePlumber-Priorisierung (Erzwingt 4-Kanal-Pro-Audio & verhindert SUSPENDED)
+        RUN PKG_ROOT="/vds-pkg-root" && \
+            mkdir -p "${PKG_ROOT}/usr/share/wireplumber/wireplumber.conf.d" && \
+            ( \
+              echo 'monitor.alsa.rules = ['; \
+              echo '  {'; \
+              echo '    matches = ['; \
+              echo '      {'; \
+              echo '        node.name = "~alsa_output.usb-Sony_Interactive_Entertainment_DualSense_Wireless_Controller*"'; \
+              echo '      }'; \
+              echo '    ]'; \
+              echo '    actions = {'; \
+              echo '      update-props = {'; \
+              echo '        # Erzwingt das ungefilterte 4-Kanal Pro-Audio Profil'; \
+              echo '        device.profile = "pro-audio"'; \
+              echo '        # Setzt die Priorität hoch, damit Proton den Knoten sofort reserviert'; \
+              echo '        priority.driver = 1500'; \
+              echo '        priority.session = 1500'; \
+              echo '        # Verhindert, dass PipeWire die Soundkarte in den Ruhezustand schickt'; \
+              echo '        session.suspend-on-idle = false'; \
+              echo '      }'; \
+              echo '    }'; \
+              echo '  }'; \
+              echo ']'; \
+            ) > "${PKG_ROOT}/usr/share/wireplumber/wireplumber.conf.d/99-vds-prioritisation.conf"
+
+        # Block 7: Natives RPM via rpmbuild paketieren (Inklusive ALSA-Fix & WirePlumber-Priorisierung)
         RUN mkdir -p /root/rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS} && \
             ( \
               echo 'Name: kmod-vds'; \
@@ -179,7 +205,7 @@ modules:
               echo 'License: MIT'; \
               echo ''; \
               echo '%description'; \
-              echo 'Virtual DualSense Driver und Daemon fuer Bazzite mit Proton-Korrektur.'; \
+              echo 'Virtual DualSense Driver und Daemon fuer Bazzite mit Proton-Korrektur und WirePlumber-Priorisierung.'; \
               echo ''; \
               echo '%post'; \
               echo 'mkdir -p /etc/bluetooth'; \
@@ -198,6 +224,7 @@ modules:
               echo '/usr/lib/udev/rules.d/99-vds-uinput.rules'; \
               echo '/usr/lib/udev/rules.d/99-vds-dualsense-udev.rules'; \
               echo '/usr/lib/udev/rules.d/95-vds-alsa-spoof.rules'; \
+              echo '/usr/share/wireplumber/wireplumber.conf.d/99-vds-prioritisation.conf'; \
               echo '/usr/lib/systemd/system/bluetooth.service.d/override.conf'; \
               echo '/usr/share/vdsd/main.conf'; \
             ) > /root/rpmbuild/SPECS/vds.spec && \
