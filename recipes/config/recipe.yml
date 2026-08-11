@@ -28,12 +28,11 @@ modules:
         # Block 2: Quellcode patchen (Sony-Namen im Kernel erzwingen) & Modul bauen
         RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
             KERNEL_BUILD_DIR="/usr/src/kernels/${KERNEL_VERSION}" && \
+            cd /vds_build_dir && \
+            # Korrektur: Erzwingt den exakten ALSA-String nativ direkt in der USB-Descriptor-Verarbeitung
+            sed -i 's/profile->product/"WirelessController"/g' module/vds_usb_core.c && \
             cd /vds_build_dir/module && \
-            # Patcht alle Namensdefinitionen direkt im C-Code auf den korrekten Proton-String
-            sed -i 's/"Controller"/"WirelessController"/g' *.c *.h 2>/dev/null || true && \
-            sed -i 's/"controller"/"WirelessController"/g' *.c *.h 2>/dev/null || true && \
             make KCFLAGS="-w" KERNELRELEASE="${KERNEL_VERSION}" KERNELDIR="${KERNEL_BUILD_DIR}"
-
 
         # Block 3: Lokale Header erzeugen
         RUN mkdir -p /vds_build_dir/include/bluetooth && \
@@ -151,7 +150,7 @@ modules:
               echo 'WantedBy=multi-user.target'; \
             ) > "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service"
 
-        # Block 6: BlueZ-Compat-Override & Udev-Datenbank-Kette (BEREINIGT)
+        # Block 6: BlueZ-Compat-Override & Udev-Datenbank-Kette (Inklusive D-Bus-Kick-Automation)
         RUN PKG_ROOT="/vds-pkg-root" && \
                printf "[Unit]\nDescription=Setze Berechtigungen für vDS SDP-Socket wenn er erscheint\n\n[Service]\nType=oneshot\nExecStart=/usr/bin/chmod 0777 /run/sdp\nRemainAfterExit=yes\n" > "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.service" && \
                printf "[Unit]\nDescription=Überwache BlueZ SDP-Socket für vDS\n\n[Path]\nPathChanged=/run/sdp\nUnit=vds-chmod-sdp.service\n\n[Install]\nWantedBy=multi-user.target\n" > "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.path" && \
@@ -159,16 +158,21 @@ modules:
                printf "[General]\nClassicBondedOnly=false\n" > "${PKG_ROOT}/usr/share/vdsd/main.conf" && \
                printf "<!DOCTYPE busconfig PUBLIC \"-//freedesktop//DTD D-BUS Bus Configuration 1.0//EN\"\n \"http://freedesktop.org\">\n<busconfig>\n  <policy user=\"root\">\n    <allow own=\"org.vds\"/>\n    <allow send_destination=\"org.vds\"/>\n  </policy>\n  <policy context=\"default\">\n    <allow send_destination=\"org.vds\"/>\n  </policy>\n</busconfig>\n" > "${PKG_ROOT}/usr/share/dbus-1/system.d/org.vds.conf" && \
                ( \
-                 echo '# Isoliert strikt den Haupt-Controller im input-Subsystem'; \
-                 echo 'SUBSYSTEM=="input", KERNEL=="event*", ATTR{name}!="DualSense Wireless Controller", GOTO="vds_end"'; \
-                 echo '# Registriert die MAC asynchron in der SQLite-Datenbank'; \
-                 echo 'SUBSYSTEM=="input", KERNEL=="event*", ACTION=="add", RUN+="/usr/bin/vdsctl attach \$env{ID_UNIQ}"'; \
+                 echo '# Isoliert strikt den Haupt-Controller im input-Subsystem basierend auf Eltern-Attributen'; \
+                 echo 'SUBSYSTEM=="input", KERNEL=="event*", ATTRS{name}!="DualSense Wireless Controller", GOTO="vds_end"'; \
+                 echo ''; \
+                 echo '# 1. Registriert die MAC-Adresse unbestechlich und asynchron über den Eltern-Knoten in der SQLite-Datenbank'; \
+                 echo 'SUBSYSTEM=="input", KERNEL=="event*", ACTION=="add", RUN+="/usr/bin/vdsctl attach \$attr{properties/uniq}"'; \
+                 echo ''; \
+                 echo '# 2. AUTOMATISCHER D-BUS-KICK: Trennt das Gerät sofort, um den zweiten, gehärteten Handshake zu erzwingen'; \
+                 echo '# Wandelt Doppelpunkte der MAC in Unterstriche um, um das BlueZ-Objekt-Pfad-Format exakt zu treffen'; \
+                 echo 'SUBSYSTEM=="input", KERNEL=="event*", ACTION=="add", RUN+="/usr/bin/bash -c '\''MAC_DASH=\$(echo \$attr{properties/uniq} | tr \":\" \"_\"); dbus-send --system --print-reply --dest=org.bluez /org/bluez/hci0/dev_\${MAC_DASH} org.bluez.Device1.Disconnect'\''"'; \
                  echo 'LABEL="vds_end"'; \
                ) > "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-dualsense-udev.rules" && \
                printf 'KERNEL=="uinput", MODE="0660", GROUP="input", OPTIONS+="static_node=uinput"\n' > "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-uinput.rules" && \
                printf 'KERNEL=="vds[0-9]*", MODE="0660", GROUP="input", TAG+="systemd"\n' >> "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-uinput.rules"
 
-        # Block 6b: WirePlumber-Priorisierung (Basiert jetzt rein auf dem nativen Kernel-Namen)
+        # Block 6b: WirePlumber-Priorisierung (Basiert jetzt rein auf dem nativen Kernel-Namen und hält Proton-Lock)
         RUN PKG_ROOT="/vds-pkg-root" && \
             ( \
               echo 'monitor.alsa.rules = ['; \
@@ -184,7 +188,8 @@ modules:
               echo '        device.profile = "pro-audio"'; \
               echo '        priority.driver = 1500'; \
               echo '        priority.session = 1500'; \
-              echo '        session.suspend-on-idle = true'; \
+              echo '        # Verhindert, dass die Soundkarte in den Ruhezustand geht (wichtig für Proton-Exklusiv-Locks)'; \
+              echo '        session.suspend-on-idle = false'; \
               echo '      }'; \
               echo '    }'; \
               echo '  }'; \
