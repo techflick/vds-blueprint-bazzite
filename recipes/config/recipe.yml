@@ -25,11 +25,15 @@ modules:
         # Block 1: vDS-Repository frisch klonen (Version 0.4.0 Upstream)
         RUN git clone --depth 1 https://github.com/hurryman2212/vds.git /vds_build_dir
 
-        # Block 2: Kernel-Modul für die aktive Bazzite-Kernelversion bauen
+        # Block 2: Quellcode patchen (Sony-Namen im Kernel erzwingen) & Modul bauen
         RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
             KERNEL_BUILD_DIR="/usr/src/kernels/${KERNEL_VERSION}" && \
             cd /vds_build_dir/module && \
+            # Patcht alle Namensdefinitionen direkt im C-Code auf den korrekten Proton-String
+            sed -i 's/"Controller"/"WirelessController"/g' *.c *.h 2>/dev/null || true && \
+            sed -i 's/"controller"/"WirelessController"/g' *.c *.h 2>/dev/null || true && \
             make KCFLAGS="-w" KERNELRELEASE="${KERNEL_VERSION}" KERNELDIR="${KERNEL_BUILD_DIR}"
+
 
         # Block 3: Lokale Header erzeugen
         RUN mkdir -p /vds_build_dir/include/bluetooth && \
@@ -147,7 +151,7 @@ modules:
               echo 'WantedBy=multi-user.target'; \
             ) > "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service"
 
-        # Block 6: BlueZ-Compat-Override, Udev-Kette & Proton-Namensspoofing (KORRIGIERT)
+        # Block 6: BlueZ-Compat-Override & Udev-Datenbank-Kette (BEREINIGT)
         RUN PKG_ROOT="/vds-pkg-root" && \
                printf "[Unit]\nDescription=Setze Berechtigungen für vDS SDP-Socket wenn er erscheint\n\n[Service]\nType=oneshot\nExecStart=/usr/bin/chmod 0777 /run/sdp\nRemainAfterExit=yes\n" > "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.service" && \
                printf "[Unit]\nDescription=Überwache BlueZ SDP-Socket für vDS\n\n[Path]\nPathChanged=/run/sdp\nUnit=vds-chmod-sdp.service\n\n[Install]\nWantedBy=multi-user.target\n" > "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.path" && \
@@ -161,39 +165,33 @@ modules:
                  echo 'SUBSYSTEM=="input", KERNEL=="event*", ACTION=="add", RUN+="/usr/bin/vdsctl attach \$env{ID_UNIQ}"'; \
                  echo 'LABEL="vds_end"'; \
                ) > "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-dualsense-udev.rules" && \
-               ( \
-                 echo '# Proton-Korrektur: Zwingt das emulierte ALSA-Audiogerät auf den offiziellen Sony-String'; \
-                 echo 'SUBSYSTEM=="sound", KERNELS=="usb-vds_hcd*", ENV{ALSA_CARD_ID}="WirelessController"'; \
-               ) > "${PKG_ROOT}/usr/lib/udev/rules.d/95-vds-alsa-spoof.rules" && \
                printf 'KERNEL=="uinput", MODE="0660", GROUP="input", OPTIONS+="static_node=uinput"\n' > "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-uinput.rules" && \
                printf 'KERNEL=="vds[0-9]*", MODE="0660", GROUP="input", TAG+="systemd"\n' >> "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-uinput.rules"
 
-        # Block 6b: WirePlumber-Priorisierung (KORRIGIERT auf /etc und neues Matching)
+        # Block 6b: WirePlumber-Priorisierung (Basiert jetzt rein auf dem nativen Kernel-Namen)
         RUN PKG_ROOT="/vds-pkg-root" && \
             ( \
               echo 'monitor.alsa.rules = ['; \
               echo '  {'; \
               echo '    matches = ['; \
               echo '      {'; \
-              echo '        node.name = "~alsa_output.usb-WirelessController* "'; \
+              echo '        # Matched perfekt auf den im C-Code injizierten Namen'; \
+              echo '        node.name = "~alsa_output.usb-WirelessController.*"'; \
               echo '      }'; \
               echo '    ]'; \
               echo '    actions = {'; \
               echo '      update-props = {'; \
-              echo '        # Erzwingt das ungefilterte 4-Kanal Pro-Audio Profil'; \
               echo '        device.profile = "pro-audio"'; \
-              echo '        # Setzt die Priorität hoch, damit Proton den Knoten sofort reserviert'; \
               echo '        priority.driver = 1500'; \
               echo '        priority.session = 1500'; \
-              echo '        # Verhindert, dass PipeWire die Soundkarte in den Ruhezustand schickt'; \
-              echo '        session.suspend-on-idle = false'; \
+              echo '        session.suspend-on-idle = true'; \
               echo '      }'; \
               echo '    }'; \
               echo '  }'; \
               echo ']'; \
             ) > "${PKG_ROOT}/etc/wireplumber/wireplumber.conf.d/99-vds-prioritisation.conf"
 
-        # Block 7: Natives RPM via rpmbuild paketieren (Pfade in %files mit Domino-Kette synchronisiert)
+        # Block 7: Natives RPM via rpmbuild paketieren (Alte Spoof-Regel aus %files entfernt)
         RUN mkdir -p /root/rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS} && \
             ( \
               echo 'Name: kmod-vds'; \
@@ -203,7 +201,7 @@ modules:
               echo 'License: MIT'; \
               echo ''; \
               echo '%description'; \
-              echo 'Virtual DualSense Driver und Daemon fuer Bazzite mit Proton-Korrektur und WirePlumber-Priorisierung.'; \
+              echo 'Virtual DualSense Driver und Daemon fuer Bazzite mit nativem C-Code-Spoofing und WirePlumber-Priorisierung.'; \
               echo ''; \
               echo '%post'; \
               echo 'mkdir -p /etc/bluetooth'; \
@@ -221,7 +219,6 @@ modules:
               echo '/usr/share/dbus-1/system.d/org.vds.conf'; \
               echo '/usr/lib/udev/rules.d/99-vds-uinput.rules'; \
               echo '/usr/lib/udev/rules.d/99-vds-dualsense-udev.rules'; \
-              echo '/usr/lib/udev/rules.d/95-vds-alsa-spoof.rules'; \
               echo '/etc/wireplumber/wireplumber.conf.d/99-vds-prioritisation.conf'; \
               echo '/usr/lib/systemd/system/bluetooth.service.d/override.conf'; \
               echo '/usr/share/vdsd/main.conf'; \
