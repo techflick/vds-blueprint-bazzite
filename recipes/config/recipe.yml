@@ -25,12 +25,9 @@ modules:
         # Block 1: vDS-Repository frisch klonen (Version 0.4.0 Upstream)
         RUN git clone --depth 1 https://github.com/hurryman2212/vds.git /vds_build_dir
 
-        # Block 2: Quellcode patchen (Sony-Namen im Kernel erzwingen) & Modul bauen
+        # Block 2: Kernel-Modul unberührt für die aktuelle Kernel-Version bauen
         RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
             KERNEL_BUILD_DIR="/usr/src/kernels/${KERNEL_VERSION}" && \
-            cd /vds_build_dir && \
-            # KORREKTUR: Trifft exakt die verifizierte Zeile 516 mit der schließenden Klammer
-            sed -i 's/profile->product);/\"WirelessController\");/g' module/vds_usb_core.c && \
             cd /vds_build_dir/module && \
             make KCFLAGS="-w" KERNELRELEASE="${KERNEL_VERSION}" KERNELDIR="${KERNEL_BUILD_DIR}"
 
@@ -150,7 +147,7 @@ modules:
               echo 'WantedBy=multi-user.target'; \
             ) > "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service"
 
-        # Block 6: BlueZ-Compat-Override & Udev-Datenbank-Kette (KORRIGIERT & JETZT MIT D-BUS-KICK)
+        # Block 6: BlueZ-Compat-Override & Udev-Datenbank-Kette (KORRIGIERT & JETZT MIT REPARIERTEM D-BUS-KICK)
         RUN PKG_ROOT="/vds-pkg-root" && \
                printf "[Unit]\nDescription=Setze Berechtigungen für vDS SDP-Socket wenn er erscheint\n\n[Service]\nType=oneshot\nExecStart=/usr/bin/chmod 0777 /run/sdp\nRemainAfterExit=yes\n" > "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.service" && \
                printf "[Unit]\nDescription=Überwache BlueZ SDP-Socket für vDS\n\n[Path]\nPathChanged=/run/sdp\nUnit=vds-chmod-sdp.service\n\n[Install]\nWantedBy=multi-user.target\n" > "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.path" && \
@@ -169,48 +166,44 @@ modules:
                  echo '# 1. Datenbank-Injektion: Nutzt das unbestechliche Kernel-Attribut statt env'; \
                  echo 'RUN+="/usr/bin/vdsctl attach \$attr{properties/uniq}"'; \
                  echo ''; \
-                 echo '# 2. Auto-Auswurf (D-Bus-Kick): Konvertiert Doppelpunkte zu Unterstrichen und trennt'; \
-                 echo 'RUN+="/usr/bin/bash -c '\''MAC_DASH=\$(echo \$attr{properties/uniq} | tr \":\" \"_\"); dbus-send --system --print-reply --dest=org.bluez /org/bluez/hci0/dev_\$\${MAC_DASH} org.bluez.Device1.Disconnect'\''"'; \
+                 echo '# 2. Auto-Auswurf (D-Bus-Kick): Korrigierte Syntax für fehlerfreien Disconnect'; \
+                 echo 'RUN+="/usr/bin/bash -c '\''MAC_DASH=\$(echo \$attr{properties/uniq} | tr \":\" \"_\"); dbus-send --system --print-reply --dest=org.bluez /org/bluez/hci0/dev_\${MAC_DASH} org.bluez.Device1.Disconnect'\''"'; \
                  echo ''; \
                  echo 'LABEL="vds_end"'; \
                ) > "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-dualsense-udev.rules" && \
                printf 'KERNEL=="uinput", MODE="0660", GROUP="input", OPTIONS+="static_node=uinput"\n' > "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-uinput.rules" && \
                printf 'KERNEL=="vds[0-9]*", MODE="0660", GROUP="input", TAG+="systemd"\n' >> "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-uinput.rules"
 
-        # Block 6b: WirePlumber-Priorisierung (Vollständiges 4-Kanal Pro-Audio & kein Suspend)
+        # Block 6b: WirePlumber-Priorisierung & Userspace-ID-Spoofing für Proton-Spiele
         RUN PKG_ROOT="/vds-pkg-root" && \
             ( \
               echo 'monitor.alsa.rules = ['; \
               echo '  {'; \
               echo '    matches = ['; \
               echo '      {'; \
-              echo '        # Fängt das Gerät über den via C-Patch modifizierten Kernel-Namen ab'; \
-              echo '        device.name = "~alsa_card.usb-WirelessController.*"'; \
+              echo '        node.name = "~alsa_output.usb-WirelessControl*. *"' || true; \
+              echo '      },'; \
+              echo '      {'; \
+              echo '        node.name = "~alsa_output.usb-Sony_Interactive_Entertainment_Wireless*. *"' || true; \
               echo '      }'; \
               echo '    ]'; \
               echo '    actions = {'; \
               echo '      update-props = {'; \
+              echo '        # NATIVES SONY-SPOOFING AUF AUDIO-EBENE FUER PROTON-TITEL'; \
+              echo '        alsa.card_id = "WirelessController"'; \
+              echo '        alsa.card_name = "WirelessController"'; \
+              echo '        device.nick = "WirelessController"'; \
+              echo ''; \
+              echo '        # QUADROFONIE-ROUTING UND TIMEOUT-SCHUTZ'; \
+              echo '        audio.channels = 4'; \
+              echo '        audio.position = [ FL, FR, RL, RR ]'; \
               echo '        api.alsa.use-acp = true'; \
               echo '        api.acp.auto-profile = false'; \
               echo '        api.acp.auto-port = false'; \
               echo '        device.profile = "pro-audio"'; \
-              echo '      }'; \
-              echo '    }'; \
-              echo '  },'; \
-              echo '  {'; \
-              echo '    matches = ['; \
-              echo '      {'; \
-              echo '        node.name = "~alsa_output.usb-WirelessController.*"'; \
-              echo '      }'; \
-              echo '    ]'; \
-              echo '    actions = {'; \
-              echo '      update-props = {'; \
               echo '        priority.driver = 1500'; \
               echo '        priority.session = 1500'; \
-              echo '        # KRITISCH: Verhindert Ruhezustand, um Proton-Thread-Crashes zu blockieren'; \
               echo '        session.suspend-on-idle = false'; \
-              echo '        audio.channels = 4'; \
-              echo '        audio.position = [ FL, FR, RL, RR ]'; \
               echo '      }'; \
               echo '    }'; \
               echo '  }'; \
