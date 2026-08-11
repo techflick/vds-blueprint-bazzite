@@ -104,6 +104,7 @@ modules:
             mkdir -p "${PKG_ROOT}/usr/share/dbus-1/system.d" && \
             mkdir -p "${PKG_ROOT}/usr/lib/udev/rules.d" && \
             mkdir -p "${PKG_ROOT}/usr/share/vdsd" && \
+            mkdir -p "${PKG_ROOT}/etc/wireplumber/wireplumber.conf.d" && \
             cp /vds_build_dir/module/vds_hcd.ko "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra/" && \
             chmod 644 "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra/vds_hcd.ko" && \
             cp /vds_build_dir/build/vdsd "${PKG_ROOT}/usr/bin/vdsd" && \
@@ -146,7 +147,7 @@ modules:
               echo 'WantedBy=multi-user.target'; \
             ) > "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service"
 
-        # Block 6: BlueZ-Compat-Override, Udev-Kette & Proton-Namensspoofing
+        # Block 6: BlueZ-Compat-Override, Udev-Kette & Proton-Namensspoofing (KORRIGIERT)
         RUN PKG_ROOT="/vds-pkg-root" && \
                printf "[Unit]\nDescription=Setze Berechtigungen für vDS SDP-Socket wenn er erscheint\n\n[Service]\nType=oneshot\nExecStart=/usr/bin/chmod 0777 /run/sdp\nRemainAfterExit=yes\n" > "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.service" && \
                printf "[Unit]\nDescription=Überwache BlueZ SDP-Socket für vDS\n\n[Path]\nPathChanged=/run/sdp\nUnit=vds-chmod-sdp.service\n\n[Install]\nWantedBy=multi-user.target\n" > "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.path" && \
@@ -158,26 +159,23 @@ modules:
                  echo 'SUBSYSTEM=="input", KERNEL=="event*", ATTR{name}!="DualSense Wireless Controller", GOTO="vds_end"'; \
                  echo '# Registriert die MAC asynchron in der SQLite-Datenbank'; \
                  echo 'SUBSYSTEM=="input", KERNEL=="event*", ACTION=="add", RUN+="/usr/bin/vdsctl attach \$env{ID_UNIQ}"'; \
-                 echo '# Wunsch-Feature: Trennt den Controller sofort nach der Registrierung via BlueZ D-Bus'; \
-                 echo 'SUBSYSTEM=="input", KERNEL=="event*", ACTION=="add", RUN+="/bin/sh -c '\''DEV_PATH=\$(echo \$env{ID_UNIQ} | tr \":\" \"_\"); busctl call org.bluez /org/bluez/hci0/dev_\$DEV_PATH org.bluez.Device1 Disconnect'\''"'; \
                  echo 'LABEL="vds_end"'; \
                ) > "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-dualsense-udev.rules" && \
                ( \
                  echo '# Proton-Korrektur: Zwingt das emulierte ALSA-Audiogerät auf den offiziellen Sony-String'; \
-                 echo 'SUBSYSTEM=="sound", KERNELS=="usb-vds_hcd*", ATTR{id}="WirelessController"'; \
+                 echo 'SUBSYSTEM=="sound", KERNELS=="usb-vds_hcd*", ENV{ALSA_CARD_ID}="WirelessController"'; \
                ) > "${PKG_ROOT}/usr/lib/udev/rules.d/95-vds-alsa-spoof.rules" && \
                printf 'KERNEL=="uinput", MODE="0660", GROUP="input", OPTIONS+="static_node=uinput"\n' > "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-uinput.rules" && \
                printf 'KERNEL=="vds[0-9]*", MODE="0660", GROUP="input", TAG+="systemd"\n' >> "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-uinput.rules"
 
-        # Block 6b: WirePlumber-Priorisierung (Erzwingt 4-Kanal-Pro-Audio & verhindert SUSPENDED)
+        # Block 6b: WirePlumber-Priorisierung (KORRIGIERT auf /etc und neues Matching)
         RUN PKG_ROOT="/vds-pkg-root" && \
-            mkdir -p "${PKG_ROOT}/usr/share/wireplumber/wireplumber.conf.d" && \
             ( \
               echo 'monitor.alsa.rules = ['; \
               echo '  {'; \
               echo '    matches = ['; \
               echo '      {'; \
-              echo '        node.name = "~alsa_output.usb-Sony_Interactive_Entertainment_DualSense_Wireless_Controller*"'; \
+              echo '        node.name = "~alsa_output.usb-WirelessController* "'; \
               echo '      }'; \
               echo '    ]'; \
               echo '    actions = {'; \
@@ -193,9 +191,9 @@ modules:
               echo '    }'; \
               echo '  }'; \
               echo ']'; \
-            ) > "${PKG_ROOT}/usr/share/wireplumber/wireplumber.conf.d/99-vds-prioritisation.conf"
+            ) > "${PKG_ROOT}/etc/wireplumber/wireplumber.conf.d/99-vds-prioritisation.conf"
 
-        # Block 7: Natives RPM via rpmbuild paketieren (Inklusive ALSA-Fix & WirePlumber-Priorisierung)
+        # Block 7: Natives RPM via rpmbuild paketieren (Pfade in %files mit Domino-Kette synchronisiert)
         RUN mkdir -p /root/rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS} && \
             ( \
               echo 'Name: kmod-vds'; \
@@ -224,7 +222,7 @@ modules:
               echo '/usr/lib/udev/rules.d/99-vds-uinput.rules'; \
               echo '/usr/lib/udev/rules.d/99-vds-dualsense-udev.rules'; \
               echo '/usr/lib/udev/rules.d/95-vds-alsa-spoof.rules'; \
-              echo '/usr/share/wireplumber/wireplumber.conf.d/99-vds-prioritisation.conf'; \
+              echo '/etc/wireplumber/wireplumber.conf.d/99-vds-prioritisation.conf'; \
               echo '/usr/lib/systemd/system/bluetooth.service.d/override.conf'; \
               echo '/usr/share/vdsd/main.conf'; \
             ) > /root/rpmbuild/SPECS/vds.spec && \
