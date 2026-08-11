@@ -29,8 +29,8 @@ modules:
         RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
             KERNEL_BUILD_DIR="/usr/src/kernels/${KERNEL_VERSION}" && \
             cd /vds_build_dir && \
-            # Korrektur: Erzwingt den exakten ALSA-String nativ direkt in der USB-Descriptor-Verarbeitung
-            sed -i 's/profile->product/"WirelessController"/g' module/vds_usb_core.c && \
+            # Korrektur: Das Komma am Ende schützt "profile->product_id" vor der Ersetzung!
+            sed -i 's/profile->product,/\"WirelessController\",/g' module/vds_usb_core.c && \
             cd /vds_build_dir/module && \
             make KCFLAGS="-w" KERNELRELEASE="${KERNEL_VERSION}" KERNELDIR="${KERNEL_BUILD_DIR}"
 
