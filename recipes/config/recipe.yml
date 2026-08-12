@@ -174,7 +174,7 @@ modules:
                printf 'KERNEL=="uinput", MODE="0660", GROUP="input", OPTIONS+="static_node=uinput"\n' > "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-uinput.rules" && \
                printf 'KERNEL=="vds[0-9]*", MODE="0660", GROUP="input", TAG+="systemd"\n' >> "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-uinput.rules"
 
-        # Block 6b: Unbestechliche WirePlumber-Priorisierung & Userspace-ID-Spoofing (DIREKT IN SHARE)
+        # Block 6b: Unbestechliche WirePlumber-Priorisierung & Userspace-ID-Spoofing (KORRIGIERT & VERSCHÄRFT)
         RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
             PKG_ROOT="/vds-pkg-root" && \
             mkdir -p "${PKG_ROOT}/usr/share/wireplumber/wireplumber.conf.d" && \
@@ -183,11 +183,10 @@ modules:
               echo '  {'; \
               echo '    matches = ['; \
               echo '      {'; \
-              echo '        # MATCH 1: Fängt die vom Kernel gekürzte ID ab'; \
+              echo '        # DIE UNBESTECHLICHE UND-WEICHE:'; \
+              echo '        # 1. Die vom Kernel gekürzte ID muss exakt "Controller" sein'; \
               echo '        alsa.card_id = "Controller"'; \
-              echo '      },'; \
-              echo '      {'; \
-              echo '        # MATCH 2: Sicherheitsnetz über den echten Node-Namen'; \
+              echo '        # 2. Der Node-Name muss zwingend vom emulierten Sony-USB stammen (Gültige Regex)'; \
               echo '        node.name = "~alsa_output.usb-Sony_Interactive_Entertainment.*"'; \
               echo '      }'; \
               echo '    ]'; \
@@ -207,7 +206,7 @@ modules:
               echo '        api.alsa.use-acp = false'; \
               echo '        device.profile = "pro-audio"'; \
               echo ''; \
-              echo '        # Echtzeit-Priorität'; \
+              echo '        # Echtzeit-Priorität im System'; \
               echo '        priority.driver = 1500'; \
               echo '        priority.session = 1500'; \
               echo '        session.suspend-on-idle = false'; \
