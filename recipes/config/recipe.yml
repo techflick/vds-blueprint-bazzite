@@ -216,7 +216,7 @@ modules:
               echo ']'; \
             ) > "${PKG_ROOT}/usr/share/wireplumber/wireplumber.conf.d/99-vds-prioritisation.conf"
 
-        # Block 7: Natives RPM via rpmbuild paketieren (Bereinigt von Altlasten)
+        # Block 7: Natives RPM via rpmbuild NUR ERSTELLEN (Kein riskanter manueller DB-Write!)
         RUN mkdir -p /root/rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS} && \
             ( \
               echo 'Name: kmod-vds'; \
@@ -251,19 +251,23 @@ modules:
               echo '/usr/lib/systemd/system/bluetooth.service.d/override.conf'; \
               echo '/usr/share/vdsd/main.conf'; \
             ) > /root/rpmbuild/SPECS/vds.spec && \
-            # Direktes Bauen ohne volatile Verschiebe-Aktionen
+            # Wir bauen das RPM nur als Datei im Build-Verzeichnis zusammen!
             rpmbuild --define "_topdir /root/rpmbuild" --buildroot=/vds-pkg-root -bb /root/rpmbuild/SPECS/vds.spec && \
-            rpm -ivh --nodeps /root/rpmbuild/RPMS/x86_64/kmod-vds-1.0.0-1.x86_64.rpm
+            # Wir sichern die fertige Datei an einem sicheren Ort im Container ab
+            mkdir -p /tmp/vds-rpm && \
+            cp /root/rpmbuild/RPMS/x86_64/kmod-vds-1.0.0-1.x86_64.rpm /tmp/vds-rpm/
 
-        # Block 8: Kernel-Abhängigkeiten neu indizieren & Systemd-Services via Symlink aktivieren
+        # Block 8: Das RPM sauber über das native System-Tool (ohne Lock-Gefahr) installieren
+        # Da wir uns im nativen Container-Build befinden, extrahieren wir die Dateien direkt dorthin, wo sie hingehören
+        RUN rpm2cpio /tmp/vds-rpm/kmod-vds-1.0.0-1.x86_64.rpm | cpio -idmv -D /
+
+        # Block 9: Systemd-Services via Symlink aktivieren & Kernel-Abhängigkeiten indizieren
         RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
             depmod -a -b / "${KERNEL_VERSION}" && \
             mkdir -p /usr/lib/systemd/system/multi-user.target.wants && \
             ln -sf /usr/lib/systemd/system/vds-chmod-sdp.path /usr/lib/systemd/system/multi-user.target.wants/vds-chmod-sdp.path && \
-            ln -sf /usr/lib/systemd/system/vdsd.service /usr/lib/systemd/system/multi-user.target.wants/vdsd.service
-
-        # Block 9: Alten fehlerhaften Host-Override restlos entfernen
-        RUN rm -rf /usr/lib/systemd/system/vdsd.service.d
+            ln -sf /usr/lib/systemd/system/vdsd.service /usr/lib/systemd/system/multi-user.target.wants/vdsd.service && \
+            rm -rf /usr/lib/systemd/system/vdsd.service.d
 
         # Block 10: Temporäre Build-Verzeichnisse rückstandslos entfernen
-        RUN rm -rf /vds_build_dir /vds-pkg-root /root/rpmbuild
+        RUN rm -rf /vds_build_dir /vds-pkg-root /root/rpmbuild /tmp/vds-rpm
