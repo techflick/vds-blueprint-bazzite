@@ -174,17 +174,21 @@ modules:
                printf 'KERNEL=="uinput", MODE="0660", GROUP="input", OPTIONS+="static_node=uinput"\n' > "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-uinput.rules" && \
                printf 'KERNEL=="vds[0-9]*", MODE="0660", GROUP="input", TAG+="systemd"\n' >> "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-uinput.rules"
 
-        # Block 6b: WirePlumber-Priorisierung & Userspace-ID-Spoofing für Proton-Spiele
-        RUN PKG_ROOT="/vds-pkg-root" && \
+        # Block 6b: Unbestechliche WirePlumber-Priorisierung & Userspace-ID-Spoofing (DIREKT IN SHARE)
+        RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
+            PKG_ROOT="/vds-pkg-root" && \
+            mkdir -p "${PKG_ROOT}/usr/share/wireplumber/wireplumber.conf.d" && \
             ( \
               echo 'monitor.alsa.rules = ['; \
               echo '  {'; \
               echo '    matches = ['; \
               echo '      {'; \
-              echo '        node.name = "~alsa_output.usb-WirelessControl*. *"' || true; \
+              echo '        # MATCH 1: Fängt die vom Kernel gekürzte ID ab'; \
+              echo '        alsa.card_id = "Controller"'; \
               echo '      },'; \
               echo '      {'; \
-              echo '        node.name = "~alsa_output.usb-Sony_Interactive_Entertainment_Wireless*. *"' || true; \
+              echo '        # MATCH 2: Sicherheitsnetz über den echten Node-Namen'; \
+              echo '        node.name = "~alsa_output.usb-Sony_Interactive_Entertainment.*"'; \
               echo '      }'; \
               echo '    ]'; \
               echo '    actions = {'; \
@@ -193,14 +197,17 @@ modules:
               echo '        alsa.card_id = "WirelessController"'; \
               echo '        alsa.card_name = "WirelessController"'; \
               echo '        device.nick = "WirelessController"'; \
+              echo '        node.description = "DualSense Wireless Controller"'; \
               echo ''; \
               echo '        # QUADROFONIE-ROUTING UND TIMEOUT-SCHUTZ'; \
               echo '        audio.channels = 4'; \
               echo '        audio.position = [ FL, FR, RL, RR ]'; \
-              echo '        api.alsa.use-acp = true'; \
-              echo '        api.acp.auto-profile = false'; \
-              echo '        api.acp.auto-port = false'; \
+              echo ''; \
+              echo '        # REPARATUR FEHLER -4: ACP deaktivieren bei virtuellem Audiogerät'; \
+              echo '        api.alsa.use-acp = false'; \
               echo '        device.profile = "pro-audio"'; \
+              echo ''; \
+              echo '        # Echtzeit-Priorität'; \
               echo '        priority.driver = 1500'; \
               echo '        priority.session = 1500'; \
               echo '        session.suspend-on-idle = false'; \
@@ -208,9 +215,9 @@ modules:
               echo '    }'; \
               echo '  }'; \
               echo ']'; \
-            ) > "${PKG_ROOT}/etc/wireplumber/wireplumber.conf.d/99-vds-prioritisation.conf"
+            ) > "${PKG_ROOT}/usr/share/wireplumber/wireplumber.conf.d/99-vds-prioritisation.conf"
 
-        # Block 7: Natives RPM via rpmbuild paketieren (Pfade angepasst)
+        # Block 7: Natives RPM via rpmbuild paketieren (Bereinigt von Altlasten)
         RUN mkdir -p /root/rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS} && \
             ( \
               echo 'Name: kmod-vds'; \
@@ -225,7 +232,7 @@ modules:
               echo '%post'; \
               echo 'mkdir -p /etc/bluetooth'; \
               echo 'cp -n /usr/share/vdsd/main.conf /etc/bluetooth/main.conf 2>/dev/null || true'; \
-              echo '# Kernel-Abhängigkeiten direkt nach Installation registrieren'; \
+              echo '# Kernel-Abhängigkeiten zur Bootzeit absichern'; \
               echo 'KERNEL_VERSION=$(rpm -q kernel --queryformat "%%{VERSION}-%%{RELEASE}.%%{ARCH}\n" | head -n 1)'; \
               echo 'depmod -a "${KERNEL_VERSION}" 2>/dev/null || true'; \
               echo 'exit 0'; \
@@ -245,11 +252,7 @@ modules:
               echo '/usr/lib/systemd/system/bluetooth.service.d/override.conf'; \
               echo '/usr/share/vdsd/main.conf'; \
             ) > /root/rpmbuild/SPECS/vds.spec && \
-            # Vorab-Verschiebung der WirePlumber-Konfiguration in den korrekten System-Pfad innerhalb des Buildroots
-            mkdir -p /vds-pkg-root/usr/share/wireplumber/wireplumber.conf.d && \
-            mv /vds-pkg-root/etc/wireplumber/wireplumber.conf.d/99-vds-prioritisation.conf /vds-pkg-root/usr/share/wireplumber/wireplumber.conf.d/ && \
-            rm -rf /vds-pkg-root/etc/wireplumber && \
-            # RPM-Paketierung starten
+            # Direktes Bauen ohne volatile Verschiebe-Aktionen
             rpmbuild --define "_topdir /root/rpmbuild" --buildroot=/vds-pkg-root -bb /root/rpmbuild/SPECS/vds.spec && \
             rpm -ivh --nodeps /root/rpmbuild/RPMS/x86_64/kmod-vds-1.0.0-1.x86_64.rpm
 
