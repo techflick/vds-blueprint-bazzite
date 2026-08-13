@@ -174,42 +174,53 @@ modules:
                printf 'KERNEL=="uinput", MODE="0660", GROUP="input", OPTIONS+="static_node=uinput"\n' > "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-uinput.rules" && \
                printf 'KERNEL=="vds[0-9]*", MODE="0660", GROUP="input", TAG+="systemd"\n' >> "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-uinput.rules"
 
-        # Block 6b: Unbestechliche WirePlumber-Priorisierung & Userspace-ID-Spoofing (KORRIGIERT & VERSCHÄRFT)
+        # Block 6b: Unbestechliche WirePlumber-Priorisierung & Userspace-ID-Spoofing (FÜR WIREPLUMBER 0.5+)
         RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
             PKG_ROOT="/vds-pkg-root" && \
             mkdir -p "${PKG_ROOT}/usr/share/wireplumber/wireplumber.conf.d" && \
             ( \
               echo 'monitor.alsa.rules = ['; \
               echo '  {'; \
+              echo '    # REGEL 1: vDS-GERAET MASKIEREN (WILD-CARD MATCH)'; \
               echo '    matches = ['; \
               echo '      {'; \
-              echo '        # DIE UNBESTECHLICHE UND-WEICHE:'; \
-              echo '        # 1. Die vom Kernel gekürzte ID muss exakt "Controller" sein'; \
-              echo '        alsa.card_id = "Controller"'; \
-              echo '        # 2. Der Node-Name muss zwingend vom emulierten Sony-USB stammen (Gültige Regex)'; \
-              echo '        node.name = "~alsa_output.usb-Sony_Interactive_Entertainment.*"'; \
+              echo '        "node.name" = "~alsa_output.usb-Sony_Interactive_Entertainment.*"'; \
               echo '      }'; \
               echo '    ]'; \
               echo '    actions = {'; \
               echo '      update-props = {'; \
-              echo '        # NATIVES SONY-SPOOFING AUF AUDIO-EBENE FUER PROTON-TITEL'; \
-              echo '        alsa.card_id = "WirelessController"'; \
-              echo '        alsa.card_name = "WirelessController"'; \
-              echo '        device.nick = "WirelessController"'; \
-              echo '        node.description = "DualSense Wireless Controller"'; \
-              echo ''; \
-              echo '        # QUADROFONIE-ROUTING UND TIMEOUT-SCHUTZ'; \
-              echo '        audio.channels = 4'; \
-              echo '        audio.position = [ FL, FR, RL, RR ]'; \
-              echo ''; \
-              echo '        # REPARATUR FEHLER -4: ACP deaktivieren bei virtuellem Audiogerät'; \
-              echo '        api.alsa.use-acp = false'; \
-              echo '        device.profile = "pro-audio"'; \
-              echo ''; \
-              echo '        # Echtzeit-Priorität im System'; \
-              echo '        priority.driver = 1500'; \
-              echo '        priority.session = 1500'; \
-              echo '        session.suspend-on-idle = false'; \
+              echo '        "alsa.card_id"        = "WirelessController"'; \
+              echo '        "alsa.card_name"      = "WirelessController"'; \
+              echo '        "device.nick"         = "WirelessController"'; \
+              echo '        "node.name"           = "alsa_output.usb-Sony_Interactive_Entertainment_WirelessController-00.pro-audio"'; \
+              echo '        "node.description"    = "WirelessController"'; \
+              echo '        "node.nick"           = "WirelessController"'; \
+              echo '        "api.alsa.use-acp"    = false'; \
+              echo '        "audio.channels"      = 4'; \
+              echo '        "audio.position"      = [ "FL", "FR", "RL", "RR" ]'; \
+              echo '        "priority.driver"     = 1500'; \
+              echo '        "priority.session"    = 1500'; \
+              echo '        "session.suspend-on-idle" = false'; \
+              echo '      }'; \
+              echo '    }'; \
+              echo '  },'; \
+              echo '  {'; \
+              echo '    # REGEL 2: REALE BLUETOOTH-KARTE DEAKTIVIEREN'; \
+              echo '    matches = ['; \
+              echo '      {'; \
+              echo '        "node.name" = "~alsa_output.pci.*DualSense.*"'; \
+              echo '      },'; \
+              echo '      {'; \
+              echo '        "node.name" = "~alsa_input.pci.*DualSense.*"'; \
+              echo '      },'; \
+              echo '      {'; \
+              echo '        "node.description" = "~.*DualSense wireless controller.*"'; \
+              echo '      }'; \
+              echo '    ]'; \
+              echo '    actions = {'; \
+              echo '      update-props = {'; \
+              echo '        "device.disabled" = true'; \
+              echo '        "node.disabled"   = true'; \
               echo '      }'; \
               echo '    }'; \
               echo '  }'; \
