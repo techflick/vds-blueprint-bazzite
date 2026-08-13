@@ -1,4 +1,4 @@
-name: Build Mein Bazzite Image
+name: vds-blueprint-bazzite
 on:
   #schedule:
   #  - cron: '0 0 * * *'
