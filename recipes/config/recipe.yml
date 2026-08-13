@@ -1,8 +1,8 @@
 # yaml-language-server: $schema=https://blue-build.org
-name: mein-bazzite-vds
-description: "Mein persönliches Bazzite mit nativer Integration des vDS Treibers und Daemons (v0.4.0) ohne Distrobox."
+name: vds-blueprint-bazzite
+description: "Personalized Bazzite image featuring native integration of the vDS driver and daemon (v0.4.0), operating entirely in userspace"
 base-image: ghcr.io/ublue-os/bazzite
-image-version: latest
+image-version: 1.0
 
 modules:
   - type: rpm-ostree
