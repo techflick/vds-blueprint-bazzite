@@ -22,16 +22,16 @@ modules:
   - type: containerfile
     snippets:
       - |
-        # Block 1: vDS-Repository frisch klonen (Version 0.4.0 Upstream)
+        # Block 1: Clone vDS upstream repository (v0.4.0 Upstream Release)
         RUN git clone --depth 1 https://github.com/hurryman2212/vds.git /vds_build_dir
 
-        # Block 2: Kernel-Modul unberührt für die aktuelle Kernel-Version bauen
+        # Block 2: Compile kernel module targeting the active kernel release
         RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
             KERNEL_BUILD_DIR="/usr/src/kernels/${KERNEL_VERSION}" && \
             cd /vds_build_dir/module && \
             make KCFLAGS="-w" KERNELRELEASE="${KERNEL_VERSION}" KERNELDIR="${KERNEL_BUILD_DIR}"
 
-        # Block 3: Lokale Header erzeugen
+        # Block 3: Generate standalone local headers for isolated build context
         RUN mkdir -p /vds_build_dir/include/bluetooth && \
             cat << 'EOF' > /vds_build_dir/include/bluetooth/bluetooth.h
         #ifndef __BLUETOOTH_H
@@ -82,18 +82,18 @@ modules:
         #endif
         EOF
 
-        # Block 3b: CMake zwingen, die lokalen Header zu nutzen und die pkg-config Suche zu überspringen
+        # Block 3b: Override package configuration to skip external BlueZ system
         RUN cd /vds_build_dir && \
             sed -i '/pkg_check_modules.*bluez/c\set(bluez_FOUND TRUE)\nset(bluez_INCLUDE_DIRS "/vds_build_dir/include")\nset(bluez_LIBRARIES "")' CMakeLists.txt && \
             sed -i 's/PkgConfig::BLUEZ//g' CMakeLists.txt
 
-        # Block 3c: Den originalen v0.4.0 Daemon kompilieren
+        # Block 3c: Compile the original v0.4.0 daemon binary in Release mode
         RUN cd /vds_build_dir && \
             mkdir -p build && cd build && \
             cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS="-isystem /vds_build_dir/include" -DCMAKE_CXX_FLAGS="-isystem /vds_build_dir/include" && \
             make -j$(nproc)
 
-        # Block 4: PKG_ROOT Verzeichnisse erstellen & Binärdateien/Modul einsortieren
+        # Block 4: Initialize PKG_ROOT structure and stage binary payloads
         RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
             PKG_ROOT="/vds-pkg-root" && \
             mkdir -p "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra" && \
@@ -111,7 +111,7 @@ modules:
             cp /vds_build_dir/build/vdsctl "${PKG_ROOT}/usr/bin/vdsctl" && \
             chmod 755 "${PKG_ROOT}/usr/bin/vdsd" "${PKG_ROOT}/usr/bin/vdsctl"
 
-        # Block 5: Monolithischer Haupt-Dienst (Argumentlos, liest DB)
+        # Block 5: Deploy monolithic system daemon with bounded ambient capabilities
         RUN PKG_ROOT="/vds-pkg-root" && \
             printf "vds_hcd\n" > "${PKG_ROOT}/usr/lib/modules-load.d/vds.conf" && \
             ( \
@@ -147,7 +147,7 @@ modules:
               echo 'WantedBy=multi-user.target'; \
             ) > "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service"
 
-        # Block 6: BlueZ-Compat-Override & Udev-Datenbank-Kette (KORRIGIERT & JETZT MIT REPARIERTEM D-BUS-KICK)
+        # Block 6: Apply BlueZ compat configuration and optimized database udev triggers
         RUN PKG_ROOT="/vds-pkg-root" && \
                printf "[Unit]\nDescription=Setze Berechtigungen für vDS SDP-Socket wenn er erscheint\n\n[Service]\nType=oneshot\nExecStart=/usr/bin/chmod 0777 /run/sdp\nRemainAfterExit=yes\n" > "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.service" && \
                printf "[Unit]\nDescription=Überwache BlueZ SDP-Socket für vDS\n\n[Path]\nPathChanged=/run/sdp\nUnit=vds-chmod-sdp.service\n\n[Install]\nWantedBy=multi-user.target\n" > "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.path" && \
@@ -163,18 +163,15 @@ modules:
                  echo '# Reagiert exklusiv beim Hinzufügen (Erst-Connect)'; \
                  echo 'ACTION!="add", GOTO="vds_end"'; \
                  echo ''; \
-                 echo '# 1. Datenbank-Injektion: Nutzt das unbestechliche Kernel-Attribut statt env'; \
+                 echo '# Datenbank-Injektion: Nutzt das unbestechliche Kernel-Attribut statt env'; \
                  echo 'RUN+="/usr/bin/vdsctl attach \$attr{properties/uniq}"'; \
-                 echo ''; \
-                 echo '# 2. Auto-Auswurf (D-Bus-Kick): Korrigierte Syntax für fehlerfreien Disconnect'; \
-                 echo 'RUN+="/usr/bin/bash -c '\''MAC_DASH=\$(echo \$attr{properties/uniq} | tr \":\" \"_\"); dbus-send --system --print-reply --dest=org.bluez /org/bluez/hci0/dev_\${MAC_DASH} org.bluez.Device1.Disconnect'\''"'; \
                  echo ''; \
                  echo 'LABEL="vds_end"'; \
                ) > "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-dualsense-udev.rules" && \
                printf 'KERNEL=="uinput", MODE="0660", GROUP="input", OPTIONS+="static_node=uinput"\n' > "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-uinput.rules" && \
                printf 'KERNEL=="vds[0-9]*", MODE="0660", GROUP="input", TAG+="systemd"\n' >> "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-uinput.rules"
 
-        # Block 6b: Unbestechliche WirePlumber-Priorisierung & Userspace-ID-Spoofing (FÜR WIREPLUMBER 0.5+)
+        # Block 6b: Configure native WirePlumber quadraphonic audio and masking rules
         RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
             PKG_ROOT="/vds-pkg-root" && \
             mkdir -p "${PKG_ROOT}/usr/share/wireplumber/wireplumber.conf.d" && \
@@ -227,7 +224,7 @@ modules:
               echo ']'; \
             ) > "${PKG_ROOT}/usr/share/wireplumber/wireplumber.conf.d/99-vds-prioritisation.conf"
 
-        # Block 7: Natives RPM via rpmbuild NUR ERSTELLEN (Kein riskanter manueller DB-Write!)
+        # Block 7: Generate isolated RPM package via rpmbuild without system locks
         RUN mkdir -p /root/rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS} && \
             ( \
               echo 'Name: kmod-vds'; \
@@ -268,11 +265,11 @@ modules:
             mkdir -p /tmp/vds-rpm && \
             cp /root/rpmbuild/RPMS/x86_64/kmod-vds-1.0.0-1.x86_64.rpm /tmp/vds-rpm/
 
-        # Block 8: Das RPM sauber über das native System-Tool (ohne Lock-Gefahr) installieren
+        # Block 8: Extract localized RPM payload directly into the image root
         # Da wir uns im nativen Container-Build befinden, extrahieren wir die Dateien direkt dorthin, wo sie hingehören
         RUN rpm2cpio /tmp/vds-rpm/kmod-vds-1.0.0-1.x86_64.rpm | cpio -idmv -D /
 
-        # Block 9: Systemd-Services via Symlink aktivieren & Kernel-Abhängigkeiten indizieren
+        # Block 9: Enable core systemd targets via symbolic linking and map module dependencies
         RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
             depmod -a -b / "${KERNEL_VERSION}" && \
             mkdir -p /usr/lib/systemd/system/multi-user.target.wants && \
@@ -280,5 +277,5 @@ modules:
             ln -sf /usr/lib/systemd/system/vdsd.service /usr/lib/systemd/system/multi-user.target.wants/vdsd.service && \
             rm -rf /usr/lib/systemd/system/vdsd.service.d
 
-        # Block 10: Temporäre Build-Verzeichnisse rückstandslos entfernen
+        # Block 10: Purge temporary build contexts, compilation paths, and runtime caches
         RUN rm -rf /vds_build_dir /vds-pkg-root /root/rpmbuild /tmp/vds-rpm
