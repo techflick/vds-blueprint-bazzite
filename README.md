@@ -1,4 +1,4 @@
-This repository contains the configuration and build logic for the native integration of the [vDS (Virtual DualSense) Driver and Daemon](https://github.com/hurryman2212/vds) (Target Version: v0.4.0), originally developed by [hurryman2212]([https://github.com](https://github.com/hurryman2212)), into a custom Bazzite system image. The implementation is executed entirely during the OCI container build process, eliminating the need for Distrobox or manual modifications on the running host system.
+This repository contains the configuration and build logic for the native integration of the [vDS (Virtual DualSense) Driver and Daemon](https://github.com/hurryman2212/vds) (Target Version: v0.4.0), originally developed by [hurryman2212](https://github.com/hurryman2212), into a custom Bazzite system image. The implementation is executed entirely during the OCI container build process, eliminating the need for Distrobox or manual modifications on the running host system.
 
 ## System Architecture and Core Components
 
