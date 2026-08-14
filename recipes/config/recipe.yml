@@ -149,27 +149,34 @@ modules:
 
         # Block 6: Apply BlueZ compat configuration and optimized database udev triggers
         RUN PKG_ROOT="/vds-pkg-root" && \
-               printf "[Unit]\nDescription=Setze Berechtigungen für vDS SDP-Socket wenn er erscheint\n\n[Service]\nType=oneshot\nExecStart=/usr/bin/chmod 0777 /run/sdp\nRemainAfterExit=yes\n" > "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.service" && \
-               printf "[Unit]\nDescription=Überwache BlueZ SDP-Socket für vDS\n\n[Path]\nPathChanged=/run/sdp\nUnit=vds-chmod-sdp.service\n\n[Install]\nWantedBy=multi-user.target\n" > "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.path" && \
+               printf "[Unit]\nDescription=Set permissions for vDS SDP socket when created\n\n[Service]\nType=oneshot\nExecStart=/usr/bin/chmod 0777 /run/sdp\nRemainAfterExit=yes\n" > "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.service" && \
+               printf "[Unit]\nDescription=Monitor BlueZ SDP socket for vDS\n\n[Path]\nPathChanged=/run/sdp\nUnit=vds-chmod-sdp.service\n\n[Install]\nWantedBy=multi-user.target\n" > "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.path" && \
                printf "[Service]\nExecStart=\nExecStart=/usr/libexec/bluetooth/bluetoothd --compat\n" > "${PKG_ROOT}/usr/lib/systemd/system/bluetooth.service.d/override.conf" && \
                printf "[General]\nClassicBondedOnly=false\n" > "${PKG_ROOT}/usr/share/vdsd/main.conf" && \
                printf "<!DOCTYPE busconfig PUBLIC \"-//freedesktop//DTD D-BUS Bus Configuration 1.0//EN\"\n \"http://freedesktop.org\">\n<busconfig>\n  <policy user=\"root\">\n    <allow own=\"org.vds\"/>\n    <allow send_destination=\"org.vds\"/>\n  </policy>\n  <policy context=\"default\">\n    <allow send_destination=\"org.vds\"/>\n  </policy>\n</busconfig>\n" > "${PKG_ROOT}/usr/share/dbus-1/system.d/org.vds.conf" && \
                ( \
-                 echo '# Filtert unbestechlich auf das Hauptgerät im input-Subsystem'; \
+                 echo '# Strictly filter for the input subsystem'; \
                  echo 'SUBSYSTEM!="input", GOTO="vds_end"'; \
                  echo 'KERNEL!="event*", GOTO="vds_end"'; \
-                 echo 'ATTR{name}!="DualSense Wireless Controller", GOTO="vds_end"'; \
                  echo ''; \
-                 echo '# Reagiert exklusiv beim Hinzufügen (Erst-Connect)'; \
+                 echo '# Enforce Sony Vendor ID (054c) directly on the local input device layer'; \
+                 echo 'ATTR{id/vendor}!="054c", GOTO="vds_end"'; \
+                 echo ''; \
+                 echo '# Match exact DualSense (0ce6) or DualSense Edge (0df2) Product IDs'; \
+                 echo '# This naturally drops DualShock 4 controllers without touching parent paths'; \
+                 echo 'ATTR{id/product}=="0ce6", GOTO="vds_valid"'; \
+                 echo 'ATTR{id/product}=="0df2", GOTO="vds_valid"'; \
+                 echo 'GOTO="vds_end"'; \
+                 echo ''; \
+                 echo 'LABEL="vds_valid"'; \
                  echo 'ACTION!="add", GOTO="vds_end"'; \
-                 echo ''; \
-                 echo '# Datenbank-Injektion: Nutzt das unbestechliche Kernel-Attribut statt env'; \
                  echo 'RUN+="/usr/bin/vdsctl attach \$attr{properties/uniq}"'; \
                  echo ''; \
                  echo 'LABEL="vds_end"'; \
                ) > "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-dualsense-udev.rules" && \
                printf 'KERNEL=="uinput", MODE="0660", GROUP="input", OPTIONS+="static_node=uinput"\n' > "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-uinput.rules" && \
                printf 'KERNEL=="vds[0-9]*", MODE="0660", GROUP="input", TAG+="systemd"\n' >> "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-uinput.rules"
+
 
         # Block 6b: Configure native WirePlumber quadraphonic audio and masking rules
         RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
