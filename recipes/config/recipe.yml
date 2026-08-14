@@ -1,6 +1,6 @@
 # yaml-language-server: $schema=https://blue-build.org
 name: vds-blueprint-bazzite
-description: "Personalized Bazzite image featuring native integration of the vDS driver and daemon (v0.4.0), operating entirely in userspace"
+description: "Personalized Bazzite image featuring native integration of the vDS driver and daemon (v0.4.0),  operating entirely in userspace"
 base-image: ghcr.io/ublue-os/bazzite
 image-version: latest
 
