@@ -25,4 +25,5 @@ jobs:
         with:
           recipe: 'config/recipe.yml'
           registry_token: ${{ github.token }}
+          cosign_private_key: ${{ secrets.SIGNING_SECRET }}
           prune: true
