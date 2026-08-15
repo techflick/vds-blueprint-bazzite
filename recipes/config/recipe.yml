@@ -147,7 +147,7 @@ modules:
               echo 'WantedBy=multi-user.target'; \
             ) > "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service"
 
-        # Block 6: Apply BlueZ compat configuration and optimized database udev triggers
+        # Block 6: Apply BlueZ compat configuration and intelligent multi-gen fork triggers
         RUN PKG_ROOT="/vds-pkg-root" && \
                printf "[Unit]\nDescription=Set permissions for vDS SDP socket when created\n\n[Service]\nType=oneshot\nExecStart=/usr/bin/chmod 0777 /run/sdp\nRemainAfterExit=yes\n" > "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.service" && \
                printf "[Unit]\nDescription=Monitor BlueZ SDP socket for vDS\n\n[Path]\nPathChanged=/run/sdp\nUnit=vds-chmod-sdp.service\n\n[Install]\nWantedBy=multi-user.target\n" > "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.path" && \
@@ -162,15 +162,25 @@ modules:
                  echo '# Enforce Sony Vendor ID (054c) directly on the local input device layer'; \
                  echo 'ATTR{id/vendor}!="054c", GOTO="vds_end"'; \
                  echo ''; \
-                 echo '# Match exact DualSense (0ce6) or DualSense Edge (0df2) Product IDs'; \
-                 echo '# This naturally drops DualShock 4 controllers without touching parent paths'; \
+                 echo '# --- FORK WEICHE 1: DualSense & DualSense Edge (vDS Emulation) ---'; \
                  echo 'ATTR{id/product}=="0ce6", GOTO="vds_valid"'; \
                  echo 'ATTR{id/product}=="0df2", GOTO="vds_valid"'; \
+                 echo ''; \
+                 echo '# --- FORK WEICHE 2: DualShock 4 & DualShock 3 (Natives Kernel-Routing) ---'; \
+                 echo 'ATTR{id/product}=="05c4", GOTO="vds_native_bypass"'; \
+                 echo 'ATTR{id/product}=="09cc", GOTO="vds_native_bypass"'; \
+                 echo 'ATTR{id/product}=="0268", GOTO="vds_native_bypass"'; \
                  echo 'GOTO="vds_end"'; \
                  echo ''; \
                  echo 'LABEL="vds_valid"'; \
                  echo 'ACTION!="add", GOTO="vds_end"'; \
                  echo 'RUN+="/usr/bin/vdsctl attach \$attr{properties/uniq}"'; \
+                 echo 'GOTO="vds_end"'; \
+                 echo ''; \
+                 echo 'LABEL="vds_native_bypass"'; \
+                 echo 'ACTION!="add", GOTO="vds_end"'; \
+                 echo 'RUN+="/usr/sbin/modprobe hid-playstation"'; \
+                 echo 'GOTO="vds_end"'; \
                  echo ''; \
                  echo 'LABEL="vds_end"'; \
                ) > "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-dualsense-udev.rules" && \
@@ -241,11 +251,9 @@ modules:
               echo 'License: MIT'; \
               echo ''; \
               echo '%description'; \
-              echo 'Virtual DualSense Driver und Daemon fuer Bazzite mit nativem C-Code-Spoofing und WirePlumber-Priorisierung.'; \
+              echo 'Virtual DualSense Driver und Daemon fuer Bazzite mit nativem Multi-Gen Bypass.'; \
               echo ''; \
               echo '%post'; \
-              echo 'mkdir -p /etc/bluetooth'; \
-              echo 'cp -n /usr/share/vdsd/main.conf /etc/bluetooth/main.conf 2>/dev/null || true'; \
               echo '# Kernel-Abhängigkeiten zur Bootzeit absichern'; \
               echo 'KERNEL_VERSION=$(rpm -q kernel --queryformat "%%{VERSION}-%%{RELEASE}.%%{ARCH}\n" | head -n 1)'; \
               echo 'depmod -a "${KERNEL_VERSION}" 2>/dev/null || true'; \
@@ -266,14 +274,11 @@ modules:
               echo '/usr/lib/systemd/system/bluetooth.service.d/override.conf'; \
               echo '/usr/share/vdsd/main.conf'; \
             ) > /root/rpmbuild/SPECS/vds.spec && \
-            # Wir bauen das RPM nur als Datei im Build-Verzeichnis zusammen!
             rpmbuild --define "_topdir /root/rpmbuild" --buildroot=/vds-pkg-root -bb /root/rpmbuild/SPECS/vds.spec && \
-            # Wir sichern die fertige Datei an einem sicheren Ort im Container ab
             mkdir -p /tmp/vds-rpm && \
             cp /root/rpmbuild/RPMS/x86_64/kmod-vds-1.0.0-1.x86_64.rpm /tmp/vds-rpm/
 
         # Block 8: Extract localized RPM payload directly into the image root
-        # Da wir uns im nativen Container-Build befinden, extrahieren wir die Dateien direkt dorthin, wo sie hingehören
         RUN rpm2cpio /tmp/vds-rpm/kmod-vds-1.0.0-1.x86_64.rpm | cpio -idmv -D /
 
         # Block 9: Enable core systemd targets via symbolic linking and map module dependencies
