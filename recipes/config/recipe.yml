@@ -93,22 +93,17 @@ modules:
             cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS="-isystem /vds_build_dir/include" -DCMAKE_CXX_FLAGS="-isystem /vds_build_dir/include" && \
             make -j$(nproc)
 
-        # Block 3d: Inject hardware-level Device ID bypass (Strict 8-space layout via sed)
+        # Block 3d: Inject hardware-level Device ID bypass (Exakter Match auf return-Struktur)
         RUN cd /vds_build_dir && \
             ( \
-              echo '            // --- NATIVE MULTI-GEN HARDWARE BYPASS ---'; \
-              echo '            if (client_fd >= 0) {'; \
-              echo '                struct l2cap_conninfo cinfo;'; \
-              echo '                socklen_t cinfo_len = sizeof(cinfo);'; \
-              echo '                if (getsockopt(client_fd, SOL_L2CAP, L2CAP_CONNINFO, &cinfo, &cinfo_len) == 0) {'; \
-              echo '                    if (cinfo.product_id != 0x0ce6 && cinfo.product_id != 0x0df2) {'; \
-              echo '                        close(client_fd);'; \
-              echo '                        continue;'; \
-              echo '                    }'; \
-              echo '                }'; \
-              echo '            }'; \
+              echo '  // --- NATIVE MULTI-GEN HARDWARE BYPASS ---'; \
+              echo '  std::string target_mac = bluetooth_address_string(peer.l2_bdaddr);'; \
+              echo '  if (!vds::Database::Get().HasDevice(target_mac)) {'; \
+              echo '      return {};'; \
+              echo '  }'; \
             ) > /tmp/vds_bypass.code && \
-            sed -i '/int client_fd = accept(server_fd, (struct sockaddr\*)&client_addr, \&addr_len);/r /tmp/vds_bypass.code' src/platform/linux/vds_bt.cc && \
+            # Wir injizieren die Prüfung direkt vor der Erstellung des BtAcceptedChannel Objekts
+            sed -i '/return BtAcceptedChannel{/r /tmp/vds_bypass.code' src/platform/linux/vds_bt.cc && \
             rm -f /tmp/vds_bypass.code
 
         # Block 3e: Re-compile the daemon binary with patched hardware sources
