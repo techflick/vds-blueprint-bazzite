@@ -310,14 +310,14 @@ modules:
                   }
                 }
               }
-            ]
+                ]
             EOF
             \
             cat << 'EOF' > "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-uinput.rules"
             KERNEL=="uinput", MODE="0660", GROUP="vds", OPTIONS+="static_node=uinput"
             EOF
             \
-            # ULTRA-FOKUSSIIERTER FILTER: Nutzt ATTR statt ATTRS.
+            # ULTRA-FOKUSSIERTER FILTER: Nutzt ATTR statt ATTRS.
             # Verhindert, dass der DualShock 4 oder 3 diese Regel ungewollt triggert.
             cat << 'EOF' > "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-dualsense-udev.rules"
             KERNEL=="hidraw*", ATTR{idVendor}=="054c", ATTR{idProduct}=="0ce6", MODE="0660", GROUP="vds", ENV{ID_INPUT_JOYSTICK}="1"
