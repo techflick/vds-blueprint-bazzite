@@ -238,7 +238,7 @@ modules:
             ) > "${PKG_ROOT}/usr/share/wireplumber/wireplumber.conf.d/99-vds-prioritisation.conf"
 
         # Block 7: Generate isolated RPM package via rpmbuild without system locks
-        RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%%{RELEASE}.%%{ARCH}\n' | head -n 1) && \
+        RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
             PKG_ROOT="/vds-pkg-root" && \
             mkdir -p "${PKG_ROOT}/usr/lib/modules-load.d" && \
             mkdir -p "${PKG_ROOT}/usr/lib/systemd/system/bluetooth.service.d" && \
@@ -353,7 +353,6 @@ modules:
               echo 'Virtual DualSense Driver und Daemon fuer Bazzite mit nativem Multi-Gen Bypass.'; \
               echo ''; \
               echo '%post'; \
-              echo '# Kernel-Abhängigkeiten zur Bootzeit absichern'; \
               echo 'KERNEL_VERSION=$(rpm -q kernel --queryformat "%%{VERSION}-%%{RELEASE}.%%{ARCH}\n" | head -n 1)'; \
               echo 'depmod -a "${KERNEL_VERSION}" 2>/dev/null || true'; \
               echo 'exit 0'; \
@@ -373,7 +372,7 @@ modules:
               echo '/usr/lib/systemd/system/bluetooth.service.d/override.conf'; \
               echo '/usr/share/vdsd/main.conf'; \
             ) > /root/rpmbuild/SPECS/vds.spec && \
-            rpmbuild --define "_topdir /root/root/rpmbuild" --buildroot=/vds-pkg-root -bb /root/rpmbuild/SPECS/vds.spec && \
+            rpmbuild --define "_topdir /root/rpmbuild" --buildroot=/vds-pkg-root -bb /root/rpmbuild/SPECS/vds.spec && \
             mkdir -p /tmp/vds-rpm && \
             cp /root/rpmbuild/RPMS/x86_64/kmod-vds-1.0.0-1.x86_64.rpm /tmp/vds-rpm/
 
@@ -381,7 +380,7 @@ modules:
         RUN rpm2cpio /tmp/vds-rpm/kmod-vds-1.0.0-1.x86_64.rpm | cpio -idmv -D /
 
         # Block 9: Enable core systemd targets via symbolic linking and map module dependencies
-        RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%%{RELEASE}.%%{ARCH}\n' | head -n 1) && \
+        RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
             depmod -a -b / "${KERNEL_VERSION}" && \
             mkdir -p /usr/lib/systemd/system/multi-user.target.wants && \
             ln -sf /usr/lib/systemd/system/vds-chmod-sdp.path /usr/lib/systemd/system/multi-user.target.wants/vds-chmod-sdp.path && \
