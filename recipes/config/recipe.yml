@@ -152,22 +152,22 @@ modules:
                printf "[Unit]\nDescription=Set permissions for vDS SDP socket when created\n\n[Service]\nType=oneshot\nExecStart=/usr/bin/chmod 0777 /run/sdp\nRemainAfterExit=yes\n" > "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.service" && \
                printf "[Unit]\nDescription=Monitor BlueZ SDP socket for vDS\n\n[Path]\nPathChanged=/run/sdp\nUnit=vds-chmod-sdp.service\n\n[Install]\nWantedBy=multi-user.target\n" > "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.path" && \
                printf "[Service]\nExecStart=\nExecStart=/usr/libexec/bluetooth/bluetoothd --compat\n" > "${PKG_ROOT}/usr/lib/systemd/system/bluetooth.service.d/override.conf" && \
-               printf "[General]\nClassicBondedOnly=false\n" > "${PKG_ROOT}/usr/share/vdsd/main.conf" && \
                printf "<!DOCTYPE busconfig PUBLIC \"-//freedesktop//DTD D-BUS Bus Configuration 1.0//EN\"\n \"http://freedesktop.org\">\n<busconfig>\n  <policy user=\"root\">\n    <allow own=\"org.vds\"/>\n    <allow send_destination=\"org.vds\"/>\n  </policy>\n  <policy context=\"default\">\n    <allow send_destination=\"org.vds\"/>\n  </policy>\n</busconfig>\n" > "${PKG_ROOT}/usr/share/dbus-1/system.d/org.vds.conf" && \
                ( \
                  echo '# 1. Globale Vorfilterung: Nur Sony-Geräte (054c) betrachten'; \
                  echo 'ATTRS{idVendor}!="054c", GOTO="vds_end"'; \
                  echo ''; \
-                 echo '# --- FORK WEICHE 1: SOFORTIGER AUSSTIEG FÜR NATIVEN DUALSHOCK 4 & 3 BYPASS ---'; \
-                 echo '# DS4 Core (05c4), DS4 Slim/Pro (09cc), DS3 (0268) verlassen die Kette sofort'; \
-                 echo 'ATTRS{idProduct}=="05c4", ENV{ID_INPUT_JOYSTICK}="1", OPTIONS+="last_rule"'; \
-                 echo 'ATTRS{idProduct}=="09cc", ENV{ID_INPUT_JOYSTICK}="1", OPTIONS+="last_rule"'; \
-                 echo 'ATTRS{idProduct}=="0268", ENV{ID_INPUT_JOYSTICK}="1", OPTIONS+="last_rule"'; \
+                 echo '# --- FORK WEICHE 1: ABSOLUTER FRÜHAUSSTIEG FÜR NATIVEN DUALSHOCK 4 & 3 ---'; \
+                 echo '# Diese Regeln greifen sofort auf allen Subsystem-Ebenen und stoppen die Kette'; \
+                 echo 'ATTRS{idProduct}=="05c4", OPTIONS+="last_rule"'; \
+                 echo 'ATTRS{idProduct}=="09cc", OPTIONS+="last_rule"'; \
+                 echo 'ATTRS{idProduct}=="0268", OPTIONS+="last_rule"'; \
                  echo ''; \
-                 echo '# --- FORK WEICHE 2: VDS-EMULATION FÜR DUALSENSE & EDGE ---'; \
-                 echo '# Filter für das stabile Input-Subsystem auf Event-Ebene'; \
+                 echo '# --- FORK WEICHE 2: VDS-EMULATION EXKLUSIV FÜR DUALSENSE & EDGE ---'; \
+                 echo '# Filter auf das stabile Input-Subsystem zur Vermeidung von Mehrfach-Triggern'; \
                  echo 'SUBSYSTEM!="input", GOTO="vds_end"'; \
                  echo 'KERNEL!="event*", GOTO="vds_end"'; \
+                 echo 'ENV{ID_INPUT_JOYSTICK}!="1", GOTO="vds_end"'; \
                  echo ''; \
                  echo '# Match auf DualSense (0ce6) oder DualSense Edge (0df2)'; \
                  echo 'ATTRS{idProduct}=="0ce6", GOTO="vds_valid"'; \
@@ -176,7 +176,7 @@ modules:
                  echo ''; \
                  echo 'LABEL="vds_valid"'; \
                  echo 'ACTION!="add", GOTO="vds_end"'; \
-                 echo 'RUN+="/usr/bin/vdsctl attach \$attr{properties/uniq}"'; \
+                 echo 'RUN+="/usr/bin/vdsctl attach \$attr{uniq}"'; \
                  echo 'GOTO="vds_end"'; \
                  echo ''; \
                  echo 'LABEL="vds_end"'; \
