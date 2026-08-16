@@ -93,7 +93,7 @@ modules:
             cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS="-isystem /vds_build_dir/include" -DCMAKE_CXX_FLAGS="-isystem /vds_build_dir/include" && \
             make -j$(nproc)
 
-        # Block 3d: Inject hardware-level Device ID bypass (Exakt VOR dem return-Statement)
+        # Block 3d: Inject hardware-level Device ID bypass (Mit Header-Inklusion)
         RUN cd /vds_build_dir && \
             ( \
               echo '  // --- NATIVE MULTI-GEN HARDWARE BYPASS ---'; \
@@ -104,7 +104,10 @@ modules:
               echo '    }'; \
               echo '  }'; \
             ) > /tmp/vds_bypass.code && \
-            # Das 'i' vor dem Schrägstrich sorgt dafür, dass der Code VOR der Zeile eingefügt wird
+            # 1. Wir inkludieren den notwendigen Datenbank-Header ganz oben in der Datei
+            sed -i '1i#include "vds_database.hh"' src/platform/linux/vds_bt.cc || \
+            sed -i '1i#include "vds_config.hh"' src/platform/linux/vds_bt.cc && \
+            # 2. Wir setzen den Code-Block wieder direkt vor das return-Statement
             sed -i '/return BtAcceptedChannel{/i\\ \/\/ --- BYPASS INJECTION ---' src/platform/linux/vds_bt.cc && \
             sed -i '/\/\/ --- BYPASS INJECTION ---/r /tmp/vds_bypass.code' src/platform/linux/vds_bt.cc && \
             rm -f /tmp/vds_bypass.code
