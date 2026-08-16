@@ -104,46 +104,79 @@ modules:
             mkdir -p "${PKG_ROOT}/usr/share/dbus-1/system.d" && \
             mkdir -p "${PKG_ROOT}/usr/lib/udev/rules.d" && \
             mkdir -p "${PKG_ROOT}/usr/share/vdsd" && \
-            mkdir -p "${PKG_ROOT}/usr/share/wireplumber/wireplumber.conf.d" && \
+            mkdir -p "${PKG_ROOT}/etc/wireplumber/wireplumber.conf.d" && \
             cp /vds_build_dir/module/vds_hcd.ko "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra/" && \
             chmod 644 "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra/vds_hcd.ko" && \
             cp /vds_build_dir/build/vdsd "${PKG_ROOT}/usr/bin/vdsd" && \
             cp /vds_build_dir/build/vdsctl "${PKG_ROOT}/usr/bin/vdsctl" && \
             chmod 755 "${PKG_ROOT}/usr/bin/vdsd" "${PKG_ROOT}/usr/bin/vdsctl"
 
-        # Block 5: Inject core systemd services and basic configs into the package tree
+        # Block 5: Deploy monolithic system daemon with bounded ambient capabilities
         RUN PKG_ROOT="/vds-pkg-root" && \
             printf "vds_hcd\n" > "${PKG_ROOT}/usr/lib/modules-load.d/vds.conf" && \
-            printf "[Unit]\nDescription=vDS Virtual DualSense Daemon\nAfter=bluetooth.service\n\n[Service]\nType=simple\nExecStart=/usr/bin/vdsd\nRestart=always\n\n[Install]\nWantedBy=multi-user.target\n" > "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service" && \
-            printf "{\n  monitor.properties = {\n    vds.enabled = true\n  }\n}\n" > "${PKG_ROOT}/usr/share/wireplumber/wireplumber.conf.d/99-vds-prioritisation.conf"
+            ( \
+              echo '[Unit]'; \
+              echo 'Description=Virtual DualSense Userspace Daemon (v0.4.0 Nativ)'; \
+              echo 'After=bluetooth.service vds-chmod-sdp.service systemd-udevd.service'; \
+              echo 'Wants=systemd-udevd.service'; \
+              echo 'Requires=bluetooth.service'; \
+              echo ''; \
+              echo '[Service]'; \
+              echo 'Type=simple'; \
+              echo 'ExecStartPre=/usr/bin/mkdir -p /var/lib/vds'; \
+              echo 'ExecStartPre=/usr/bin/chmod 666 /dev/uhid'; \
+              echo 'ExecStart=/usr/bin/vdsd'; \
+              echo 'Restart=always'; \
+              echo 'RestartSec=5'; \
+              echo 'User=root'; \
+              echo 'Group=root'; \
+              echo 'ProtectSystem=false'; \
+              echo 'ProtectHome=false'; \
+              echo 'PrivateTmp=no'; \
+              echo 'PrivateDevices=no'; \
+              echo 'PrivateNetwork=no'; \
+              echo 'ReadWritePaths=/'; \
+              echo 'RestrictAddressFamilies=AF_NETLINK AF_UNIX AF_INET AF_INET6 AF_BLUETOOTH'; \
+              echo 'RestrictNetworkInterfaces='; \
+              echo 'IPAddressDeny='; \
+              echo 'NoNewPrivileges=no'; \
+              echo 'CapabilityBoundingSet=CAP_NET_RAW CAP_SYS_ADMIN CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_SYS_RAWIO'; \
+              echo 'AmbientCapabilities=CAP_NET_RAW CAP_SYS_ADMIN CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_SYS_RAWIO'; \
+              echo ''; \
+              echo '[Install]'; \
+              echo 'WantedBy=multi-user.target'; \
+            ) > "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service"
 
         # Block 6: Apply BlueZ compat configuration and intelligent multi-gen fork triggers
         RUN PKG_ROOT="/vds-pkg-root" && \
                printf "[Unit]\nDescription=Set permissions for vDS SDP socket when created\n\n[Service]\nType=oneshot\nExecStart=/usr/bin/chmod 0777 /run/sdp\nRemainAfterExit=yes\n" > "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.service" && \
                printf "[Unit]\nDescription=Monitor BlueZ SDP socket for vDS\n\n[Path]\nPathChanged=/run/sdp\nUnit=vds-chmod-sdp.service\n\n[Install]\nWantedBy=multi-user.target\n" > "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.path" && \
                printf "[Service]\nExecStart=\nExecStart=/usr/libexec/bluetooth/bluetoothd --compat\n" > "${PKG_ROOT}/usr/lib/systemd/system/bluetooth.service.d/override.conf" && \
+               printf "[General]\nClassicBondedOnly=false\n" > "${PKG_ROOT}/usr/share/vdsd/main.conf" && \
                printf "<!DOCTYPE busconfig PUBLIC \"-//freedesktop//DTD D-BUS Bus Configuration 1.0//EN\"\n \"http://freedesktop.org\">\n<busconfig>\n  <policy user=\"root\">\n    <allow own=\"org.vds\"/>\n    <allow send_destination=\"org.vds\"/>\n  </policy>\n  <policy context=\"default\">\n    <allow send_destination=\"org.vds\"/>\n  </policy>\n</busconfig>\n" > "${PKG_ROOT}/usr/share/dbus-1/system.d/org.vds.conf" && \
                ( \
                  echo '# 1. Globale Vorfilterung: Nur Sony-Geräte (054c) betrachten'; \
                  echo 'ATTRS{idVendor}!="054c", GOTO="vds_end"'; \
                  echo ''; \
-                 echo '# --- FORK WEICHE 1: ABSOLUTER FRÜHAUSSTIEG FÜR NATIVEN DUALSHOCK 4 & 3 ---'; \
-                 echo 'ATTRS{idProduct}=="05c4", OPTIONS+="last_rule"'; \
-                 echo 'ATTRS{idProduct}=="09cc", OPTIONS+="last_rule"'; \
-                 echo 'ATTRS{idProduct}=="0268", OPTIONS+="last_rule"'; \
+                 echo '# --- FORK WEICHE 1: SOFORTIGER AUSSTIEG FÜR NATIVEN DUALSHOCK 4 & 3 BYPASS ---'; \
+                 echo '# DS4 Core (05c4), DS4 Slim/Pro (09cc), DS3 (0268) verlassen die Kette sofort'; \
+                 echo 'ATTRS{idProduct}=="05c4", ENV{ID_INPUT_JOYSTICK}="1", OPTIONS+="last_rule"'; \
+                 echo 'ATTRS{idProduct}=="09cc", ENV{ID_INPUT_JOYSTICK}="1", OPTIONS+="last_rule"'; \
+                 echo 'ATTRS{idProduct}=="0268", ENV{ID_INPUT_JOYSTICK}="1", OPTIONS+="last_rule"'; \
                  echo ''; \
-                 echo '# --- FORK WEICHE 2: VDS-EMULATION EXKLUSIV FÜR DUALSENSE & EDGE ---'; \
+                 echo '# --- FORK WEICHE 2: VDS-EMULATION FÜR DUALSENSE & EDGE ---'; \
+                 echo '# Filter für das stabile Input-Subsystem auf Event-Ebene'; \
                  echo 'SUBSYSTEM!="input", GOTO="vds_end"'; \
                  echo 'KERNEL!="event*", GOTO="vds_end"'; \
-                 echo 'ENV{ID_INPUT_JOYSTICK}!="1", GOTO="vds_end"'; \
                  echo ''; \
+                 echo '# Match auf DualSense (0ce6) oder DualSense Edge (0df2)'; \
                  echo 'ATTRS{idProduct}=="0ce6", GOTO="vds_valid"'; \
                  echo 'ATTRS{idProduct}=="0df2", GOTO="vds_valid"'; \
                  echo 'GOTO="vds_end"'; \
                  echo ''; \
                  echo 'LABEL="vds_valid"'; \
                  echo 'ACTION!="add", GOTO="vds_end"'; \
-                 echo 'RUN+="/usr/bin/vdsctl attach $attr{uniq}"'; \
+                 echo 'RUN+="/usr/bin/vdsctl attach \$attr{properties/uniq}"'; \
                  echo 'GOTO="vds_end"'; \
                  echo ''; \
                  echo 'LABEL="vds_end"'; \
@@ -151,9 +184,163 @@ modules:
                printf 'KERNEL=="uinput", MODE="0660", GROUP="input", OPTIONS+="static_node=uinput"\n' > "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-uinput.rules" && \
                printf 'KERNEL=="vds[0-9]*", MODE="0660", GROUP="input", TAG+="systemd"\n' >> "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-uinput.rules"
 
+        # Block 6b: Configure native WirePlumber quadraphonic audio and masking rules
+        RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
+            PKG_ROOT="/vds-pkg-root" && \
+            mkdir -p "${PKG_ROOT}/usr/share/wireplumber/wireplumber.conf.d" && \
+            ( \
+              echo 'monitor.alsa.rules = ['; \
+              echo '  {'; \
+              echo '    # REGEL 1: vDS-GERAET MASKIEREN (WILD-CARD MATCH)'; \
+              echo '    matches = ['; \
+              echo '      {'; \
+              echo '        "node.name" = "~alsa_output.usb-Sony_Interactive_Entertainment.*"'; \
+              echo '      }'; \
+              echo '    ]'; \
+              echo '    actions = {'; \
+              echo '      update-props = {'; \
+              echo '        "alsa.card_id"        = "WirelessController"'; \
+              echo '        "alsa.card_name"      = "WirelessController"'; \
+              echo '        "device.nick"         = "WirelessController"'; \
+              echo '        "node.name"           = "alsa_output.usb-Sony_Interactive_Entertainment_WirelessController-00.pro-audio"'; \
+              echo '        "node.description"    = "WirelessController"'; \
+              echo '        "node.nick"           = "WirelessController"'; \
+              echo '        "api.alsa.use-acp"    = false'; \
+              echo '        "audio.channels"      = 4'; \
+              echo '        "audio.position"      = [ "FL", "FR", "RL", "RR" ]'; \
+              echo '        "priority.driver"     = 1500'; \
+              echo '        "priority.session"    = 1500'; \
+              echo '        "session.suspend-on-idle" = false'; \
+              echo '      }'; \
+              echo '    }'; \
+              echo '  },'; \
+              echo '  {'; \
+              echo '    # REGEL 2: REALE BLUETOOTH-KARTE DEAKTIVIEREN'; \
+              echo '    matches = ['; \
+              echo '      {'; \
+              echo '        "node.name" = "~alsa_output.pci.*DualSense.*"'; \
+              echo '      },'; \
+              echo '      {'; \
+              echo '        "node.name" = "~alsa_input.pci.*DualSense.*"'; \
+              echo '      },'; \
+              echo '      {'; \
+              echo '        "node.description" = "~.*DualSense wireless controller.*"'; \
+              echo '      }'; \
+              echo '    ]'; \
+              echo '    actions = {'; \
+              echo '      update-props = {'; \
+              echo '        "device.disabled" = true'; \
+              echo '        "node.disabled"   = true'; \
+              echo '      }'; \
+              echo '    }'; \
+              echo '  }'; \
+              echo ']'; \
+            ) > "${PKG_ROOT}/usr/share/wireplumber/wireplumber.conf.d/99-vds-prioritisation.conf"
+
         # Block 7: Generate isolated RPM package via rpmbuild without system locks
-        RUN mkdir -p /root/rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS} && \
-            KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
+        RUN PKG_ROOT="/vds-pkg-root" && \
+            mkdir -p "${PKG_ROOT}/usr/lib/modules-load.d" && \
+            mkdir -p "${PKG_ROOT}/usr/lib/systemd/system/bluetooth.service.d" && \
+            mkdir -p "${PKG_ROOT}/usr/share/dbus-1/system.d" && \
+            mkdir -p "${PKG_ROOT}/usr/lib/udev/rules.d" && \
+            mkdir -p "${PKG_ROOT}/usr/share/vdsd" && \
+            mkdir -p "${PKG_ROOT}/usr/share/wireplumber/wireplumber.conf.d" && \
+            \
+            cat << 'EOF' > "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.path"
+[Unit]
+Description=Monitor Bluetooth SDP for DualSense Customizations
+[Path]
+PathChanged=/sys/class/bluetooth
+[Install]
+WantedBy=multi-user.target
+EOF
+            \
+            cat << 'EOF' > "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.service"
+[Unit]
+Description=Fix Bluetooth Device Node Permissions for Userspace Daemon
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/chmod -R 0660 /sys/class/bluetooth/
+User=root
+EOF
+            \
+            cat << 'EOF' > "${PKG_ROOT}/usr/share/vdsd/main.conf"
+# vDS Default Daemon Configuration
+enable_haptics=true
+isolation_mode=true
+compat_layer=false
+EOF
+            \
+            cat << 'EOF' > "${PKG_ROOT}/usr/share/dbus-1/system.d/org.vds.conf"
+<!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-BUS Bus Configuration 1.0//EN"
+ "http://freedesktop.org">
+<busconfig>
+  <policy user="root">
+    <allow privileges="own" name="org.vds.vdsd"/>
+    <allow send_destination="org.vds.vdsd"/>
+  </policy>
+  <policy group="vds">
+    <allow send_destination="org.vds.vdsd"/>
+  </policy>
+  <policy context="default">
+    <deny privileges="own" name="org.vds.vdsd"/>
+    <allow send_destination="org.vds.vdsd"/>
+  </policy>
+</busconfig>
+EOF
+            \
+            cat << 'EOF' > "${PKG_ROOT}/usr/lib/systemd/system/bluetooth.service.d/override.conf"
+[Service]
+ExecStartPost=/usr/bin/vdsctl --init-bridge
+EOF
+            \
+            cat << 'EOF' > "${PKG_ROOT}/usr/share/wireplumber/wireplumber.conf.d/99-vds-prioritisation.conf"
+monitor.alsa.rules = [
+  {
+    matches = [
+      {
+        node.name = "~alsa_output.*Sony_Interactive_Entertainment_Wireless_Controller*"
+      }
+    ]
+    actions = {
+      update-props = {
+        node.description = "vDS Haptic Audio"
+        node.passive = true
+        audio.position = [ FL, FR ]
+      }
+    }
+  }
+]
+EOF
+            \
+            cat << 'EOF' > "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-uinput.rules"
+KERNEL=="uinput", MODE="0660", GROUP="vds", OPTIONS+="static_node=uinput"
+EOF
+            \
+            # ULTRA-FOKUSSIIERTER FILTER: Nutzt ATTR statt ATTRS.
+            # Verhindert, dass der DualShock 4 oder 3 diese Regel ungewollt triggert.
+            cat << 'EOF' > "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-dualsense-udev.rules"
+KERNEL=="hidraw*", ATTR{idVendor}=="054c", ATTR{idProduct}=="0ce6", MODE="0660", GROUP="vds", ENV{ID_INPUT_JOYSTICK}="1"
+EOF
+            \
+            cat << 'EOF' > "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service"
+[Unit]
+Description=vDS Userspace Haptic Daemon
+After=bluetooth.service
+Requires=bluetooth.service
+
+[Service]
+Type=dbus
+BusName=org.vds.vdsd
+ExecStart=/usr/bin/vdsd --system
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
+EOF
+            \
+            mkdir -p /root/rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS} && \
             ( \
               echo 'Name: kmod-vds'; \
               echo 'Version: 1.0.0'; \
@@ -171,7 +358,7 @@ modules:
               echo 'exit 0'; \
               echo ''; \
               echo '%files'; \
-              echo "/usr/lib/modules/${KERNEL_VERSION}/extra/vds_hcd.ko"; \
+              echo '/usr/lib/modules/'$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1)'/extra/vds_hcd.ko'; \
               echo '/usr/lib/modules-load.d/vds.conf'; \
               echo '/usr/bin/vdsd'; \
               echo '/usr/bin/vdsctl'; \
@@ -183,6 +370,7 @@ modules:
               echo '/usr/lib/udev/rules.d/99-vds-dualsense-udev.rules'; \
               echo '/usr/share/wireplumber/wireplumber.conf.d/99-vds-prioritisation.conf'; \
               echo '/usr/lib/systemd/system/bluetooth.service.d/override.conf'; \
+              echo '/usr/share/vdsd/main.conf'; \
             ) > /root/rpmbuild/SPECS/vds.spec && \
             rpmbuild --define "_topdir /root/rpmbuild" --buildroot=/vds-pkg-root -bb /root/rpmbuild/SPECS/vds.spec && \
             mkdir -p /tmp/vds-rpm && \
