@@ -288,7 +288,8 @@ modules:
             \
             ( \
               echo '[Service]'; \
-              echo 'ExecStart=\nExecStart=/usr/libexec/bluetooth/bluetoothd --compat'; \
+              echo 'ExecStart='; \
+              echo 'ExecStart=/usr/libexec/bluetooth/bluetoothd --compat'; \
             ) > "${PKG_ROOT}/usr/lib/systemd/system/bluetooth.service.d/override.conf" && \
             \
             ( \
@@ -329,15 +330,24 @@ modules:
             ) > "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-uinput.rules" && \
             \
             ( \
+              echo '# 1. Globale Vorfilterung: Nur Sony-Geraete (054c) betrachten'; \
               echo 'ATTRS{idVendor}!="054c", GOTO="vds_end"'; \
-              echo 'ATTRS{idProduct}=="05c4", ENV{ID_INPUT_JOYSTICK}="1", OPTIONS+="last_rule"'; \
-              echo 'ATTRS{idProduct}=="09cc", ENV{ID_INPUT_JOYSTICK}="1", OPTIONS+="last_rule"'; \
-              echo 'ATTRS{idProduct}=="0268", ENV{ID_INPUT_JOYSTICK}="1", OPTIONS+="last_rule"'; \
+              echo ''; \
+              echo '# --- FORK WEICHE 1: ECHTER BYPASS FUER NATIVE DUALSHOCK CONTROLLER ---'; \
+              echo '# Nutzt ENV{PRODUCT} (Bustyp/Vendor/Product), da ATTR{idProduct} bei Bluetooth leer bleibt'; \
+              echo '# Springt an das Ende unserer Datei (vds_end), damit Bazzite-Standardregeln aktiv bleiben!'; \
+              echo 'ENV{PRODUCT}=="*054c/05c4/*", GOTO="vds_end"'; \
+              echo 'ENV{PRODUCT}=="*054c/09cc/*", GOTO="vds_end"'; \
+              echo 'ENV{PRODUCT}=="*054c/0268/*", GOTO="vds_end"'; \
+              echo ''; \
+              echo '# --- FORK WEICHE 2: VDS-EMULATION FUER DUALSENSE & EDGE ---'; \
               echo 'SUBSYSTEM!="input", GOTO="vds_end"'; \
               echo 'KERNEL!="event*", GOTO="vds_end"'; \
+              echo ''; \
               echo 'ATTRS{idProduct}=="0ce6", GOTO="vds_valid"'; \
               echo 'ATTRS{idProduct}=="0df2", GOTO="vds_valid"'; \
               echo 'GOTO="vds_end"'; \
+              echo ''; \
               echo 'LABEL="vds_valid"'; \
               echo 'ACTION=="add", RUN+="/usr/bin/vdsctl attach \$attr{properties/uniq}"'; \
               echo 'LABEL="vds_end"'; \
