@@ -93,34 +93,6 @@ modules:
             cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS="-isystem /vds_build_dir/include" -DCMAKE_CXX_FLAGS="-isystem /vds_build_dir/include" && \
             make -j$(nproc)
 
-        # Block 3d: Inject hardware-level Device ID bypass via native vds_config
-        RUN cd /vds_build_dir && \
-            ( \
-              echo '  // --- NATIVE MULTI-GEN HARDWARE BYPASS ---'; \
-              echo '  {'; \
-              echo '    std::string raw_mac = bluetooth_address_string(peer.l2_bdaddr);'; \
-              echo '    std::string target_mac = ::vds::normalize_bluetooth_address(raw_mac);'; \
-              echo '    try {'; \
-              echo '        ::vds::ConfigDb db = ::vds::load_config_db("/var/lib/vdsd/vdsd.db");'; \
-              echo '        if (::vds::find_controller_config_by_address(db, target_mac) == nullptr) {'; \
-              echo '            return std::nullopt;'; \
-              echo '        }'; \
-              echo '    } catch (...) {'; \
-              echo '        // Fallback: Wenn DB nicht lesbar, zur Sicherheit trennen'; \
-              echo '        return std::nullopt;'; \
-              echo '    }'; \
-              echo '  }'; \
-            ) > /tmp/vds_bypass.code && \
-            # 1. Wir inkludieren den bewiesenen Header mit Anführungszeichen (da er im src/ Ordner liegt)
-            sed -i '1i#include "vds_config.hh"' src/platform/linux/vds_bt.cc && \
-            # 2. Wir setzen den Code-Block wieder direkt vor das return-Statement
-            sed -i '/return BtAcceptedChannel{/i\\ \/\/ --- BYPASS INJECTION ---' src/platform/linux/vds_bt.cc && \
-            sed -i '/\/\/ --- BYPASS INJECTION ---/r /tmp/vds_bypass.code' src/platform/linux/vds_bt.cc && \
-            rm -f /tmp/vds_bypass.code
-
-        # Block 3e: Re-compile the daemon binary with patched hardware sources
-        RUN cd /vds_build_dir/build && make clean && make -j$(nproc)
-
         # Block 4: Initialize PKG_ROOT structure and stage binary payloads
         RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
             PKG_ROOT="/vds-pkg-root" && \
@@ -175,37 +147,24 @@ modules:
               echo 'WantedBy=multi-user.target'; \
             ) > "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service"
 
-        # Block 6: Apply BlueZ compat configuration and intelligent multi-gen fork triggers
+        # Block 6: Apply BlueZ compat configuration and optimized database udev triggers
         RUN PKG_ROOT="/vds-pkg-root" && \
-               printf "[Unit]\nDescription=Set permissions for vDS SDP socket when created\n\n[Service]\nType=oneshot\nExecStart=/usr/bin/chmod 0777 /run/sdp\nRemainAfterExit=yes\n" > "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.service" && \
-               printf "[Unit]\nDescription=Monitor BlueZ SDP socket for vDS\n\n[Path]\nPathChanged=/run/sdp\nUnit=vds-chmod-sdp.service\n\n[Install]\nWantedBy=multi-user.target\n" > "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.path" && \
+               printf "[Unit]\nDescription=Setze Berechtigungen für vDS SDP-Socket wenn er erscheint\n\n[Service]\nType=oneshot\nExecStart=/usr/bin/chmod 0777 /run/sdp\nRemainAfterExit=yes\n" > "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.service" && \
+               printf "[Unit]\nDescription=Überwache BlueZ SDP-Socket für vDS\n\n[Path]\nPathChanged=/run/sdp\nUnit=vds-chmod-sdp.service\n\n[Install]\nWantedBy=multi-user.target\n" > "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.path" && \
                printf "[Service]\nExecStart=\nExecStart=/usr/libexec/bluetooth/bluetoothd --compat\n" > "${PKG_ROOT}/usr/lib/systemd/system/bluetooth.service.d/override.conf" && \
                printf "[General]\nClassicBondedOnly=false\n" > "${PKG_ROOT}/usr/share/vdsd/main.conf" && \
                printf "<!DOCTYPE busconfig PUBLIC \"-//freedesktop//DTD D-BUS Bus Configuration 1.0//EN\"\n \"http://freedesktop.org\">\n<busconfig>\n  <policy user=\"root\">\n    <allow own=\"org.vds\"/>\n    <allow send_destination=\"org.vds\"/>\n  </policy>\n  <policy context=\"default\">\n    <allow send_destination=\"org.vds\"/>\n  </policy>\n</busconfig>\n" > "${PKG_ROOT}/usr/share/dbus-1/system.d/org.vds.conf" && \
                ( \
-                 echo '# 1. Globale Vorfilterung: Nur Sony-Geräte (054c) betrachten'; \
-                 echo 'ATTRS{idVendor}!="054c", GOTO="vds_end"'; \
-                 echo ''; \
-                 echo '# --- FORK WEICHE 1: SOFORTIGER AUSSTIEG FÜR NATIVEN DUALSHOCK 4 & 3 BYPASS ---'; \
-                 echo '# DS4 Core (05c4), DS4 Slim/Pro (09cc), DS3 (0268) verlassen die Kette sofort'; \
-                 echo 'ATTRS{idProduct}=="05c4", ENV{ID_INPUT_JOYSTICK}="1", OPTIONS+="last_rule"'; \
-                 echo 'ATTRS{idProduct}=="09cc", ENV{ID_INPUT_JOYSTICK}="1", OPTIONS+="last_rule"'; \
-                 echo 'ATTRS{idProduct}=="0268", ENV{ID_INPUT_JOYSTICK}="1", OPTIONS+="last_rule"'; \
-                 echo ''; \
-                 echo '# --- FORK WEICHE 2: VDS-EMULATION FÜR DUALSENSE & EDGE ---'; \
-                 echo '# Filter für das stabile Input-Subsystem auf Event-Ebene'; \
+                 echo '# Filtert unbestechlich auf das Hauptgerät im input-Subsystem'; \
                  echo 'SUBSYSTEM!="input", GOTO="vds_end"'; \
                  echo 'KERNEL!="event*", GOTO="vds_end"'; \
+                 echo 'ATTR{name}!="DualSense Wireless Controller", GOTO="vds_end"'; \
                  echo ''; \
-                 echo '# Match auf DualSense (0ce6) oder DualSense Edge (0df2)'; \
-                 echo 'ATTRS{idProduct}=="0ce6", GOTO="vds_valid"'; \
-                 echo 'ATTRS{idProduct}=="0df2", GOTO="vds_valid"'; \
-                 echo 'GOTO="vds_end"'; \
-                 echo ''; \
-                 echo 'LABEL="vds_valid"'; \
+                 echo '# Reagiert exklusiv beim Hinzufügen (Erst-Connect)'; \
                  echo 'ACTION!="add", GOTO="vds_end"'; \
+                 echo ''; \
+                 echo '# Datenbank-Injektion: Nutzt das unbestechliche Kernel-Attribut statt env'; \
                  echo 'RUN+="/usr/bin/vdsctl attach \$attr{properties/uniq}"'; \
-                 echo 'GOTO="vds_end"'; \
                  echo ''; \
                  echo 'LABEL="vds_end"'; \
                ) > "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-dualsense-udev.rules" && \
@@ -265,123 +224,8 @@ modules:
               echo ']'; \
             ) > "${PKG_ROOT}/usr/share/wireplumber/wireplumber.conf.d/99-vds-prioritisation.conf"
 
-        # Block 7 (KORRIGIERT): RPM-Generierung mit strikter 8-Leerzeichen-Einrückung
-        RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
-            PKG_ROOT="/vds-pkg-root" && \
-            mkdir -p "${PKG_ROOT}/usr/lib/modules-load.d" && \
-            mkdir -p "${PKG_ROOT}/usr/lib/systemd/system/bluetooth.service.d" && \
-            mkdir -p "${PKG_ROOT}/usr/share/dbus-1/system.d" && \
-            mkdir -p "${PKG_ROOT}/usr/lib/udev/rules.d" && \
-            mkdir -p "${PKG_ROOT}/usr/share/vdsd" && \
-            mkdir -p "${PKG_ROOT}/usr/share/wireplumber/wireplumber.conf.d" && \
-            \
-            ( \
-              echo '[Unit]'; \
-              echo 'Description=Monitor Bluetooth SDP for DualSense Customizations'; \
-              echo '[Path]'; \
-              echo 'PathChanged=/sys/class/bluetooth'; \
-              echo '[Install]'; \
-              echo 'WantedBy=multi-user.target'; \
-            ) > "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.path" && \
-            \
-            ( \
-              echo '[Unit]'; \
-              echo 'Description=Fix Bluetooth Device Node Permissions for Userspace Daemon'; \
-              echo '[Service]'; \
-              echo 'Type=oneshot'; \
-              echo 'ExecStart=/usr/bin/chmod -R 0660 /sys/class/bluetooth/'; \
-              echo 'User=root'; \
-            ) > "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.service" && \
-            \
-            ( \
-              echo '# vDS Default Daemon Configuration'; \
-              echo 'enable_haptics=true'; \
-              echo 'isolation_mode=true'; \
-              echo 'compat_layer=false'; \
-            ) > "${PKG_ROOT}/usr/share/vdsd/main.conf" && \
-            \
-            ( \
-              echo '<!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-BUS Bus Configuration 1.0//EN"'; \
-              echo ' "http://freedesktop.org">'; \
-              echo '<busconfig>'; \
-              echo '  <policy user="root">'; \
-              echo '    <allow own="org.vds"/>'; \
-              echo '    <allow send_destination="org.vds"/>'; \
-              echo '  </policy>'; \
-              echo '  <policy context="default">'; \
-              echo '    <allow send_destination="org.vds"/>'; \
-              echo '  </policy>'; \
-              echo '</busconfig>'; \
-            ) > "${PKG_ROOT}/usr/share/dbus-1/system.d/org.vds.conf" && \
-            \
-            ( \
-              echo '[Service]'; \
-              echo 'ExecStart='; \
-              echo 'ExecStart=/usr/libexec/bluetooth/bluetoothd --compat'; \
-            ) > "${PKG_ROOT}/usr/lib/systemd/system/bluetooth.service.d/override.conf" && \
-            \
-            ( \
-              echo 'monitor.alsa.rules = ['; \
-              echo '  {'; \
-              echo '    matches = [ { "node.name" = "~alsa_output.usb-Sony_Interactive_Entertainment.*" } ]'; \
-              echo '    actions = {'; \
-              echo '      update-props = {'; \
-              echo '        "alsa.card_id"        = "WirelessController"'; \
-              echo '        "alsa.card_name"      = "WirelessController"'; \
-              echo '        "device.nick"         = "WirelessController"'; \
-              echo '        "node.name"           = "alsa_output.usb-Sony_Interactive_Entertainment_WirelessController-00.pro-audio"'; \
-              echo '        "node.description"    = "WirelessController"'; \
-              echo '        "node.nick"           = "WirelessController"'; \
-              echo '        "api.alsa.use-acp"    = false'; \
-              echo '        "audio.channels"      = 4'; \
-              echo '        "audio.position"      = [ "FL", "FR", "RL", "RR" ]'; \
-              echo '        "priority.driver"     = 1500'; \
-              echo '        "priority.session"    = 1500'; \
-              echo '        "session.suspend-on-idle" = false'; \
-              echo '      }'; \
-              echo '    }'; \
-              echo '  },'; \
-              echo '  {'; \
-              echo '    matches = ['; \
-              echo '      { "node.name" = "~alsa_output.pci.*DualSense.*" },'; \
-              echo '      { "node.name" = "~alsa_input.pci.*DualSense.*" },'; \
-              echo '      { "node.description" = "~.*DualSense wireless controller.*" }'; \
-              echo '    ]'; \
-              echo '    actions = { update-props = { "device.disabled" = true, "node.disabled" = true } }'; \
-              echo '  }'; \
-              echo ']'; \
-            ) > "${PKG_ROOT}/usr/share/wireplumber/wireplumber.conf.d/99-vds-prioritisation.conf" && \
-            \
-            ( \
-              echo 'KERNEL=="uinput", MODE="0660", GROUP="input", OPTIONS+="static_node=uinput"'; \
-              echo 'KERNEL=="vds[0-9]*", MODE="0660", GROUP="input", TAG+="systemd"'; \
-            ) > "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-uinput.rules" && \
-            \
-            ( \
-              echo '# 1. Globale Vorfilterung: Nur Sony-Geraete (054c) betrachten'; \
-              echo 'ATTRS{idVendor}!="054c", GOTO="vds_end"'; \
-              echo ''; \
-              echo '# --- FORK WEICHE 1: ECHTER BYPASS FUER NATIVE DUALSHOCK CONTROLLER ---'; \
-              echo '# Nutzt ENV{PRODUCT} (Bustyp/Vendor/Product), da ATTR{idProduct} bei Bluetooth leer bleibt'; \
-              echo '# Springt an das Ende unserer Datei (vds_end), damit Bazzite-Standardregeln aktiv bleiben!'; \
-              echo 'ENV{PRODUCT}=="*054c/05c4/*", GOTO="vds_end"'; \
-              echo 'ENV{PRODUCT}=="*054c/09cc/*", GOTO="vds_end"'; \
-              echo 'ENV{PRODUCT}=="*054c/0268/*", GOTO="vds_end"'; \
-              echo ''; \
-              echo '# --- FORK WEICHE 2: VDS-EMULATION FUER DUALSENSE & EDGE ---'; \
-              echo 'SUBSYSTEM!="input", GOTO="vds_end"'; \
-              echo 'KERNEL!="event*", GOTO="vds_end"'; \
-              echo ''; \
-              echo 'ATTRS{idProduct}=="0ce6", GOTO="vds_valid"'; \
-              echo 'ATTRS{idProduct}=="0df2", GOTO="vds_valid"'; \
-              echo 'GOTO="vds_end"'; \
-              echo ''; \
-              echo 'LABEL="vds_valid"'; \
-              echo 'ACTION=="add", RUN+="/usr/bin/vdsctl attach \$attr{properties/uniq}"'; \
-              echo 'LABEL="vds_end"'; \
-            ) > "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-dualsense-udev.rules" && \
-            \
-            mkdir -p /root/rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS} && \
+        # Block 7: Generate isolated RPM package via rpmbuild without system locks
+        RUN mkdir -p /root/rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS} && \
             ( \
               echo 'Name: kmod-vds'; \
               echo 'Version: 1.0.0'; \
@@ -390,9 +234,12 @@ modules:
               echo 'License: MIT'; \
               echo ''; \
               echo '%description'; \
-              echo 'Virtual DualSense Driver und Daemon fuer Bazzite mit nativem Multi-Gen Bypass.'; \
+              echo 'Virtual DualSense Driver und Daemon fuer Bazzite mit nativem C-Code-Spoofing und WirePlumber-Priorisierung.'; \
               echo ''; \
               echo '%post'; \
+              echo 'mkdir -p /etc/bluetooth'; \
+              echo 'cp -n /usr/share/vdsd/main.conf /etc/bluetooth/main.conf 2>/dev/null || true'; \
+              echo '# Kernel-Abhängigkeiten zur Bootzeit absichern'; \
               echo 'KERNEL_VERSION=$(rpm -q kernel --queryformat "%%{VERSION}-%%{RELEASE}.%%{ARCH}\n" | head -n 1)'; \
               echo 'depmod -a "${KERNEL_VERSION}" 2>/dev/null || true'; \
               echo 'exit 0'; \
@@ -412,11 +259,14 @@ modules:
               echo '/usr/lib/systemd/system/bluetooth.service.d/override.conf'; \
               echo '/usr/share/vdsd/main.conf'; \
             ) > /root/rpmbuild/SPECS/vds.spec && \
+            # Wir bauen das RPM nur als Datei im Build-Verzeichnis zusammen!
             rpmbuild --define "_topdir /root/rpmbuild" --buildroot=/vds-pkg-root -bb /root/rpmbuild/SPECS/vds.spec && \
+            # Wir sichern die fertige Datei an einem sicheren Ort im Container ab
             mkdir -p /tmp/vds-rpm && \
             cp /root/rpmbuild/RPMS/x86_64/kmod-vds-1.0.0-1.x86_64.rpm /tmp/vds-rpm/
-    
+
         # Block 8: Extract localized RPM payload directly into the image root
+        # Da wir uns im nativen Container-Build befinden, extrahieren wir die Dateien direkt dorthin, wo sie hingehören
         RUN rpm2cpio /tmp/vds-rpm/kmod-vds-1.0.0-1.x86_64.rpm | cpio -idmv -D /
 
         # Block 9: Enable core systemd targets via symbolic linking and map module dependencies
