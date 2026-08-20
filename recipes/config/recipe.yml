@@ -147,37 +147,28 @@ modules:
               echo 'WantedBy=multi-user.target'; \
             ) > "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service"
 
-        # Block 6: Apply BlueZ compat configuration and optimized database udev triggers
+        # Block 6: Funktionale Gleichheit zu manuellen Fixes (Bereinigte vDS-Exklusivität)
         RUN PKG_ROOT="/vds-pkg-root" && \
                printf "[Unit]\nDescription=Setze Berechtigungen für vDS SDP-Socket wenn er erscheint\n\n[Service]\nType=oneshot\nExecStart=/usr/bin/chmod 0777 /run/sdp\nRemainAfterExit=yes\n" > "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.service" && \
                printf "[Unit]\nDescription=Überwache BlueZ SDP-Socket für vDS\n\n[Path]\nPathChanged=/run/sdp\nUnit=vds-chmod-sdp.service\n\n[Install]\nWantedBy=multi-user.target\n" > "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.path" && \
-               # FIX 1: KEIN '--noplugin=input'! Der Service bleibt im unkastrierten Standardmodus für den DS4.
-               printf "[Service]\nExecStart=\nExecStart=/usr/libexec/bluetooth/bluetoothd --compat\n" > "${PKG_ROOT}/usr/lib/systemd/system/bluetooth.service.d/override.conf" && \
-               # FIX 2: UserspaceHID aktivieren. KEINE festen MAC-Adressen sperren.
-               printf "[General]\nClassicBondedOnly=false\nUserspaceHID=true\n" > "${PKG_ROOT}/usr/share/vdsd/main.conf" && \
+               \
+               # Nativer Drop-In: Verhindert, dass das Input-Plugin geladen wird (Funktionsgleich zu Ihrem systemctl edit)
+               printf "[Service]\nExecStart=\nExecStart=/usr/libexec/bluetooth/bluetoothd --compat --noplugin=input\n" > "${PKG_ROOT}/usr/lib/systemd/system/bluetooth.service.d/override.conf" && \
+               \
+               # Globale Deaktivierung der Profile in der main.conf (Funktionsgleich zu Ihrer manuellen Datei)
+               printf "[General]\nClassicBondedOnly=false\nDisable=input,hogp\n" > "${PKG_ROOT}/usr/share/vdsd/main.conf" && \
+               \
                printf "<!DOCTYPE busconfig PUBLIC \"-//freedesktop//DTD D-BUS Bus Configuration 1.0//EN\"\n \"http://freedesktop.org\">\n<busconfig>\n  <policy user=\"root\">\n    <allow own=\"org.vds\"/>\n    <allow send_destination=\"org.vds\"/>\n  </policy>\n  <policy context=\"default\">\n    <allow send_destination=\"org.vds\"/>\n  </policy>\n</busconfig>\n" > "${PKG_ROOT}/usr/share/dbus-1/system.d/org.vds.conf" && \
                ( \
                  echo '# ===================================================================='; \
-                 echo '# STRATEGIE: HARDWARE-BASIERTE SUBSYSTEM-SQUELCH-MATRIX'; \
+                 echo '# DYNAMISCHE VDS-REGISTRIERUNG BEIM ERSTEN VERBINDEN'; \
                  echo '# ===================================================================='; \
-                 echo ''; \
-                 echo '# SCHRITT 1: DualSense im HID-Subsystem anhand von Vendor- & Product-ID abfangen'; \
-                 echo '# Sobald der Kernel das Gerät liest, entziehen wir ihm radikal die Input-Identität für BlueZ.'; \
-                 echo '# ID_VENDOR_ID=054c (Sony), ID_MODEL_ID=0ce6 (DualSense V1), ID_MODEL_ID=0df2 (Edge)'; \
-                 echo 'SUBSYSTEM=="hid", ENV{ID_VENDOR_ID}=="054c", ENV{ID_MODEL_ID}=="0ce6", ENV{ID_INPUT}="", ENV{ID_INPUT_JOYSTICK}="", ENV{ID_INPUT_KEY}=""'; \
-                 echo 'SUBSYSTEM=="hid", ENV{ID_VENDOR_ID}=="054c", ENV{ID_MODEL_ID}=="0df2", ENV{ID_INPUT}="", ENV{ID_INPUT_JOYSTICK}="", ENV{ID_INPUT_KEY}=""'; \
-                 echo ''; \
-                 echo '# SCHRITT 2: Zusätzliche Absicherung über den Gerätenamen im Kernel-Eingabesystem'; \
-                 echo 'SUBSYSTEM=="input", ATTR{name}=="DualSense Wireless Controller", ENV{ID_INPUT}="", ENV{ID_INPUT_JOYSTICK}=""'; \
-                 echo 'SUBSYSTEM=="input", ATTR{name}=="DualSense Edge Wireless Controller", ENV{ID_INPUT}="", ENV{ID_INPUT_JOYSTICK}=""'; \
-                 echo ''; \
-                 echo '# SCHRITT 3: DIE REGULÄRE VDS-TRENNUNG IM INPUT-SUBSYSTEM'; \
                  echo 'SUBSYSTEM!="input", GOTO="vds_end"'; \
                  echo 'KERNEL!="event*", GOTO="vds_end"'; \
                  echo 'ACTION!="add", GOTO="vds_end"'; \
-                 echo 'ATTR{name}!="DualSense Wireless Controller", GOTO="vds_end"'; \
+                 echo 'ATTR{name}!="DualSense Wireless Controller", ATTR{name}!="DualSense Edge Wireless Controller", GOTO="vds_end"'; \
                  echo ''; \
-                 echo '# SCHRITT 4: AUTOMATISCHER ATTACH UEBER DAS KERNEL-PROPERTIE (UNIQ = MAC)'; \
+                 echo '# Liest die MAC-Adresse dynamisch aus und registriert sie im vDS-Daemon'; \
                  echo 'RUN+="/usr/bin/vdsctl attach \$attr{properties/uniq}"'; \
                  echo ''; \
                  echo 'LABEL="vds_end"'; \
@@ -252,7 +243,6 @@ modules:
               echo ''; \
               echo '%post'; \
               echo 'mkdir -p /etc/bluetooth'; \
-              echo 'cp -n /usr/share/vdsd/main.conf /etc/bluetooth/main.conf 2>/dev/null || true'; \
               echo '# Kernel-Abhängigkeiten zur Bootzeit absichern'; \
               echo 'KERNEL_VERSION=$(rpm -q kernel --queryformat "%%{VERSION}-%%{RELEASE}.%%{ARCH}\n" | head -n 1)'; \
               echo 'depmod -a "${KERNEL_VERSION}" 2>/dev/null || true'; \
@@ -270,8 +260,6 @@ modules:
               echo '/usr/lib/udev/rules.d/99-vds-uinput.rules'; \
               echo '/usr/lib/udev/rules.d/99-vds-dualsense-udev.rules'; \
               echo '/usr/share/wireplumber/wireplumber.conf.d/99-vds-prioritisation.conf'; \
-              echo '/usr/lib/systemd/system/bluetooth.service.d/override.conf'; \
-              echo '/usr/share/vdsd/main.conf'; \
             ) > /root/rpmbuild/SPECS/vds.spec && \
             rpmbuild --define "_topdir /root/rpmbuild" --buildroot=/vds-pkg-root -bb /root/rpmbuild/SPECS/vds.spec && \
             mkdir -p /tmp/vds-rpm && \
