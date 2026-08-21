@@ -147,28 +147,23 @@ modules:
               echo 'WantedBy=multi-user.target'; \
             ) > "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service"
 
-        # Block 6: Funktionale Gleichheit zu manuellen Fixes (Bereinigte vDS-Exklusivität)
+        # Block 6: Apply BlueZ compat configuration and optimized database udev triggers
         RUN PKG_ROOT="/vds-pkg-root" && \
                printf "[Unit]\nDescription=Setze Berechtigungen für vDS SDP-Socket wenn er erscheint\n\n[Service]\nType=oneshot\nExecStart=/usr/bin/chmod 0777 /run/sdp\nRemainAfterExit=yes\n" > "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.service" && \
                printf "[Unit]\nDescription=Überwache BlueZ SDP-Socket für vDS\n\n[Path]\nPathChanged=/run/sdp\nUnit=vds-chmod-sdp.service\n\n[Install]\nWantedBy=multi-user.target\n" > "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.path" && \
-               \
-               # Nativer Drop-In: Verhindert, dass das Input-Plugin geladen wird (Funktionsgleich zu Ihrem systemctl edit)
-               printf "[Service]\nExecStart=\nExecStart=/usr/libexec/bluetooth/bluetoothd --compat --noplugin=input\n" > "${PKG_ROOT}/usr/lib/systemd/system/bluetooth.service.d/override.conf" && \
-               \
-               # Globale Deaktivierung der Profile in der main.conf (Funktionsgleich zu Ihrer manuellen Datei)
-               printf "[General]\nClassicBondedOnly=false\nDisable=input,hogp\n" > "${PKG_ROOT}/usr/share/vdsd/main.conf" && \
-               \
+               printf "[Service]\nExecStart=\nExecStart=/usr/libexec/bluetooth/bluetoothd --compat\n" > "${PKG_ROOT}/usr/lib/systemd/system/bluetooth.service.d/override.conf" && \
+               printf "[General]\nClassicBondedOnly=false\n" > "${PKG_ROOT}/usr/share/vdsd/main.conf" && \
                printf "<!DOCTYPE busconfig PUBLIC \"-//freedesktop//DTD D-BUS Bus Configuration 1.0//EN\"\n \"http://freedesktop.org\">\n<busconfig>\n  <policy user=\"root\">\n    <allow own=\"org.vds\"/>\n    <allow send_destination=\"org.vds\"/>\n  </policy>\n  <policy context=\"default\">\n    <allow send_destination=\"org.vds\"/>\n  </policy>\n</busconfig>\n" > "${PKG_ROOT}/usr/share/dbus-1/system.d/org.vds.conf" && \
                ( \
-                 echo '# ===================================================================='; \
-                 echo '# DYNAMISCHE VDS-REGISTRIERUNG BEIM ERSTEN VERBINDEN'; \
-                 echo '# ===================================================================='; \
+                 echo '# Filtert unbestechlich auf das Hauptgerät im input-Subsystem'; \
                  echo 'SUBSYSTEM!="input", GOTO="vds_end"'; \
                  echo 'KERNEL!="event*", GOTO="vds_end"'; \
-                 echo 'ACTION!="add", GOTO="vds_end"'; \
-                 echo 'ATTR{name}!="DualSense Wireless Controller", ATTR{name}!="DualSense Edge Wireless Controller", GOTO="vds_end"'; \
+                 echo 'ATTR{name}!="DualSense Wireless Controller", GOTO="vds_end"'; \
                  echo ''; \
-                 echo '# Liest die MAC-Adresse dynamisch aus und registriert sie im vDS-Daemon'; \
+                 echo '# Reagiert exklusiv beim Hinzufügen (Erst-Connect)'; \
+                 echo 'ACTION!="add", GOTO="vds_end"'; \
+                 echo ''; \
+                 echo '# Datenbank-Injektion: Nutzt das unbestechliche Kernel-Attribut statt env'; \
                  echo 'RUN+="/usr/bin/vdsctl attach \$attr{properties/uniq}"'; \
                  echo ''; \
                  echo 'LABEL="vds_end"'; \
@@ -237,7 +232,6 @@ modules:
               echo 'Release: 1'; \
               echo 'Summary: Virtual DualSense Driver'; \
               echo 'License: MIT'; \
-              echo 'AutoReqProv: no'; \
               echo ''; \
               echo '%description'; \
               echo 'Virtual DualSense Driver und Daemon fuer Bazzite mit nativem C-Code-Spoofing und WirePlumber-Priorisierung.'; \
@@ -265,10 +259,11 @@ modules:
               echo '/usr/lib/systemd/system/bluetooth.service.d/override.conf'; \
               echo '/usr/share/vdsd/main.conf'; \
             ) > /root/rpmbuild/SPECS/vds.spec && \
+            # Wir bauen das RPM nur als Datei im Build-Verzeichnis zusammen!
             rpmbuild --define "_topdir /root/rpmbuild" --buildroot=/vds-pkg-root -bb /root/rpmbuild/SPECS/vds.spec && \
+            # Wir sichern die fertige Datei an einem sicheren Ort im Container ab
             mkdir -p /tmp/vds-rpm && \
             cp /root/rpmbuild/RPMS/x86_64/kmod-vds-1.0.0-1.x86_64.rpm /tmp/vds-rpm/
-
 
         # Block 8: Extract localized RPM payload directly into the image root
         # Da wir uns im nativen Container-Build befinden, extrahieren wir die Dateien direkt dorthin, wo sie hingehören
