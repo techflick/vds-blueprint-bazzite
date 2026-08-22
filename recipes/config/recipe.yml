@@ -93,7 +93,7 @@ modules:
             cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS="-isystem /vds_build_dir/include" -DCMAKE_CXX_FLAGS="-isystem /vds_build_dir/include" && \
             make -j$(nproc)
 
-        # Block 4: Initialize PKG_ROOT structure and stage binary payloads (inkl. intelligenter MAC-Ergänzung)
+        # Block 4: Initialize PKG_ROOT structure and stage binary payloads
         RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
             PKG_ROOT="/vds-pkg-root" && \
             mkdir -p "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra" && \
@@ -104,50 +104,16 @@ modules:
             mkdir -p "${PKG_ROOT}/usr/lib/udev/rules.d" && \
             mkdir -p "${PKG_ROOT}/usr/share/vdsd" && \
             mkdir -p "${PKG_ROOT}/etc/wireplumber/wireplumber.conf.d" && \
-            mkdir -p "${PKG_ROOT}/etc/bluetooth" && \
+            mkdir -p "${PKG_ROOT}/usr/lib/cmdline.d" && \
             cp /vds_build_dir/module/vds_hcd.ko "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra/" && \
             chmod 644 "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra/vds_hcd.ko" && \
             cp /vds_build_dir/build/vdsd "${PKG_ROOT}/usr/bin/vdsd" && \
             cp /vds_build_dir/build/vdsctl "${PKG_ROOT}/usr/bin/vdsctl" && \
             chmod 755 "${PKG_ROOT}/usr/bin/vdsd" "${PKG_ROOT}/usr/bin/vdsctl" && \
             printf "vds_hcd\n" > "${PKG_ROOT}/usr/lib/modules-load.d/vds.conf" && \
-            ( \
-              echo '#!/usr/bin/env python3'; \
-              echo 'import sys, os, subprocess'; \
-              echo 'raw_arg = sys.argv[1] if len(sys.argv) > 1 else ""'; \
-              echo 'mac = raw_arg.replace("_", ":").upper()'; \
-              echo 'if not mac or len(mac) != 17: sys.exit(0)'; \
-              echo 'conf_path = "/etc/bluetooth/input.conf"'; \
-              echo 'os.makedirs("/etc/bluetooth", exist_ok=True)'; \
-              echo 'config = {"General": {"UserspaceHID": "true", "DeviceBlacklist": ""}}'; \
-              echo 'if os.path.exists(conf_path):'; \
-              echo '    current_section = None'; \
-              echo '    with open(conf_path, "r") as f:'; \
-              echo '        for line in f:'; \
-              echo '            line = line.strip()'; \
-              echo '            if line.startswith("[") and line.endswith("]"):'; \
-              echo '                current_section = line[1:-1]'; \
-              echo '                if current_section not in config: config[current_section] = {}'; \
-              echo '            elif "=" in line and current_section:'; \
-              echo '                k, v = line.split("=", 1)'; \
-              echo '                config[current_section][k.strip()] = v.strip()'; \
-              echo 'blacklist = config["General"].get("DeviceBlacklist", "")'; \
-              echo 'existing_macs = [m.strip().upper() for m in blacklist.split(",") if m.strip()]'; \
-              echo 'if mac not in existing_macs:'; \
-              echo '    existing_macs.append(mac)'; \
-              echo '    config["General"]["DeviceBlacklist"] = ",".join(existing_macs)'; \
-              echo '    with open(conf_path, "w") as f:'; \
-              echo '        for section, keys in config.items():'; \
-              echo '            f.write(f"[{section}]\\n")'; \
-              echo '            for k, v in keys.items():'; \
-              echo '                if v: f.write(f"{k}={v}\\n")'; \
-              echo '            f.write("\\n")'; \
-              echo '    subprocess.run(["systemctl", "restart", "bluetooth"], stdout=subprocess.DEVNULL)'; \
-              echo '    subprocess.run(["bluetoothctl", "disconnect", mac], stdout=subprocess.DEVNULL)'; \
-            ) > "${PKG_ROOT}/usr/bin/vds-mac-blacklister.py" && \
-            chmod 755 "${PKG_ROOT}/usr/bin/vds-mac-blacklister.py"
+            printf "hid.quirks=0x054c:0x0ce6:0x00000004,0x054c:0x0df2:0x00000004\n" > "${PKG_ROOT}/usr/lib/cmdline.d/vds-quirks.conf"
 
-        # Block 5: Deploy monolithic system daemon and the template service for MAC-grabbing
+        # Block 5: Deploy monolithic system daemon with bounded ambient capabilities
         RUN PKG_ROOT="/vds-pkg-root" && \
             ( \
               echo '[Unit]'; \
@@ -180,32 +146,25 @@ modules:
               echo ''; \
               echo '[Install]'; \
               echo 'WantedBy=multi-user.target'; \
-            ) > "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service" && \
-            ( \
-              echo '[Unit]'; \
-              echo 'Description=Automated BlueZ MAC Blacklister for DualSense'; \
-              echo 'After=bluetooth.service'; \
-              echo ''; \
-              echo '[Service]'; \
-              echo 'Type=oneshot'; \
-              echo 'ExecStart=/usr/bin/vds-mac-blacklister.py %I'; \
-            ) > "${PKG_ROOT}/usr/lib/systemd/system/vds-blacklist-mac@.service"
+            ) > "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service"
+
 
         # Block 6: Apply BlueZ compat configuration and optimized database udev triggers
         RUN PKG_ROOT="/vds-pkg-root" && \
                printf "[General]\nClassicBondedOnly=false\n" > "${PKG_ROOT}/usr/share/vdsd/main.conf" && \
                printf "<!DOCTYPE busconfig PUBLIC \"-//freedesktop//DTD D-BUS Bus Configuration 1.0//EN\"\n \"http://freedesktop.org\">\n<busconfig>\n  <policy user=\"root\">\n    <allow own=\"org.vds\"/>\n    <allow send_destination=\"org.vds\"/>\n  </policy>\n  <policy context=\"default\">\n    <allow send_destination=\"org.vds\"/>\n  </policy>\n</busconfig>\n" > "${PKG_ROOT}/usr/share/dbus-1/system.d/org.vds.conf" && \
                ( \
-                 echo '# 1. SCHRITT: Wenn die DualSense Hardware-ID kommt, triggere die automatisierte Weiche'; \
-                 echo 'SUBSYSTEM=="hid", ATTRS{idVendor}=="054c", ATTRS{idProduct}=="0ce6", ACTION=="add", ENV{SYSTEMD_WANTS}+="vds-blacklist-mac@\$kernel.service"'; \
-                 echo 'SUBSYSTEM=="hid", ATTRS{idVendor}=="054c", ATTRS{idProduct}=="0df2", ACTION=="add", ENV{SYSTEMD_WANTS}+="vds-blacklist-mac@\$kernel.service"'; \
-                 echo ''; \
-                 echo '# 2. SCHRITT: Dein originaler vDS-Filter fuer das vDS-Attach'; \
+                 echo '# Filtert unbestechlich auf das Hauptgerät im input-Subsystem'; \
                  echo 'SUBSYSTEM!="input", GOTO="vds_end"'; \
                  echo 'KERNEL!="event*", GOTO="vds_end"'; \
                  echo 'ATTR{name}!="DualSense Wireless Controller", GOTO="vds_end"'; \
+                 echo ''; \
+                 echo '# Reagiert exklusiv beim Hinzufügen (Erst-Connect)'; \
                  echo 'ACTION!="add", GOTO="vds_end"'; \
+                 echo ''; \
+                 echo '# Datenbank-Injektion: Nutzt das unbestechliche Kernel-Attribut statt env'; \
                  echo 'RUN+="/usr/bin/vdsctl attach \$attr{properties/uniq}"'; \
+                 echo ''; \
                  echo 'LABEL="vds_end"'; \
                ) > "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-dualsense-udev.rules" && \
                printf 'KERNEL=="uinput", MODE="0660", GROUP="input", OPTIONS+="static_node=uinput"\n' > "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-uinput.rules" && \
@@ -287,14 +246,13 @@ modules:
               echo '/usr/lib/modules-load.d/vds.conf'; \
               echo '/usr/bin/vdsd'; \
               echo '/usr/bin/vdsctl'; \
-              echo '/usr/bin/vds-mac-blacklister.py'; \
               echo '/usr/lib/systemd/system/vdsd.service'; \
-              echo '/usr/lib/systemd/system/vds-blacklist-mac@.service'; \
               echo '/usr/share/dbus-1/system.d/org.vds.conf'; \
               echo '/usr/lib/udev/rules.d/99-vds-uinput.rules'; \
               echo '/usr/lib/udev/rules.d/99-vds-dualsense-udev.rules'; \
               echo '/usr/share/wireplumber/wireplumber.conf.d/99-vds-prioritisation.conf'; \
               echo '/usr/share/vdsd/main.conf'; \
+              echo '/usr/lib/cmdline.d/vds-quirks.conf'; \
             ) > /root/rpmbuild/SPECS/vds.spec && \
             rpmbuild --define "_topdir /root/rpmbuild" --buildroot=/vds-pkg-root -bb /root/rpmbuild/SPECS/vds.spec && \
             mkdir -p /tmp/vds-rpm && \
@@ -312,4 +270,3 @@ modules:
 
         # Block 10: Purge temporary build contexts, compilation paths, and runtime caches
         RUN rm -rf /vds_build_dir /vds-pkg-root /root/rpmbuild /tmp/vds-rpm
-
