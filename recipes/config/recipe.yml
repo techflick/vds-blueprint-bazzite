@@ -87,10 +87,14 @@ modules:
             sed -i '/pkg_check_modules.*bluez/c\set(bluez_FOUND TRUE)\nset(bluez_INCLUDE_DIRS "/vds_build_dir/include")\nset(bluez_LIBRARIES "")' CMakeLists.txt && \
             sed -i 's/PkgConfig::BLUEZ//g' CMakeLists.txt
 
-        # Block 3c: Prepare original v0.4.0 daemon build structure without external BlueZ dependency
+        # Block 3c: Bereite v0.4.0 daemon vor und patche Bluetooth-Ports auf Alternativ-Ports um
         RUN cd /vds_build_dir && \
             sed -i '/pkg_check_modules.*bluez/c\set(bluez_FOUND TRUE)\nset(bluez_INCLUDE_DIRS "/vds_build_dir/include")\nset(bluez_LIBRARIES "")' CMakeLists.txt && \
             sed -i 's/PkgConfig::BLUEZ//g' CMakeLists.txt && \
+            # --- DER PORT-PATCH ---
+            # Wir suchen im Quellcode nach PSM 0x11 (Control) und 0x13 (Interrupt) und biegen sie für vdsd um
+            find . -type f -exec sed -i 's/0x11/0x21/g' {} + && \
+            find . -type f -exec sed -i 's/0x13/0x23/g' {} + && \
             mkdir -p build
 
         # Block 4: Initialize PKG_ROOT structure, compile binaries and stage payloads
@@ -124,10 +128,10 @@ modules:
             cp /vds_build_dir/build/vds-proxy "${PKG_ROOT}/usr/bin/vds-proxy" && \
             chmod 755 "${PKG_ROOT}/usr/bin/vdsd" "${PKG_ROOT}/usr/bin/vdsctl" "${PKG_ROOT}/usr/bin/vds-proxy"
 
-        # Block 5: Deploy monolithic system daemon and custom sieve-proxy with bounded capabilities
+        # Block 5: Deploy monolithic system daemon and custom sieve-proxy with clean systemd lifecycles
         RUN PKG_ROOT="/vds-pkg-root" && \
             printf "vds_hcd\n" > "${PKG_ROOT}/usr/lib/modules-load.d/vds.conf" && \
-            # --- 1. PROXY SERVICE ERSTELLEN ---
+            # --- 1. PROXY SERVICE (Läuft ununterbrochen auf 0x11/0x13) ---
             ( \
               echo '[Unit]'; \
               echo 'Description=vDS Dynamic Bluetooth Socket Router (Bypass Proxy)'; \
@@ -139,7 +143,7 @@ modules:
               echo 'Type=simple'; \
               echo 'ExecStart=/usr/bin/vds-proxy'; \
               echo 'Restart=always'; \
-              echo 'RestartSec=2'; \
+              echo 'RestartSec=5'; \
               echo 'User=root'; \
               echo 'Group=root'; \
               echo 'CapabilityBoundingSet=CAP_NET_RAW CAP_SYS_ADMIN CAP_NET_ADMIN CAP_NET_BIND_SERVICE'; \
@@ -148,7 +152,7 @@ modules:
               echo '[Install]'; \
               echo 'WantedBy=multi-user.target'; \
             ) > "${PKG_ROOT}/usr/lib/systemd/system/vds-proxy.service" && \
-            # --- 2. VDSD DAEMON SERVICE ERSTELLEN ---
+            # --- 2. VDSD DAEMON SERVICE (Lauscht auf 0x21/0x23) ---
             ( \
               echo '[Unit]'; \
               echo 'Description=Virtual DualSense Userspace Daemon (v0.4.0 Nativ)'; \
