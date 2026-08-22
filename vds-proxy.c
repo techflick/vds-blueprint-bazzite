@@ -57,16 +57,14 @@ int create_l2cap_socket(uint16_t psm) {
     return sock;
 }
 
-// Baut die ausgehende Verbindung zum gepatchten vdsd-Daemon auf
 int connect_to_vdsd(uint16_t target_psm) {
     int sock = socket(AF_BLUETOOTH, SOCK_SEQPACKET, BTPROTO_L2CAP);
     if (sock < 0) return -1;
 
     struct sockaddr_l2_local addr = {0};
     addr.l2_family = AF_BLUETOOTH;
-    addr.l2_psm = target_psm; // Verbindet zu 0x21 oder 0x23
+    addr.l2_psm = target_psm;
 
-    // Da vdsd lokal auf Verbindungen wartet, reicht ein Connect auf die Any-Struktur
     if (connect(sock, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
         close(sock);
         return -1;
@@ -116,7 +114,6 @@ int main() {
                 if (is_dualsense) {
                     printf("[+] DualSense erkannt. Initialisiere Weiche zu vdsd...\n");
                     
-                    // Hol dir sofort das Gegenstück des Interrupt-Kanals vom Controller
                     struct pollfd int_check;
                     int_check.fd = server_int;
                     int_check.events = POLLIN;
@@ -132,19 +129,15 @@ int main() {
                     }
                     set_nonblocking(client_int);
 
-                    // Verbinde den Proxy mit dem im Hintergrund wartenden vdsd (Ports 0x21 und 0x23)
                     int vdsd_ctrl = connect_to_vdsd(0x21);
                     int vdsd_int = connect_to_vdsd(0x23);
 
                     if (vdsd_ctrl < 0 || vdsd_int < 0) {
-                        printf("[-] Verbindung zu vdsd fehlgeschlagen. Läuft der Daemon?\n");
-                        close(client_ctrl);
-                        close(client_int);
+                        printf("[-] Verbindung zu vdsd fehlgeschlagen.\n");
+                        close(client_ctrl); close(client_int);
                         if (vdsd_ctrl >= 0) close(vdsd_ctrl);
                         continue;
                     }
-
-                    printf("[+] Tunnel zu vdsd steht. Starte DualSense Datenbrücke.\n");
 
                     struct pollfd ds_fds[4];
                     ds_fds[0].fd = client_ctrl;  ds_fds[0].events = POLLIN;
@@ -162,46 +155,40 @@ int main() {
                             break;
                         }
 
-                        // Verbindungstrennung prüfen
                         for (int k = 0; k < 4; k++) {
                             if (ds_fds[k].revents & (POLLHUP | POLLERR)) active = 0;
                         }
                         if (!active) break;
 
-                        // Controller Control -> vdsd Control
                         if (ds_fds[0].revents & POLLIN) {
                             ssize_t len = read(client_ctrl, io_buf, sizeof(io_buf));
                             if (len <= 0) break;
                             write(vdsd_ctrl, io_buf, len);
                         }
-                        // Controller Interrupt -> vdsd Interrupt
                         if (ds_fds[1].revents & POLLIN) {
                             ssize_t len = read(client_int, io_buf, sizeof(io_buf));
                             if (len <= 0) break;
                             write(vdsd_int, io_buf, len);
                         }
-                        // vdsd Control -> Controller Control
                         if (ds_fds[2].revents & POLLIN) {
                             ssize_t len = read(vdsd_ctrl, io_buf, sizeof(io_buf));
                             if (len <= 0) break;
                             write(client_ctrl, io_buf, len);
                         }
-                        // vdsd Interrupt -> Controller Interrupt (Haptik / Audio / Rumble)
                         if (ds_fds[3].revents & POLLIN) {
                             ssize_t len = read(vdsd_int, io_buf, sizeof(io_buf));
                             if (len <= 0) break;
                             write(client_int, io_buf, len);
                         }
                     }
-                    close(vdsd_ctrl);
-                    close(vdsd_int);
-                    close(client_int);
+                    close(vdsd_ctrl); close(vdsd_int); close(client_int);
                 } 
-                
                 /* ========================================================
-                   FALL 2: DUALSHOCK 4 - UHID TUNNELUNG (UNVERÄNDERT STABIL)
+                   FALL 2: DUALSHOCK 4 - UHID TUNNELUNG
                    ======================================================== */
                 else {
+                    printf("[+] DualShock 4 erkannt. Starte UHID-Tunnelung...\n");
+                    
                     struct pollfd int_check;
                     int_check.fd = server_int;
                     int_check.events = POLLIN;
@@ -224,9 +211,9 @@ int main() {
                         struct uhid_event ev = {0};
                         ev.type = UHID_CREATE;
                         strcpy((char *)ev.u.create.name, "Wireless Controller");
-                        ev.u.create.bus = 0x05;
+                        ev.u.create.bus = 0x05; 
                         ev.u.create.vendor = 0x054c;
-                        ev.u.create.product = 0x09cc;
+                        ev.u.create.product = 0x09cc; 
                         ev.u.create.rd_size = sizeof(ds4_bt_report_desc);
                         memcpy(ev.u.create.rd_data, ds4_bt_report_desc, sizeof(ds4_bt_report_desc));
                         write(uhid_fd, &ev, sizeof(ev));
@@ -243,7 +230,39 @@ int main() {
                                 if (errno == EINTR) continue;
                                 break;
                             }
-                            if ((tunnel_fds[0].revents & (POLLHUP|POLLERR)) || (tunnel_fds[1].revents & (POLLHUP|POLLERR))) {
+                            if ((tunnel_fds[0].revents & (POLLHUP|POLLERR)) || 
+                                (tunnel_fds[1].revents & (POLLHUP|POLLERR))) {
                                 break;
                             }
                             if (tunnel_fds[1].revents & POLLIN) {
+                                ssize_t len = read(client_int, io_buf, sizeof(io_buf));
+                                if (len <= 0) break;
+                                struct uhid_event in_ev = {0};
+                                in_ev.type = UHID_INPUT;
+                                in_ev.u.input.size = len;
+                                memcpy(in_ev.u.input.data, io_buf, len);
+                                write(uhid_fd, &in_ev, sizeof(in_ev));
+                            }
+                            if (tunnel_fds[0].revents & POLLIN) {
+                                ssize_t len = read(client_ctrl, io_buf, sizeof(io_buf));
+                                if (len <= 0) break;
+                            }
+                            if (tunnel_fds[2].revents & POLLIN) {
+                                struct uhid_event out_ev;
+                                if (read(uhid_fd, &out_ev, sizeof(out_ev)) >= (ssize_t)sizeof(out_ev)) {
+                                    if (out_ev.type == UHID_OUTPUT) {
+                                        write(client_int, out_ev.u.output.data, out_ev.u.output.size);
+                                    }
+                                }
+                            }
+                        }
+                        close(uhid_fd);
+                    }
+                    close(client_int);
+                }
+                close(client_ctrl);
+            }
+        }
+    }
+    return 0;
+}
