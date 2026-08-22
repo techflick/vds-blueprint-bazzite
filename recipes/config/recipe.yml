@@ -94,6 +94,10 @@ modules:
             mkdir -p build
 
         # Block 4: Initialize PKG_ROOT structure, compile binaries and stage payloads
+        # Zuerst holen wir die vds-proxy.c aus deinem Git-Projekt-Root in den Container
+        COPY vds-proxy.c /vds_build_dir/vds-proxy.c
+
+        # Jetzt führen wir den Build-Prozess mit der vorhandenen Datei aus
         RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
             PKG_ROOT="/vds-pkg-root" && \
             mkdir -p "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra" && \
@@ -105,14 +109,11 @@ modules:
             mkdir -p "${PKG_ROOT}/usr/lib/udev/rules.d" && \
             mkdir -p "${PKG_ROOT}/usr/share/vdsd" && \
             mkdir -p "${PKG_ROOT}/etc/wireplumber/wireplumber.conf.d" && \
-            # --- REPARATUR-SCHRITT ---
-            # Kopiert deine Datei aus dem eigenen Git-Projekt-Wurzelverzeichnis in den vDS-Build-Ordner
-            cp ./vds-proxy.c /vds_build_dir/vds-proxy.c && \
             # 1. Kompiliere den originalen Daemon via CMake
             cd /vds_build_dir/build && \
             cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS="-isystem /vds_build_dir/include" -DCMAKE_CXX_FLAGS="-isystem /vds_build_dir/include" && \
             make -j$(nproc) && \
-            # 2. Kompiliere den Proxy (findet die Datei jetzt fehlerfrei!)
+            # 2. Kompiliere den Proxy (Die Datei wurde per COPY perfekt platziert!)
             gcc -O2 -Wall -I/vds_build_dir/include /vds_build_dir/vds-proxy.c -o /vds_build_dir/build/vds-proxy && \
             # 3. Kopiere das Kernel-Modul in die Paketstruktur
             cp /vds_build_dir/module/vds_hcd.ko "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra/" && \
