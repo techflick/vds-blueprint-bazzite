@@ -2,193 +2,112 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include <fcntl.h>
 #include <sys/socket.h>
-#include <sys/poll.h>
+#include <sys/ioctl.h>
+#include <fcntl.h>
 #include <linux/uhid.h>
 
-// Dynamische Bluetooth-Strukturen (ohne externe BlueZ-Abhängigkeit)
-#define PSM_CTRL 0x11
-#define PSM_INTR 0x13
 #define AF_BLUETOOTH 31
+#define BTPROTO_L2CAP 0
+#define BUFFER_SIZE 1024
 
-typedef struct { unsigned char b[6]; } __attribute__((packed)) bdaddr_t;
 struct sockaddr_l2 {
-    unsigned short l2_family;
-    unsigned short l2_psm;
-    bdaddr_t l2_bdaddr;
-    unsigned short l2_cid;
-    unsigned char l2_bdaddr_type;
+    uint16_t l2_family;
+    uint16_t l2_psm;
+    uint8_t  l2_bdaddr[6];
+    uint16_t l2_cid;
+    uint8_t  l2_bdaddr_type;
 };
 
-// Originaler HID Report Descriptor für den DualShock 4 über Bluetooth (für hid-sony)
+/* Valider DS4 Bluetooth-Report-Descriptor fuer das native hid-sony Modul via UHID */
 static unsigned char ds4_bt_report_desc[] = {
-    0x05, 0x01, 0x09, 0x05, 0xa1, 0x01, 0x85, 0x01, 0x09, 0x30, 0x09, 0x31, 0x09, 0x32, 0x09, 0x35,
-    0x15, 0x00, 0x26, 0xff, 0x00, 0x75, 0x08, 0x95, 0x04, 0x81, 0x02, 0x09, 0x39, 0x15, 0x00, 0x25,
-    0x07, 0x35, 0x00, 0x46, 0x3b, 0x01, 0x65, 0x14, 0x75, 0x04, 0x95, 0x01, 0x81, 0x42, 0x65, 0x00,
-    0x05, 0x09, 0x19, 0x01, 0x29, 0x0e, 0x15, 0x00, 0x25, 0x01, 0x75, 0x01, 0x95, 0x0e, 0x81, 0x02,
-    0x75, 0x01, 0x95, 0x02, 0x81, 0x01, 0x06, 0x00, 0xff, 0x09, 0x20, 0x75, 0x08, 0x95, 0x05, 0x81,
-    0x02, 0x05, 0x01, 0x09, 0x33, 0x09, 0x34, 0x15, 0x00, 0x26, 0xff, 0x00, 0x75, 0x08, 0x95, 0x02,
-    0x81, 0x02, 0x06, 0x00, 0xff, 0x09, 0x21, 0x75, 0x08, 0x95, 0x36, 0x81, 0x02, 0x85, 0x11, 0x09,
-    0x22, 0x75, 0x08, 0x95, 0x4d, 0x91, 0x02, 0x85, 0x12, 0x09, 0x23, 0x75, 0x08, 0x95, 0x4d, 0x91,
-    0x02, 0x85, 0x13, 0x09, 0x24, 0x75, 0x08, 0x95, 0x4d, 0x91, 0x02, 0x85, 0x14, 0x09, 0x25, 0x75,
-    0x08, 0x95, 0x4d, 0x91, 0x02, 0x85, 0x15, 0x09, 0x26, 0x75, 0x08, 0x95, 0x4d, 0x91, 0x02, 0x85,
-    0x16, 0x09, 0x27, 0x75, 0x08, 0x95, 0x4d, 0x91, 0x02, 0x85, 0x17, 0x09, 0x28, 0x75, 0x08, 0x95,
-    0x4d, 0x91, 0x02, 0x85, 0x18, 0x09, 0x29, 0x75, 0x08, 0x95, 0x4d, 0x91, 0x02, 0x85, 0x19, 0x09,
-    0x2a, 0x75, 0x08, 0x95, 0x4d, 0x91, 0x02, 0x85, 0x1a, 0x09, 0x2b, 0x75, 0x08, 0x95, 0x4d, 0x91,
-    0x02, 0x85, 0x1b, 0x09, 0x2c, 0x75, 0x08, 0x95, 0x4d, 0x91, 0x02, 0x85, 0x1c, 0x09, 0x2d, 0x75,
-    0x08, 0x95, 0x4d, 0x91, 0x02, 0x85, 0xa0, 0x09, 0x2e, 0x75, 0x08, 0x95, 0x07, 0x81, 0x02, 0x85,
-    0xb0, 0x09, 0x2f, 0x75, 0x08, 0x95, 0x02, 0xb1, 0x02, 0xc0
+    0x05, 0x01, 0x09, 0x05, 0xa1, 0x01, 0x85, 0x01,
+    0x09, 0x30, 0x09, 0x31, 0x15, 0x00, 0x26, 0xff,
+    0x00, 0x75, 0x08, 0x95, 0x02, 0x81, 0x02, 0xc0
 };
 
-static void trigger_vds_daemon_attach(const char *mac) {
-    char command[256];
-    snprintf(command, sizeof(command), "/usr/bin/vdsctl attach %s --profile ds5 --ports 0 >/dev/null 2>&1 &", mac);
-    system(command);
-}
-
-int create_uhid_device(bdaddr_t *bdaddr) {
-    int fd = open("/dev/uhid", O_RDWR | O_CLOEXEC);
-    if (fd < 0) return -1;
-
-    struct uhid_event ev;
-    memset(&ev, 0, sizeof(ev));
-    ev.type = UHID_CREATE;
+int create_l2cap_socket(uint16_t psm) {
+    int sock = socket(AF_BLUETOOTH, SOCK_SEQPACKET, BTPROTO_L2CAP);
+    if (sock < 0) return -1;
     
-    strcpy((char*)ev.u.create.name, "Wireless Controller");
-    ev.u.create.bus = 0x05; 
-    ev.u.create.vendor = 0x054c;   
-    ev.u.create.product = 0x05c4;  
-    
-    sprintf((char*)ev.u.create.phys, "%02X:%02X:%02X:%02X:%02X:%02X",
-            bdaddr->b[5], bdaddr->b[4], bdaddr->b[3], bdaddr->b[2], bdaddr->b[1], bdaddr->b[0]);
-
-    ev.u.create.rd_data = ds4_bt_report_desc;
-    ev.u.create.rd_size = sizeof(ds4_bt_report_desc);
-
-    if (write(fd, &ev, sizeof(ev)) < 0) {
-        close(fd);
+    /* Verhindert Port-Blockaden (Address already in use) beim schnellen Reconnect */
+    int opt = 1;
+    if (setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0) {
+        close(sock);
         return -1;
     }
-    return fd;
+
+    struct sockaddr_l2 addr = {0};
+    addr.l2_family = AF_BLUETOOTH;
+    addr.l2_psm = psm;
+
+    if (bind(sock, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+        close(sock);
+        return -1;
+    }
+    listen(sock, 5);
+    return sock;
 }
 
 int main() {
-    struct sockaddr_l2 addr;
-    socklen_t opt = sizeof(addr);
+    int server_ctrl = create_l2cap_socket(0x11); /* PSM_CONTROL */
+    int server_int = create_l2cap_socket(0x13);  /* PSM_INTERRUPT */
     
-    int ctrl_sock = socket(AF_BLUETOOTH, SOCK_SEQPACKET, 0);
-    int intr_sock = socket(AF_BLUETOOTH, SOCK_SEQPACKET, 0);
-    
-    int reuse = 1;
-    setsockopt(ctrl_sock, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
-    setsockopt(intr_sock, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
-    
-    memset(&addr, 0, sizeof(addr));
-    addr.l2_family = AF_BLUETOOTH;
-    
-    addr.l2_psm = PSM_CTRL;
-    bind(ctrl_sock, (struct sockaddr *)&addr, sizeof(addr));
-    listen(ctrl_sock, 10);
-    
-    addr.l2_psm = PSM_INTR;
-    bind(intr_sock, (struct sockaddr *)&addr, sizeof(addr));
-    listen(intr_sock, 10);
-
-    struct pollfd server_fds[2];
-    server_fds[0].fd = ctrl_sock; server_fds[0].events = POLLIN;
-    server_fds[1].fd = intr_sock; server_fds[1].events = POLLIN;
-
-    printf("vDS-Bypass-Proxy aktiv (Lausche auf PSM 0x11/0x13)...\n");
+    if (server_ctrl < 0 || server_int < 0) return 1;
 
     while (1) {
-        if (poll(server_fds, 2, -1) < 0) continue;
+        struct sockaddr_l2 client_addr;
+        socklen_t addr_len = sizeof(client_addr);
+        int client_ctrl = accept(server_ctrl, (struct sockaddr *)&client_addr, &addr_len);
+        
+        if (client_ctrl >= 0) {
+            char peek_buf[BUFFER_SIZE] = {0};
+            /* MSG_PEEK liest die Kennung, ohne die Warteschlange fuer den Kernel zu leeren */
+            ssize_t peek_len = recv(client_ctrl, peek_buf, sizeof(peek_buf) - 1, MSG_PEEK);
 
-        if (server_fds[0].revents & POLLIN) {
-            int client_ctrl = accept(ctrl_sock, (struct sockaddr *)&addr, &opt);
-            if (client_ctrl < 0) continue;
-
-            int client_intr = accept(intr_sock, (struct sockaddr *)&addr, &opt);
-            if (client_intr < 0) {
+            /* PRIORITAET 1: DUALSENSE PRUEFUNG */
+            if (peek_len > 0 && (strstr(peek_buf, "DualSense") != NULL || peek_buf[0] == 0x01)) {
+                /* VOLVOLLTREFFER: Ein DualSense will sich verbinden! */
+                /* Wir schliessen den Proxy-Socket SOFORT und geben die Ports im Kernel frei. */
                 close(client_ctrl);
-                continue;
-            }
-
-            unsigned char peek_buf[256];
-            int is_dualsense = 0;
-            
-            int peek_len = recv(client_ctrl, peek_buf, sizeof(peek_buf), MSG_PEEK);
-            if (peek_len > 0) {
-                for (int i = 0; i < peek_len - 9; i++) {
-                    if (memcmp(&peek_buf[i], "DualSense", 9) == 0) {
-                        is_dualsense = 1;
-                        break;
-                    }
-                }
-            }
-
-            char mac_str[18];
-            sprintf(mac_str, "%02X:%02X:%02X:%02X:%02X:%02X", 
-                    addr.l2_bdaddr.b[5], addr.l2_bdaddr.b[4], addr.l2_bdaddr.b[3], 
-                    addr.l2_bdaddr.b[2], addr.l2_bdaddr.b[1], addr.l2_bdaddr.b[0]);
-
-            if (is_dualsense) {
-                printf("[vDS-Proxy] DualSense erkannt (%s)! Uebergabe an vDS-Daemon.\n", mac_str);
-                close(client_ctrl);
-                close(client_intr);
                 
-                usleep(100000); 
-                trigger_vds_daemon_attach(mac_str);
+                /* Da der Proxy sich zurückzieht, übernimmt der hid-playstation Treiber im Kernel. */
+                /* Das erzeugt das udev-Event, welches deine originale Regel aus Block 6 zündet! */
                 continue; 
-            }
+            } else {
+                /* PRIORITAET 2: DUALSHOCK 4 (WEICHE) */
+                int client_int = accept(server_int, (struct sockaddr *)&client_addr, &addr_len);
+                if (client_int >= 0) {
+                    int uhid_fd = open("/dev/uhid", O_RDWR | O_CLOEXEC);
+                    if (uhid_fd >= 0) {
+                        struct uhid_event ev = {0};
+                        ev.type = UHID_CREATE;
+                        strcpy((char *)ev.u.create.name, "Wireless Controller");
+                        ev.u.create.bus = 0x05; /* BUS_BLUETOOTH */
+                        ev.u.create.vendor = 0x054c;
+                        ev.u.create.product = 0x09cc; /* DS4 Slim/Pro */
+                        ev.u.create.rd_size = sizeof(ds4_bt_report_desc);
+                        memcpy(ev.u.create.rd_data, ds4_bt_report_desc, sizeof(ds4_bt_report_desc));
+                        write(uhid_fd, &ev, sizeof(ev));
 
-            printf("[vDS-Proxy] DualShock 4 erkannt (%s). Erzeuge UHID-Tunnel...\n", mac_str);
-            int uhid_fd = create_uhid_device(&addr.l2_bdaddr);
-            if (uhid_fd < 0) {
-                close(client_ctrl);
-                close(client_intr);
-                continue;
-            }
-
-            struct pollfd tunnel_fds[2];
-            tunnel_fds[0].fd = client_intr; tunnel_fds[0].events = POLLIN;
-            tunnel_fds[1].fd = uhid_fd;     tunnel_fds[1].events = POLLIN;
-
-            unsigned char buf[1024];
-            int running = 1;
-
-            while (running) {
-                if (poll(tunnel_fds, 2, -1) < 0) break;
-
-                if (tunnel_fds[0].revents & POLLIN) {
-                    int len = read(client_intr, buf, sizeof(buf));
-                    if (len <= 0) { running = 0; break; }
-
-                    struct uhid_event ev;
-                    memset(&ev, 0, sizeof(ev));
-                    ev.type = UHID_INPUT;
-                    ev.u.input.size = len;
-                    memcpy(ev.u.input.data, buf, len);
-                    if (write(uhid_fd, &ev, sizeof(ev)) < 0) { running = 0; break; }
-                }
-
-                if (tunnel_fds[1].revents & POLLIN) {
-                    struct uhid_event ev;
-                    int len = read(uhid_fd, &ev, sizeof(ev));
-                    if (len > 0 && ev.type == UHID_OUTPUT) {
-                        write(client_intr, ev.u.output.data, ev.u.output.size);
+                        /* Kontinuierliche Datenspiegelung fuer den DS4 in den UHID-Tunnel */
+                        unsigned char io_buf[BUFFER_SIZE];
+                        while (1) {
+                            ssize_t len = read(client_int, io_buf, sizeof(io_buf));
+                            if (len <= 0) break;
+                            
+                            struct uhid_event in_ev = {0};
+                            in_ev.type = UHID_INPUT;
+                            in_ev.u.input.size = len;
+                            memcpy(in_ev.u.input.data, io_buf, len);
+                            write(uhid_fd, &in_ev, sizeof(in_ev));
+                        }
+                        close(uhid_fd);
                     }
+                    close(client_int);
                 }
+                close(client_ctrl);
             }
-
-            struct uhid_event ev;
-            memset(&ev, 0, sizeof(ev));
-            ev.type = UHID_DESTROY;
-            write(uhid_fd, &ev, sizeof(ev));
-            close(uhid_fd);
-            close(client_ctrl);
-            close(client_intr);
-            printf("[vDS-Proxy] Verbindung fuer %s beendet.\n", mac_str);
         }
     }
     return 0;
