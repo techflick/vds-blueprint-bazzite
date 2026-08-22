@@ -181,7 +181,7 @@ modules:
               echo '[Install]'; \
               echo 'WantedBy=multi-user.target'; \
             ) > "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service"
-
+            
         # Block 6: Apply BlueZ compat configuration and optimized database udev triggers
         RUN PKG_ROOT="/vds-pkg-root" && \
                printf "[Unit]\nDescription=Setze Berechtigungen für vDS SDP-Socket wenn er erscheint\n\n[Service]\nType=oneshot\nExecStart=/usr/bin/chmod 0777 /run/sdp\nRemainAfterExit=yes\n" > "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.service" && \
