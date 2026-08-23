@@ -92,7 +92,7 @@ modules:
             sed -i 's/kHidInterruptPsm = 0x0013;/kHidInterruptPsm = 0x0023;/g' src/platform/linux/vds_bt.cc && \
             mkdir -p build
 
-        # Block 4: Initialize PKG_ROOT structure and stage binary payloads
+        # Block 4: Initialize PKG_ROOT structure, build binaries, and update module index
         COPY vds-proxy.c /vds_build_dir/vds-proxy.c
         RUN KERNEL_VERSION=$(ls -1 /usr/src/kernels/ | head -n 1) && \
             if [ -z "${KERNEL_VERSION}" ]; then KERNEL_VERSION=$(rpm -q kernel-devel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1); fi && \
@@ -108,11 +108,18 @@ modules:
             mkdir -p "${PKG_ROOT}/etc/wireplumber/wireplumber.conf.d" && \
             cp /vds_build_dir/module/vds_hcd.ko "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra/vds_hcd.ko" && \
             chmod 644 "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra/vds_hcd.ko" && \
+            
+            # =========================================================================
+            # MODUL-INDEX FIX: Generiert modules.dep innerhalb der Paket-Wurzel
+            # =========================================================================
+            depmod -a -b "${PKG_ROOT}" "${KERNEL_VERSION}" && \
+            # =========================================================================
+            
             cd /vds_build_dir/build && \
             cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS="-isystem /vds_build_dir/include" -DCMAKE_CXX_FLAGS="-isystem /vds_build_dir/include" && \
             make -j$(nproc) && \
-            # Compiliert nun erfolgreich Ihre eigene vds-proxy.c aus dem Hauptverzeichnis
-            gcc -O2 -Wall -I/vds_build_dir/include /vds_build_dir/vds-proxy.c -o /vds_build_dir/build/vds-proxy && \
+            # PROXY-BUILD FIX: Bindet -lsystemd für den Daemon-Verbund mit ein
+            gcc -O2 -Wall -I/vds_build_dir/include /vds_build_dir/vds-proxy.c -o /vds_build_dir/build/vds-proxy -lsystemd && \
             cp /vds_build_dir/build/vdsd "${PKG_ROOT}/usr/bin/vdsd" && \
             cp /vds_build_dir/build/vdsctl "${PKG_ROOT}/usr/bin/vdsctl" && \
             cp /vds_build_dir/build/vds-proxy "${PKG_ROOT}/usr/bin/vds-proxy" && \
@@ -255,6 +262,12 @@ modules:
               echo ''; \
               echo '%files'; \
               echo '/usr/lib/modules/'"${KERNEL_VERSION}"'/extra/vds_hcd.ko'; \
+              # =========================================================================
+              # ERWEITERUNG: Registriert die vom depmod erzeugten Indexdateien für das RPM
+              # =========================================================================
+              echo '/usr/lib/modules/'"${KERNEL_VERSION}"'/modules.dep'; \
+              echo '/usr/lib/modules/'"${KERNEL_VERSION}"'/modules.dep.bin'; \
+              # =========================================================================
               echo '/usr/lib/modules-load.d/vds.conf'; \
               echo '/usr/bin/vdsd'; \
               echo '/usr/bin/vdsctl'; \
