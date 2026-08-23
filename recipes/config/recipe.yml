@@ -250,8 +250,12 @@ modules:
               echo '%description'; \
               echo 'Virtual DualSense Driver und Daemon fuer Bazzite.'; \
               echo ''; \
-              echo '%post'; \
-              echo '/sbin/depmod -a "'"${KERNEL_VERSION}"'" || true'; \
+              echo '%posttrans'; \
+              echo '# Dieser Sektor laeuft nach der vollstaendigen Dateitransaktion im Ostree-Slicing'; \
+              echo 'if [ -d "/usr/lib/modules/'"${KERNEL_VERSION}"'" ]; then'; \
+              echo '    echo "vDS: Running depmod for absolute image kernel '"${KERNEL_VERSION}"'..."'; \
+              echo '    /usr/sbin/depmod -a "'"${KERNEL_VERSION}"'" || true'; \
+              echo 'fi'; \
               echo ''; \
               echo '%files'; \
               echo '/usr/lib/modules/'"${KERNEL_VERSION}"'/extra/vds_hcd.ko'; \
