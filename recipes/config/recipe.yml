@@ -160,7 +160,7 @@ modules:
               echo 'AmbientCapabilities=CAP_NET_RAW CAP_SYS_ADMIN CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_SYS_RAWIO'; \
               echo 'Nice=-10'; \
             ) > "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service"
-
+            
         # Block 6: Apply BlueZ compat configuration and optimized database udev triggers
         RUN PKG_ROOT="/vds-pkg-root" && \
                printf "[Unit]\nDescription=Setze Berechtigungen für vDS SDP-Socket wenn er erscheint\n\n[Service]\nType=oneshot\nExecStart=/usr/bin/chmod 0777 /run/sdp\nRemainAfterExit=yes\n" > "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.service" && \
@@ -237,8 +237,43 @@ modules:
               echo ']'; \
             ) > "${PKG_ROOT}/usr/share/wireplumber/wireplumber.conf.d/99-vds-prioritisation.conf"
 
-        # Block 7 & 8: Direktes Kopieren in das unzerstörbare Image-Root (/usr und /etc)
-        RUN cp -rp /vds-pkg-root/* /
+        # Block 7: Generate isolated RPM package via rpmbuild strictly tracking the image kernel
+        RUN KERNEL_VERSION=$(ls -1 /usr/src/kernels/ | head -n 1) && \
+            if [ -z "${KERNEL_VERSION}" ]; then KERNEL_VERSION=$(rpm -q kernel-devel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1); fi && \
+            mkdir -p /root/rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS} && \
+            ( \
+              echo 'Name: kmod-vds'; \
+              echo 'Version: 1.0.0'; \
+              echo 'Release: 1'; \
+              echo 'Summary: Virtual DualSense Driver'; \
+              echo 'License: MIT'; \
+              echo ''; \
+              echo '%description'; \
+              echo 'Virtual DualSense Driver und Daemon fuer Bazzite.'; \
+              echo ''; \
+              echo '%files'; \
+              echo '/usr/lib/modules/'"${KERNEL_VERSION}"'/extra/vds_hcd.ko'; \
+              echo '/usr/lib/modules-load.d/vds.conf'; \
+              echo '/usr/bin/vdsd'; \
+              echo '/usr/bin/vdsctl'; \
+              echo '/usr/bin/vds-proxy'; \
+              echo '/usr/lib/systemd/system/vdsd.service'; \
+              echo '/usr/lib/systemd/system/vds-proxy.service'; \
+              echo '/usr/lib/systemd/system/vds-chmod-sdp.service'; \
+              echo '/usr/lib/systemd/system/vds-chmod-sdp.path'; \
+              echo '/usr/share/dbus-1/system.d/org.vds.conf'; \
+              echo '/usr/lib/udev/rules.d/99-vds-uinput.rules'; \
+              echo '/usr/lib/udev/rules.d/99-vds-dualsense-udev.rules'; \
+              echo '/usr/share/wireplumber/wireplumber.conf.d/99-vds-prioritisation.conf'; \
+              echo '/usr/lib/systemd/system/bluetooth.service.d/override.conf'; \
+              echo '/usr/share/vdsd/main.conf'; \
+            ) > /root/rpmbuild/SPECS/vds.spec && \
+            rpmbuild --define "_topdir /root/rpmbuild" --buildroot=/vds-pkg-root -bb /root/rpmbuild/SPECS/vds.spec && \
+            mkdir -p /tmp/vds-rpm && \
+            cp /root/rpmbuild/RPMS/x86_64/kmod-vds-1.0.0-1.x86_64.rpm /tmp/vds-rpm/
+
+        # Block 8: Lock-free extraction of the self-built RPM payload into the unchangeable root
+        RUN rpm2cpio /tmp/vds-rpm/kmod-vds-1.0.0-1.x86_64.rpm | cpio -idmv -D /
 
         # Block 9: Systemd-Autostart über Symlinks direkt im Image verankern
         RUN mkdir -p /usr/lib/systemd/system/multi-user.target.wants && \
