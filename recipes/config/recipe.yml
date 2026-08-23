@@ -93,6 +93,7 @@ modules:
             mkdir -p build
 
         # Block 4: Initialize PKG_ROOT structure and stage binary payloads
+        COPY vds-proxy.c /vds_build_dir/vds-proxy.c
         RUN KERNEL_VERSION=$(ls -1 /usr/src/kernels/ | head -n 1) && \
             if [ -z "${KERNEL_VERSION}" ]; then KERNEL_VERSION=$(rpm -q kernel-devel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1); fi && \
             PKG_ROOT="/vds-pkg-root" && \
@@ -110,12 +111,13 @@ modules:
             cd /vds_build_dir/build && \
             cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS="-isystem /vds_build_dir/include" -DCMAKE_CXX_FLAGS="-isystem /vds_build_dir/include" && \
             make -j$(nproc) && \
+            # Compiliert nun erfolgreich Ihre eigene vds-proxy.c aus dem Hauptverzeichnis
             gcc -O2 -Wall -I/vds_build_dir/include /vds_build_dir/vds-proxy.c -o /vds_build_dir/build/vds-proxy && \
             cp /vds_build_dir/build/vdsd "${PKG_ROOT}/usr/bin/vdsd" && \
             cp /vds_build_dir/build/vdsctl "${PKG_ROOT}/usr/bin/vdsctl" && \
             cp /vds_build_dir/build/vds-proxy "${PKG_ROOT}/usr/bin/vds-proxy" && \
             chmod 755 "${PKG_ROOT}/usr/bin/vdsd" "${PKG_ROOT}/usr/bin/vdsctl" "${PKG_ROOT}/usr/bin/vds-proxy"
-
+            
         # Block 5: Deploy monolithic system daemons mit originaler Pufferung (Type=idle)
         RUN PKG_ROOT="/vds-pkg-root" && \
             printf "vds_hcd\n" > "${PKG_ROOT}/usr/lib/modules-load.d/vds.conf" && \
