@@ -8,6 +8,8 @@ modules:
   - type: rpm-ostree
     install:
       - kernel-devel
+      - kernel-headers
+      - akmods
       - make
       - gcc
       - gcc-c++
@@ -87,21 +89,19 @@ modules:
             sed -i '/pkg_check_modules.*bluez/c\set(bluez_FOUND TRUE)\nset(bluez_INCLUDE_DIRS "/vds_build_dir/include")\nset(bluez_LIBRARIES "")' CMakeLists.txt && \
             sed -i 's/PkgConfig::BLUEZ//g' CMakeLists.txt
 
-        # Block 3c: Bereite v0.4.0 daemon vor und patche Bluetooth-Ports auf Alternativ-Ports um
+        # Block 3c: Präziser Variablen-Patch für Alternativ-Ports (0x0021 & 0x0023)
         RUN cd /vds_build_dir && \
             sed -i '/pkg_check_modules.*bluez/c\set(bluez_FOUND TRUE)\nset(bluez_INCLUDE_DIRS "/vds_build_dir/include")\nset(bluez_LIBRARIES "")' CMakeLists.txt && \
             sed -i 's/PkgConfig::BLUEZ//g' CMakeLists.txt && \
-            # --- DER PORT-PATCH ---
-            # Wir suchen im Quellcode nach PSM 0x11 (Control) und 0x13 (Interrupt) und biegen sie für vdsd um
-            find . -type f -exec sed -i 's/0x11/0x21/g' {} + && \
-            find . -type f -exec sed -i 's/0x13/0x23/g' {} + && \
+            \
+            # --- DER UNFEHLBARE PORT-PATCH ---
+            # Wir patchen gezielt die Zuweisungen in vds_bt.cc vor dem Kompilieren
+            sed -i 's/kHidControlPsm = 0x0011;/kHidControlPsm = 0x0021;/g' src/platform/linux/vds_bt.cc && \
+            sed -i 's/kHidInterruptPsm = 0x0013;/kHidInterruptPsm = 0x0023;/g' src/platform/linux/vds_bt.cc && \
             mkdir -p build
 
         # Block 4: Initialize PKG_ROOT structure, compile binaries and stage payloads
-        # Zuerst holen wir die vds-proxy.c aus deinem Git-Projekt-Root in den Container
         COPY vds-proxy.c /vds_build_dir/vds-proxy.c
-
-        # Jetzt führen wir den Build-Prozess mit der vorhandenen Datei aus
         RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
             PKG_ROOT="/vds-pkg-root" && \
             mkdir -p "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra" && \
@@ -113,16 +113,17 @@ modules:
             mkdir -p "${PKG_ROOT}/usr/lib/udev/rules.d" && \
             mkdir -p "${PKG_ROOT}/usr/share/vdsd" && \
             mkdir -p "${PKG_ROOT}/etc/wireplumber/wireplumber.conf.d" && \
-            # 1. Kompiliere den originalen Daemon via CMake
+            # Zusatz für dynamische Host-Verlinkung
+            mkdir -p "${PKG_ROOT}/usr/src/vds-kmod-1.0.0" && \
+            cp -r /vds_build_dir/module/* "${PKG_ROOT}/usr/src/vds-kmod-1.0.0/" && \
+            # Kompilation
             cd /vds_build_dir/build && \
             cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS="-isystem /vds_build_dir/include" -DCMAKE_CXX_FLAGS="-isystem /vds_build_dir/include" && \
             make -j$(nproc) && \
-            # 2. Kompiliere den Proxy (Die Datei wurde per COPY perfekt platziert!)
             gcc -O2 -Wall -I/vds_build_dir/include /vds_build_dir/vds-proxy.c -o /vds_build_dir/build/vds-proxy && \
-            # 3. Kopiere das Kernel-Modul in die Paketstruktur
+            # Struktur befüllen
             cp /vds_build_dir/module/vds_hcd.ko "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra/" && \
             chmod 644 "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra/vds_hcd.ko" && \
-            # 4. Kopiere alle drei fertigen Binaries in die Paketstruktur
             cp /vds_build_dir/build/vdsd "${PKG_ROOT}/usr/bin/vdsd" && \
             cp /vds_build_dir/build/vdsctl "${PKG_ROOT}/usr/bin/vdsctl" && \
             cp /vds_build_dir/build/vds-proxy "${PKG_ROOT}/usr/bin/vds-proxy" && \
@@ -269,18 +270,22 @@ modules:
               echo 'License: MIT'; \
               echo ''; \
               echo '%description'; \
-              echo 'Virtual DualSense Driver und Daemon fuer Bazzite mit nativem C-Code-Spoofing und WirePlumber-Priorisierung.'; \
+              echo 'Virtual DualSense Driver und Daemon fuer Bazzite.'; \
               echo ''; \
               echo '%post'; \
               echo 'mkdir -p /etc/bluetooth'; \
               echo 'cp -n /usr/share/vdsd/main.conf /etc/bluetooth/main.conf 2>/dev/null || true'; \
-              echo '# Kernel-Abhängigkeiten zur Bootzeit absichern'; \
-              echo 'KERNEL_VERSION=$(rpm -q kernel --queryformat "%%{VERSION}-%%{RELEASE}.%%{ARCH}\n" | head -n 1)'; \
-              echo 'depmod -a "${KERNEL_VERSION}" 2>/dev/null || true'; \
+              echo 'for kdir in /lib/modules/*; do'; \
+              echo '  KVER="${kdir##*/}"'; \
+              echo '  mkdir -p "/var/lib/modules/${KVER}/extra/" 2>/dev/null || true'; \
+              echo '  ln -sf /usr/lib/modules/*/extra/vds_hcd.ko "/var/lib/modules/${KVER}/extra/vds_hcd.ko" 2>/dev/null || true'; \
+              echo '  depmod -a "${KVER}" 2>/dev/null || true'; \
+              echo 'done'; \
               echo 'exit 0'; \
               echo ''; \
               echo '%files'; \
               echo '/usr/lib/modules/'$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1)'/extra/vds_hcd.ko'; \
+              echo '/usr/src/vds-kmod-1.0.0/*'; \
               echo '/usr/lib/modules-load.d/vds.conf'; \
               echo '/usr/bin/vdsd'; \
               echo '/usr/bin/vdsctl'; \
@@ -304,11 +309,10 @@ modules:
         # Da wir uns im nativen Container-Build befinden, extrahieren wir die Dateien direkt dorthin, wo sie hingehören
         RUN rpm2cpio /tmp/vds-rpm/kmod-vds-1.0.0-1.x86_64.rpm | cpio -idmv -D /
 
-        # Block 9 & 10: Aktivierung über Standard-Targets mit Leerlauf-Verzögerung
+        # Block 9: Aktivierung über Standard-Targets
         RUN mkdir -p /usr/lib/systemd/system/multi-user.target.wants && \
             ln -sf /usr/lib/systemd/system/vds-proxy.service /usr/lib/systemd/system/multi-user.target.wants/vds-proxy.service && \
-            ln -sf /usr/lib/systemd/system/vdsd.service /usr/lib/systemd/system/multi-user.target.wants/vdsd.service && \
-            rm -rf /vds_build_dir /vds-pkg-root /root/rpmbuild /tmp/vds-rpm
+            ln -sf /usr/lib/systemd/system/vdsd.service /usr/lib/systemd/system/multi-user.target.wants/vdsd.service
 
-        # Block 10: Purge temporary build contexts, compilation paths, and runtime caches
+        # Block 10: Purge temporary build contexts
         RUN rm -rf /vds_build_dir /vds-pkg-root /root/rpmbuild /tmp/vds-rpm
