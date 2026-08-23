@@ -128,62 +128,58 @@ modules:
             cp /vds_build_dir/build/vds-proxy "${PKG_ROOT}/usr/bin/vds-proxy" && \
             chmod 755 "${PKG_ROOT}/usr/bin/vdsd" "${PKG_ROOT}/usr/bin/vdsctl" "${PKG_ROOT}/usr/bin/vds-proxy"
 
-        # Block 5: Deploy monolithic system daemon and custom sieve-proxy with clean systemd lifecycles
+        # Block 5: Deploy monolithic system daemons mit systemd-Verzögerung
         RUN PKG_ROOT="/vds-pkg-root" && \
             printf "vds_hcd\n" > "${PKG_ROOT}/usr/lib/modules-load.d/vds.conf" && \
-            # --- 1. PROXY SERVICE (Läuft ununterbrochen auf 0x11/0x13) ---
-            ( \
+            \
+            # --- 1. PROXY SERVICE (Startet erst, wenn das System im Leerlauf ist) ---
+            ( \        
               echo '[Unit]'; \
-              echo 'Description=vDS Dynamic Bluetooth Socket Router (Bypass Proxy)'; \
-              echo 'After=bluetooth.service vds-chmod-sdp.service systemd-udevd.service'; \
-              echo 'Wants=systemd-udevd.service'; \
-              echo 'Before=vdsd.service'; \
+              echo 'Description=vDS Dynamic Bluetooth Socket Router'; \
+              echo 'After=bluetooth.service systemd-udevd.service'; \
+              echo 'Requires=bluetooth.service'; \
               echo ''; \
               echo '[Service]'; \
-              echo 'Type=simple'; \
+              # Type=idle sorgt dafür, dass die Grafikkarte längst fertig geladen hat
+              echo 'Type=idle'; \
+              # 5 Sekunden zusätzlicher Puffer, damit BlueZ sich fangen kann
+              echo 'ExecStartPre=/usr/bin/sleep 5'; \
               echo 'ExecStart=/usr/bin/vds-proxy'; \
               echo 'Restart=always'; \
               echo 'RestartSec=5'; \
               echo 'User=root'; \
-              echo 'Group=root'; \
+              # Volle Rechte und Capabilities bleiben erhalten
               echo 'CapabilityBoundingSet=CAP_NET_RAW CAP_SYS_ADMIN CAP_NET_ADMIN CAP_NET_BIND_SERVICE'; \
               echo 'AmbientCapabilities=CAP_NET_RAW CAP_SYS_ADMIN CAP_NET_ADMIN CAP_NET_BIND_SERVICE'; \
-              echo ''; \
-              echo '[Install]'; \
-              echo 'WantedBy=multi-user.target'; \
+              echo '# Performance-Priorisierung für latenzfreie Eingaben'; \
+              echo 'Nice=-10'; \
             ) > "${PKG_ROOT}/usr/lib/systemd/system/vds-proxy.service" && \
-            # --- 2. VDSD DAEMON SERVICE (Lauscht auf 0x21/0x23) ---
+            \
+            # --- 2. VDSD DAEMON SERVICE (Startet nach dem Proxy im Leerlauf) ---
             ( \
               echo '[Unit]'; \
-              echo 'Description=Virtual DualSense Userspace Daemon (v0.4.0 Nativ)'; \
-              echo 'After=bluetooth.service vds-proxy.service vds-chmod-sdp.service systemd-udevd.service'; \
-              echo 'Wants=systemd-udevd.service vds-proxy.service'; \
-              echo 'Requires=bluetooth.service'; \
+              echo 'Description=Virtual DualSense Userspace Daemon'; \
+              echo 'After=bluetooth.service vds-proxy.service'; \
+              echo 'Requires=bluetooth.service vds-proxy.service'; \
               echo ''; \
               echo '[Service]'; \
-              echo 'Type=simple'; \
+              echo 'Type=idle'; \
               echo 'ExecStartPre=/usr/bin/mkdir -p /var/lib/vds'; \
               echo 'ExecStartPre=/usr/bin/chmod 666 /dev/uhid'; \
+              # Auch hier ein kurzer Puffer, damit der Proxy sicher auf den Ports lauscht
+              echo 'ExecStartPre=/usr/bin/sleep 7'; \
               echo 'ExecStart=/usr/bin/vdsd'; \
               echo 'Restart=always'; \
               echo 'RestartSec=5'; \
               echo 'User=root'; \
-              echo 'Group=root'; \
               echo 'ProtectSystem=false'; \
               echo 'ProtectHome=false'; \
               echo 'PrivateTmp=no'; \
               echo 'PrivateDevices=no'; \
               echo 'PrivateNetwork=no'; \
-              echo 'ReadWritePaths=/'; \
-              echo 'RestrictAddressFamilies=AF_NETLINK AF_UNIX AF_INET AF_INET6 AF_BLUETOOTH'; \
-              echo 'RestrictNetworkInterfaces='; \
-              echo 'IPAddressDeny='; \
-              echo 'NoNewPrivileges=no'; \
               echo 'CapabilityBoundingSet=CAP_NET_RAW CAP_SYS_ADMIN CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_SYS_RAWIO'; \
               echo 'AmbientCapabilities=CAP_NET_RAW CAP_SYS_ADMIN CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_SYS_RAWIO'; \
-              echo ''; \
-              echo '[Install]'; \
-              echo 'WantedBy=multi-user.target'; \
+              echo 'Nice=-10'; \
             ) > "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service"
             
         # Block 6: Apply BlueZ compat configuration and optimized database udev triggers
@@ -308,14 +304,11 @@ modules:
         # Da wir uns im nativen Container-Build befinden, extrahieren wir die Dateien direkt dorthin, wo sie hingehören
         RUN rpm2cpio /tmp/vds-rpm/kmod-vds-1.0.0-1.x86_64.rpm | cpio -idmv -D /
 
-        # Block 9: Enable core systemd targets via symbolic linking and map module dependencies
-        RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
-            depmod -a -b / "${KERNEL_VERSION}" && \
-            mkdir -p /usr/lib/systemd/system/multi-user.target.wants && \
-            ln -sf /usr/lib/systemd/system/vds-chmod-sdp.path /usr/lib/systemd/system/multi-user.target.wants/vds-chmod-sdp.path && \
+        # Block 9 & 10: Aktivierung über Standard-Targets mit Leerlauf-Verzögerung
+        RUN mkdir -p /usr/lib/systemd/system/multi-user.target.wants && \
             ln -sf /usr/lib/systemd/system/vds-proxy.service /usr/lib/systemd/system/multi-user.target.wants/vds-proxy.service && \
             ln -sf /usr/lib/systemd/system/vdsd.service /usr/lib/systemd/system/multi-user.target.wants/vdsd.service && \
-            rm -rf /usr/lib/systemd/system/vdsd.service.d
+            rm -rf /vds_build_dir /vds-pkg-root /root/rpmbuild /tmp/vds-rpm
 
         # Block 10: Purge temporary build contexts, compilation paths, and runtime caches
         RUN rm -rf /vds_build_dir /vds-pkg-root /root/rpmbuild /tmp/vds-rpm
