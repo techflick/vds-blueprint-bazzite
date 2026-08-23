@@ -17,7 +17,6 @@ modules:
       - git
       - dbus-devel
       - opus-devel
-      - rpm-build
       - systemd-devel
       - libudev-devel
 
@@ -27,8 +26,9 @@ modules:
         # Block 1: Clone vDS upstream repository (v0.4.0 Upstream Release)
         RUN git clone --depth 1 https://github.com/hurryman2212/vds.git /vds_build_dir
 
-        # Block 2: Compile kernel module targeting the active kernel release
-        RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
+        # Block 2: Ermittle die NEUESTE verfügbare Kernel-Entwicklungsversion im Image
+        RUN KERNEL_VERSION=$(ls -1 /usr/src/kernels/ | head -n 1) && \
+            if [ -z "${KERNEL_VERSION}" ]; then KERNEL_VERSION=$(rpm -q kernel-devel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1); fi && \
             KERNEL_BUILD_DIR="/usr/src/kernels/${KERNEL_VERSION}" && \
             cd /vds_build_dir/module && \
             make KCFLAGS="-w" KERNELRELEASE="${KERNEL_VERSION}" KERNELDIR="${KERNEL_BUILD_DIR}"
@@ -49,12 +49,12 @@ modules:
         #define PF_BLUETOOTH AF_BLUETOOTH
         #endif
         #define BTPROTO_L2CAP 0
-        typedef struct { uint8_t b[6]; } __attribute__((packed)) bdaddr_t;
+        typedef struct { uint8_t b; } __attribute__((packed)) bdaddr_t;
         static inline int bacmp(const bdaddr_t *ba1, const bdaddr_t *ba2) { return memcmp(ba1, ba2, 6); }
         static inline void bacpy(bdaddr_t *dst, const bdaddr_t *src) { memcpy(dst, src, 6); }
         static inline uint16_t htobs(uint16_t n) { return n; }
         static inline int ba2str(const bdaddr_t *ba, char *str) { 
-            return sprintf(str, "%02x:%02x:%02x:%02x:%02x:%02x", ba->b[5], ba->b[4], ba->b[3], ba->b[2], ba->b[1], ba->b[0]); 
+            return sprintf(str, "%02x:%02x:%02x:%02x:%02x:%02x", ba->b, ba->b, ba->b, ba->b, ba->b, ba->b); 
         }
         #endif
         EOF
@@ -84,25 +84,17 @@ modules:
         #endif
         EOF
 
-        # Block 3b: Override package configuration to skip external BlueZ system
-        RUN cd /vds_build_dir && \
-            sed -i '/pkg_check_modules.*bluez/c\set(bluez_FOUND TRUE)\nset(bluez_INCLUDE_DIRS "/vds_build_dir/include")\nset(bluez_LIBRARIES "")' CMakeLists.txt && \
-            sed -i 's/PkgConfig::BLUEZ//g' CMakeLists.txt
-
-        # Block 3c: Präziser Variablen-Patch für Alternativ-Ports (0x0021 & 0x0023)
+        # Block 3b & 3c: Override package configuration and apply Port-Patch
         RUN cd /vds_build_dir && \
             sed -i '/pkg_check_modules.*bluez/c\set(bluez_FOUND TRUE)\nset(bluez_INCLUDE_DIRS "/vds_build_dir/include")\nset(bluez_LIBRARIES "")' CMakeLists.txt && \
             sed -i 's/PkgConfig::BLUEZ//g' CMakeLists.txt && \
-            \
-            # --- DER UNFEHLBARE PORT-PATCH ---
-            # Wir patchen gezielt die Zuweisungen in vds_bt.cc vor dem Kompilieren
             sed -i 's/kHidControlPsm = 0x0011;/kHidControlPsm = 0x0021;/g' src/platform/linux/vds_bt.cc && \
             sed -i 's/kHidInterruptPsm = 0x0013;/kHidInterruptPsm = 0x0023;/g' src/platform/linux/vds_bt.cc && \
             mkdir -p build
 
-        # Block 4: Initialize PKG_ROOT structure, compile binaries and stage payloads
-        COPY vds-proxy.c /vds_build_dir/vds-proxy.c
-        RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
+        # Block 4: Initialize PKG_ROOT structure and stage binary payloads
+        RUN KERNEL_VERSION=$(ls -1 /usr/src/kernels/ | head -n 1) && \
+            if [ -z "${KERNEL_VERSION}" ]; then KERNEL_VERSION=$(rpm -q kernel-devel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1); fi && \
             PKG_ROOT="/vds-pkg-root" && \
             mkdir -p "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra" && \
             mkdir -p "${PKG_ROOT}/usr/lib/modules-load.d" && \
@@ -113,27 +105,20 @@ modules:
             mkdir -p "${PKG_ROOT}/usr/lib/udev/rules.d" && \
             mkdir -p "${PKG_ROOT}/usr/share/vdsd" && \
             mkdir -p "${PKG_ROOT}/etc/wireplumber/wireplumber.conf.d" && \
-            # Zusatz für dynamische Host-Verlinkung
-            mkdir -p "${PKG_ROOT}/usr/src/vds-kmod-1.0.0" && \
-            cp -r /vds_build_dir/module/* "${PKG_ROOT}/usr/src/vds-kmod-1.0.0/" && \
-            # Kompilation
+            cp /vds_build_dir/module/vds_hcd.ko "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra/vds_hcd.ko" && \
+            chmod 644 "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra/vds_hcd.ko" && \
             cd /vds_build_dir/build && \
             cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS="-isystem /vds_build_dir/include" -DCMAKE_CXX_FLAGS="-isystem /vds_build_dir/include" && \
             make -j$(nproc) && \
             gcc -O2 -Wall -I/vds_build_dir/include /vds_build_dir/vds-proxy.c -o /vds_build_dir/build/vds-proxy && \
-            # Struktur befüllen
-            cp /vds_build_dir/module/vds_hcd.ko "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra/" && \
-            chmod 644 "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra/vds_hcd.ko" && \
             cp /vds_build_dir/build/vdsd "${PKG_ROOT}/usr/bin/vdsd" && \
             cp /vds_build_dir/build/vdsctl "${PKG_ROOT}/usr/bin/vdsctl" && \
             cp /vds_build_dir/build/vds-proxy "${PKG_ROOT}/usr/bin/vds-proxy" && \
             chmod 755 "${PKG_ROOT}/usr/bin/vdsd" "${PKG_ROOT}/usr/bin/vdsctl" "${PKG_ROOT}/usr/bin/vds-proxy"
 
-        # Block 5: Deploy monolithic system daemons mit systemd-Verzögerung
+        # Block 5: Deploy monolithic system daemons with optimized structure (Anti-Loop)
         RUN PKG_ROOT="/vds-pkg-root" && \
             printf "vds_hcd\n" > "${PKG_ROOT}/usr/lib/modules-load.d/vds.conf" && \
-            \
-            # --- 1. PROXY SERVICE (Startet erst, wenn das System im Leerlauf ist) ---
             ( \        
               echo '[Unit]'; \
               echo 'Description=vDS Dynamic Bluetooth Socket Router'; \
@@ -141,48 +126,48 @@ modules:
               echo 'Requires=bluetooth.service'; \
               echo ''; \
               echo '[Service]'; \
-              # Type=idle sorgt dafür, dass die Grafikkarte längst fertig geladen hat
-              echo 'Type=idle'; \
-              # 5 Sekunden zusätzlicher Puffer, damit BlueZ sich fangen kann
-              echo 'ExecStartPre=/usr/bin/sleep 5'; \
+              echo 'Type=simple'; \
               echo 'ExecStart=/usr/bin/vds-proxy'; \
               echo 'Restart=always'; \
-              echo 'RestartSec=5'; \
+              echo 'RestartSec=2'; \
               echo 'User=root'; \
-              # Volle Rechte und Capabilities bleiben erhalten
               echo 'CapabilityBoundingSet=CAP_NET_RAW CAP_SYS_ADMIN CAP_NET_ADMIN CAP_NET_BIND_SERVICE'; \
               echo 'AmbientCapabilities=CAP_NET_RAW CAP_SYS_ADMIN CAP_NET_ADMIN CAP_NET_BIND_SERVICE'; \
-              echo '# Performance-Priorisierung für latenzfreie Eingaben'; \
               echo 'Nice=-10'; \
             ) > "${PKG_ROOT}/usr/lib/systemd/system/vds-proxy.service" && \
-            \
-            # --- 2. VDSD DAEMON SERVICE (Startet nach dem Proxy im Leerlauf) ---
             ( \
               echo '[Unit]'; \
-              echo 'Description=Virtual DualSense Userspace Daemon'; \
-              echo 'After=bluetooth.service vds-proxy.service'; \
+              echo 'Description=Virtual DualSense Userspace Daemon (v0.4.0 Nativ)'; \
+              echo 'After=bluetooth.service vds-proxy.service systemd-udevd.service'; \
+              echo 'Wants=systemd-udevd.service'; \
               echo 'Requires=bluetooth.service vds-proxy.service'; \
               echo ''; \
               echo '[Service]'; \
-              echo 'Type=idle'; \
-              echo 'ExecStartPre=/usr/bin/mkdir -p /var/lib/vds'; \
+              echo 'Type=simple'; \
+              echo 'ExecStartPre=/usr/bin/mkdir -p /var/lib/vdsd'; \
               echo 'ExecStartPre=/usr/bin/chmod 666 /dev/uhid'; \
-              # Auch hier ein kurzer Puffer, damit der Proxy sicher auf den Ports lauscht
-              echo 'ExecStartPre=/usr/bin/sleep 7'; \
               echo 'ExecStart=/usr/bin/vdsd'; \
               echo 'Restart=always'; \
               echo 'RestartSec=5'; \
               echo 'User=root'; \
+              echo 'Group=root'; \
               echo 'ProtectSystem=false'; \
               echo 'ProtectHome=false'; \
               echo 'PrivateTmp=no'; \
               echo 'PrivateDevices=no'; \
               echo 'PrivateNetwork=no'; \
+              echo 'ReadWritePaths=/'; \
+              echo 'RestrictAddressFamilies=AF_NETLINK AF_UNIX AF_INET AF_INET6 AF_BLUETOOTH'; \
+              echo 'RestrictNetworkInterfaces='; \
+              echo 'IPAddressDeny='; \
+              echo 'NoNewPrivileges=no'; \
               echo 'CapabilityBoundingSet=CAP_NET_RAW CAP_SYS_ADMIN CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_SYS_RAWIO'; \
               echo 'AmbientCapabilities=CAP_NET_RAW CAP_SYS_ADMIN CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_SYS_RAWIO'; \
-              echo 'Nice=-10'; \
+              echo ''; \
+              echo '[Install]'; \
+              echo 'WantedBy=multi-user.target'; \
             ) > "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service"
-            
+
         # Block 6: Apply BlueZ compat configuration and optimized database udev triggers
         RUN PKG_ROOT="/vds-pkg-root" && \
                printf "[Unit]\nDescription=Setze Berechtigungen für vDS SDP-Socket wenn er erscheint\n\n[Service]\nType=oneshot\nExecStart=/usr/bin/chmod 0777 /run/sdp\nRemainAfterExit=yes\n" > "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.service" && \
@@ -208,8 +193,7 @@ modules:
                printf 'KERNEL=="vds[0-9]*", MODE="0660", GROUP="input", TAG+="systemd"\n' >> "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-uinput.rules"
 
         # Block 6b: Configure native WirePlumber quadraphonic audio and masking rules
-        RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
-            PKG_ROOT="/vds-pkg-root" && \
+        RUN PKG_ROOT="/vds-pkg-root" && \
             mkdir -p "${PKG_ROOT}/usr/share/wireplumber/wireplumber.conf.d" && \
             ( \
               echo 'monitor.alsa.rules = ['; \
@@ -260,59 +244,14 @@ modules:
               echo ']'; \
             ) > "${PKG_ROOT}/usr/share/wireplumber/wireplumber.conf.d/99-vds-prioritisation.conf"
 
-        # Block 7: Generate isolated RPM package via rpmbuild without system locks
-        RUN mkdir -p /root/rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS} && \
-            ( \
-              echo 'Name: kmod-vds'; \
-              echo 'Version: 1.0.0'; \
-              echo 'Release: 1'; \
-              echo 'Summary: Virtual DualSense Driver'; \
-              echo 'License: MIT'; \
-              echo ''; \
-              echo '%description'; \
-              echo 'Virtual DualSense Driver und Daemon fuer Bazzite.'; \
-              echo ''; \
-              echo '%post'; \
-              echo 'mkdir -p /etc/bluetooth'; \
-              echo 'cp -n /usr/share/vdsd/main.conf /etc/bluetooth/main.conf 2>/dev/null || true'; \
-              echo 'for kdir in /lib/modules/*; do'; \
-              echo '  KVER="${kdir##*/}"'; \
-              echo '  mkdir -p "/var/lib/modules/${KVER}/extra/" 2>/dev/null || true'; \
-              echo '  ln -sf /usr/lib/modules/*/extra/vds_hcd.ko "/var/lib/modules/${KVER}/extra/vds_hcd.ko" 2>/dev/null || true'; \
-              echo '  depmod -a "${KVER}" 2>/dev/null || true'; \
-              echo 'done'; \
-              echo 'exit 0'; \
-              echo ''; \
-              echo '%files'; \
-              echo '/usr/lib/modules/'$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1)'/extra/vds_hcd.ko'; \
-              echo '/usr/src/vds-kmod-1.0.0/*'; \
-              echo '/usr/lib/modules-load.d/vds.conf'; \
-              echo '/usr/bin/vdsd'; \
-              echo '/usr/bin/vdsctl'; \
-              echo '/usr/bin/vds-proxy'; \
-              echo '/usr/lib/systemd/system/vdsd.service'; \
-              echo '/usr/lib/systemd/system/vds-proxy.service'; \
-              echo '/usr/lib/systemd/system/vds-chmod-sdp.service'; \
-              echo '/usr/lib/systemd/system/vds-chmod-sdp.path'; \
-              echo '/usr/share/dbus-1/system.d/org.vds.conf'; \
-              echo '/usr/lib/udev/rules.d/99-vds-uinput.rules'; \
-              echo '/usr/lib/udev/rules.d/99-vds-dualsense-udev.rules'; \
-              echo '/usr/share/wireplumber/wireplumber.conf.d/99-vds-prioritisation.conf'; \
-              echo '/usr/lib/systemd/system/bluetooth.service.d/override.conf'; \
-              echo '/usr/share/vdsd/main.conf'; \
-            ) > /root/rpmbuild/SPECS/vds.spec && \
-            rpmbuild --define "_topdir /root/rpmbuild" --buildroot=/vds-pkg-root -bb /root/rpmbuild/SPECS/vds.spec && \
-            mkdir -p /tmp/vds-rpm && \
-            cp /root/rpmbuild/RPMS/x86_64/kmod-vds-1.0.0-1.x86_64.rpm /tmp/vds-rpm/
+        # Block 7 & 8: Direktes Kopieren in das unzerstörbare Image-Root (/usr und /etc)
+        RUN cp -rp /vds-pkg-root/* /
 
-        # Block 8: Extract localized RPM payload directly into the image root
-        # Da wir uns im nativen Container-Build befinden, extrahieren wir die Dateien direkt dorthin, wo sie hingehören
-        RUN rpm2cpio /tmp/vds-rpm/kmod-vds-1.0.0-1.x86_64.rpm | cpio -idmv -D /
-
-        # Block 9: Aktivierung über Standard-Targets
+        # Block 9: Systemd-Autostart über Symlinks direkt im Image verankern
         RUN mkdir -p /usr/lib/systemd/system/multi-user.target.wants && \
             ln -sf /usr/lib/systemd/system/vds-proxy.service /usr/lib/systemd/system/multi-user.target.wants/vds-proxy.service && \
-            ln -sf /usr/lib/systemd/system/vdsd.service /usr/lib/systemd/system/multi-user.target.wants/vdsd.service
+            ln -sf /usr/lib/systemd/system/vdsd.service /usr/lib/systemd/system/multi-user.target.wants/vdsd.service && \
+            ln -sf /usr/lib/systemd/system/vds-chmod-sdp.path /usr/lib/systemd/system/multi-user.target.wants/vds-chmod-sdp.path
 
-        # Block 10: Purge temporary build contexts
-        RUN rm -rf /vds_build_dir /vds-pkg-root /root/rpmbuild /tmp/vds-rpm
+        # Block 10: Temporäre Build-Verzeichnisse restlos löschen
+        RUN rm -rf /vds_build_dir /vds-pkg-root
