@@ -26,10 +26,10 @@ modules:
         # Block 1: Clone vDS upstream repository (v0.4.0 Upstream Release)
         RUN git clone --depth 1 https://github.com/hurryman2212/vds.git /vds_build_dir
 
-        # Block 2: Ermittle die NEUESTE verfügbare Kernel-Entwicklungsversion im Image
-        RUN KERNEL_VERSION=$(ls -1 /usr/src/kernels/ | head -n 1) && \
-            if [ -z "${KERNEL_VERSION}" ]; then KERNEL_VERSION=$(rpm -q kernel-devel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1); fi && \
+        # Block 2: Ermittle die exakte Kernel-Version des Bazzite-Ziel-Images (WICHTIGER REFIX)
+        RUN KERNEL_VERSION=$(basename $(ls -d /usr/lib/modules/*fc* | head -n 1)) && \
             KERNEL_BUILD_DIR="/usr/src/kernels/${KERNEL_VERSION}" && \
+            if [ ! -d "${KERNEL_BUILD_DIR}" ]; then KERNEL_BUILD_DIR=$(ls -d /usr/src/kernels/* | head -n 1); fi && \
             cd /vds_build_dir/module && \
             make KCFLAGS="-w" KERNELRELEASE="${KERNEL_VERSION}" KERNELDIR="${KERNEL_BUILD_DIR}"
 
@@ -92,10 +92,9 @@ modules:
             sed -i 's/kHidInterruptPsm = 0x0013;/kHidInterruptPsm = 0x0023;/g' src/platform/linux/vds_bt.cc && \
             mkdir -p build
 
-        # Block 4: Initialize PKG_ROOT structure, build binaries, and stage files
+        # Block 4: Initialize PKG_ROOT structure, build binaries, and stage files (STRONGLY TARGETED PATHS)
         COPY vds-proxy.c /vds_build_dir/vds-proxy.c
-        RUN KERNEL_VERSION=$(ls -1 /usr/src/kernels/ | head -n 1) && \
-            if [ -z "${KERNEL_VERSION}" ]; then KERNEL_VERSION=$(rpm -q kernel-devel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1); fi && \
+        RUN KERNEL_VERSION=$(basename $(ls -d /usr/lib/modules/*fc* | head -n 1)) && \
             PKG_ROOT="/vds-pkg-root" && \
             mkdir -p "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra" && \
             mkdir -p "${PKG_ROOT}/usr/lib/modules-load.d" && \
@@ -238,9 +237,8 @@ modules:
               echo ']'; \
             ) > "${PKG_ROOT}/usr/share/wireplumber/wireplumber.conf.d/99-vds-prioritisation.conf"
 
-        # Block 7: Generate isolated RPM package via rpmbuild strictly tracking the image kernel
-        RUN KERNEL_VERSION=$(ls -1 /usr/src/kernels/ | head -n 1) && \
-            if [ -z "${KERNEL_VERSION}" ]; then KERNEL_VERSION=$(rpm -q kernel-devel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1); fi && \
+        # Block 7: Generate isolated RPM package tracking the strict target image kernel
+        RUN KERNEL_VERSION=$(basename $(ls -d /usr/lib/modules/*fc* | head -n 1)) && \
             mkdir -p /root/rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS} && \
             ( \
               echo 'Name: kmod-vds'; \
@@ -252,13 +250,9 @@ modules:
               echo '%description'; \
               echo 'Virtual DualSense Driver und Daemon fuer Bazzite.'; \
               echo ''; \
-              # =========================================================================
-              # AUTOMATISCHER POST-INSTALLATION TRIGGER FÜR DEN TREIBER-INDEX
-              # =========================================================================
               echo '%post'; \
               echo '/sbin/depmod -a "'"${KERNEL_VERSION}"'" || true'; \
               echo ''; \
-              # =========================================================================
               echo '%files'; \
               echo '/usr/lib/modules/'"${KERNEL_VERSION}"'/extra/vds_hcd.ko'; \
               echo '/usr/lib/modules-load.d/vds.conf'; \
