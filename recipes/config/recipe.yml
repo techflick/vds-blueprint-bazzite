@@ -110,15 +110,14 @@ modules:
             chmod 644 "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra/vds_hcd.ko" && \
             
             # =========================================================================
-            # MODUL-INDEX FIX: Generiert modules.dep innerhalb der Paket-Wurzel
+            # MODUL-INDEX FIX: Pfad-Korrektur für die isolierte depmod-Generierung
             # =========================================================================
-            depmod -a -b "${PKG_ROOT}" "${KERNEL_VERSION}" && \
+            depmod -a -w -v "${KERNEL_VERSION}" -y "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}" && \
             # =========================================================================
             
             cd /vds_build_dir/build && \
             cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS="-isystem /vds_build_dir/include" -DCMAKE_CXX_FLAGS="-isystem /vds_build_dir/include" && \
             make -j$(nproc) && \
-            # PROXY-BUILD FIX: Bindet -lsystemd für den Daemon-Verbund mit ein
             gcc -O2 -Wall -I/vds_build_dir/include /vds_build_dir/vds-proxy.c -o /vds_build_dir/build/vds-proxy -lsystemd && \
             cp /vds_build_dir/build/vdsd "${PKG_ROOT}/usr/bin/vdsd" && \
             cp /vds_build_dir/build/vdsctl "${PKG_ROOT}/usr/bin/vdsctl" && \
