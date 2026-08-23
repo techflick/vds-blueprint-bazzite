@@ -33,7 +33,7 @@ modules:
             cd /vds_build_dir/module && \
             make KCFLAGS="-w" KERNELRELEASE="${KERNEL_VERSION}" KERNELDIR="${KERNEL_BUILD_DIR}"
 
-        # Block 3: Generate standalone local headers for isolated build context
+        # Block 3: Generate standalone local headers for isolated build context (ORIGINAL & UNBERÜHRT)
         RUN mkdir -p /vds_build_dir/include/bluetooth && \
             cat << 'EOF' > /vds_build_dir/include/bluetooth/bluetooth.h
         #ifndef __BLUETOOTH_H
@@ -49,12 +49,12 @@ modules:
         #define PF_BLUETOOTH AF_BLUETOOTH
         #endif
         #define BTPROTO_L2CAP 0
-        typedef struct { uint8_t b; } __attribute__((packed)) bdaddr_t;
+        typedef struct { uint8_t b[6]; } __attribute__((packed)) bdaddr_t;
         static inline int bacmp(const bdaddr_t *ba1, const bdaddr_t *ba2) { return memcmp(ba1, ba2, 6); }
         static inline void bacpy(bdaddr_t *dst, const bdaddr_t *src) { memcpy(dst, src, 6); }
         static inline uint16_t htobs(uint16_t n) { return n; }
         static inline int ba2str(const bdaddr_t *ba, char *str) { 
-            return sprintf(str, "%02x:%02x:%02x:%02x:%02x:%02x", ba->b, ba->b, ba->b, ba->b, ba->b, ba->b); 
+            return sprintf(str, "%02x:%02x:%02x:%02x:%02x:%02x", ba->b[5], ba->b[4], ba->b[3], ba->b[2], ba->b[1], ba->b[0]); 
         }
         #endif
         EOF
@@ -116,7 +116,7 @@ modules:
             cp /vds_build_dir/build/vds-proxy "${PKG_ROOT}/usr/bin/vds-proxy" && \
             chmod 755 "${PKG_ROOT}/usr/bin/vdsd" "${PKG_ROOT}/usr/bin/vdsctl" "${PKG_ROOT}/usr/bin/vds-proxy"
 
-        # Block 5: Deploy monolithic system daemons with optimized structure (Anti-Loop)
+        # Block 5: Deploy monolithic system daemons mit originaler Pufferung (Type=idle)
         RUN PKG_ROOT="/vds-pkg-root" && \
             printf "vds_hcd\n" > "${PKG_ROOT}/usr/lib/modules-load.d/vds.conf" && \
             ( \        
@@ -126,10 +126,11 @@ modules:
               echo 'Requires=bluetooth.service'; \
               echo ''; \
               echo '[Service]'; \
-              echo 'Type=simple'; \
+              echo 'Type=idle'; \
+              echo 'ExecStartPre=/usr/bin/sleep 5'; \
               echo 'ExecStart=/usr/bin/vds-proxy'; \
               echo 'Restart=always'; \
-              echo 'RestartSec=2'; \
+              echo 'RestartSec=5'; \
               echo 'User=root'; \
               echo 'CapabilityBoundingSet=CAP_NET_RAW CAP_SYS_ADMIN CAP_NET_ADMIN CAP_NET_BIND_SERVICE'; \
               echo 'AmbientCapabilities=CAP_NET_RAW CAP_SYS_ADMIN CAP_NET_ADMIN CAP_NET_BIND_SERVICE'; \
@@ -137,35 +138,27 @@ modules:
             ) > "${PKG_ROOT}/usr/lib/systemd/system/vds-proxy.service" && \
             ( \
               echo '[Unit]'; \
-              echo 'Description=Virtual DualSense Userspace Daemon (v0.4.0 Nativ)'; \
-              echo 'After=bluetooth.service vds-proxy.service systemd-udevd.service'; \
-              echo 'Wants=systemd-udevd.service'; \
+              echo 'Description=Virtual DualSense Userspace Daemon'; \
+              echo 'After=bluetooth.service vds-proxy.service'; \
               echo 'Requires=bluetooth.service vds-proxy.service'; \
               echo ''; \
               echo '[Service]'; \
-              echo 'Type=simple'; \
-              echo 'ExecStartPre=/usr/bin/mkdir -p /var/lib/vdsd'; \
+              echo 'Type=idle'; \
+              echo 'ExecStartPre=/usr/bin/mkdir -p /var/lib/vds'; \
               echo 'ExecStartPre=/usr/bin/chmod 666 /dev/uhid'; \
+              echo 'ExecStartPre=/usr/bin/sleep 7'; \
               echo 'ExecStart=/usr/bin/vdsd'; \
               echo 'Restart=always'; \
               echo 'RestartSec=5'; \
               echo 'User=root'; \
-              echo 'Group=root'; \
               echo 'ProtectSystem=false'; \
               echo 'ProtectHome=false'; \
               echo 'PrivateTmp=no'; \
               echo 'PrivateDevices=no'; \
               echo 'PrivateNetwork=no'; \
-              echo 'ReadWritePaths=/'; \
-              echo 'RestrictAddressFamilies=AF_NETLINK AF_UNIX AF_INET AF_INET6 AF_BLUETOOTH'; \
-              echo 'RestrictNetworkInterfaces='; \
-              echo 'IPAddressDeny='; \
-              echo 'NoNewPrivileges=no'; \
               echo 'CapabilityBoundingSet=CAP_NET_RAW CAP_SYS_ADMIN CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_SYS_RAWIO'; \
               echo 'AmbientCapabilities=CAP_NET_RAW CAP_SYS_ADMIN CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_SYS_RAWIO'; \
-              echo ''; \
-              echo '[Install]'; \
-              echo 'WantedBy=multi-user.target'; \
+              echo 'Nice=-10'; \
             ) > "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service"
 
         # Block 6: Apply BlueZ compat configuration and optimized database udev triggers
