@@ -92,7 +92,7 @@ modules:
             sed -i 's/kHidInterruptPsm = 0x0013;/kHidInterruptPsm = 0x0023;/g' src/platform/linux/vds_bt.cc && \
             mkdir -p build
 
-        # Block 4: Initialize PKG_ROOT structure, build binaries, and update module index
+        # Block 4: Initialize PKG_ROOT structure, build binaries, and stage files
         COPY vds-proxy.c /vds_build_dir/vds-proxy.c
         RUN KERNEL_VERSION=$(ls -1 /usr/src/kernels/ | head -n 1) && \
             if [ -z "${KERNEL_VERSION}" ]; then KERNEL_VERSION=$(rpm -q kernel-devel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1); fi && \
@@ -108,13 +108,6 @@ modules:
             mkdir -p "${PKG_ROOT}/etc/wireplumber/wireplumber.conf.d" && \
             cp /vds_build_dir/module/vds_hcd.ko "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra/vds_hcd.ko" && \
             chmod 644 "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra/vds_hcd.ko" && \
-            
-            # =========================================================================
-            # MODUL-INDEX FIX: Pfad-Korrektur für die isolierte depmod-Generierung
-            # =========================================================================
-            depmod -a -w -v "${KERNEL_VERSION}" -y "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}" && \
-            # =========================================================================
-            
             cd /vds_build_dir/build && \
             cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS="-isystem /vds_build_dir/include" -DCMAKE_CXX_FLAGS="-isystem /vds_build_dir/include" && \
             make -j$(nproc) && \
@@ -259,14 +252,15 @@ modules:
               echo '%description'; \
               echo 'Virtual DualSense Driver und Daemon fuer Bazzite.'; \
               echo ''; \
+              # =========================================================================
+              # AUTOMATISCHER POST-INSTALLATION TRIGGER FÜR DEN TREIBER-INDEX
+              # =========================================================================
+              echo '%post'; \
+              echo '/sbin/depmod -a "'"${KERNEL_VERSION}"'" || true'; \
+              echo ''; \
+              # =========================================================================
               echo '%files'; \
               echo '/usr/lib/modules/'"${KERNEL_VERSION}"'/extra/vds_hcd.ko'; \
-              # =========================================================================
-              # ERWEITERUNG: Registriert die vom depmod erzeugten Indexdateien für das RPM
-              # =========================================================================
-              echo '/usr/lib/modules/'"${KERNEL_VERSION}"'/modules.dep'; \
-              echo '/usr/lib/modules/'"${KERNEL_VERSION}"'/modules.dep.bin'; \
-              # =========================================================================
               echo '/usr/lib/modules-load.d/vds.conf'; \
               echo '/usr/bin/vdsd'; \
               echo '/usr/bin/vdsctl'; \
