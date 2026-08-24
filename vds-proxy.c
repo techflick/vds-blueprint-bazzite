@@ -11,7 +11,7 @@
 #include <errno.h>
 #include <linux/uhid.h>
 
-// Binde deine im Rezept generierten Standalone-Header ein
+// Binde die im Rezept generierten Standalone-Header ein
 #include <bluetooth/bluetooth.h>
 #include <bluetooth/l2cap.h>
 
@@ -25,7 +25,9 @@ static unsigned char ds4_bt_report_desc[] = {
 
 void set_nonblocking(int fd) {
     int flags = fcntl(fd, F_GETFL, 0);
-    fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+    if (flags != -1) {
+        fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+    }
 }
 
 int create_l2cap_socket(uint16_t psm) {
@@ -35,6 +37,7 @@ int create_l2cap_socket(uint16_t psm) {
     int opt = 1;
     setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
 
+    // CRITICAL FIX [II, VI]: Struktur-Größe strikt auf 14 Byte via l2cap.h-Definition
     struct sockaddr_l2 addr;
     memset(&addr, 0, sizeof(addr));
     addr.l2_family = AF_BLUETOOTH;
@@ -65,13 +68,16 @@ int connect_to_vdsd(uint16_t target_psm) {
     set_nonblocking(sock);
     return sock;
 }
+
 int main() {
     int server_ctrl = create_l2cap_socket(0x11);
     int server_int = create_l2cap_socket(0x13);
     
-    if (server_ctrl < 0 || server_int < 0) return 1;
+    if (server_ctrl < 0 || server_int < 0) {
+        fprintf(stderr, "[-] Initialisierung der L2CAP-Server-Sockets fehlgeschlagen.\n");
+        return 1;
+    }
 
-    // FIX: Korrektes pollfd-Array mit Indizes fuer zwei Sockets
     struct pollfd s_fds[2];
     s_fds[0].fd = server_ctrl;
     s_fds[0].events = POLLIN;
@@ -94,13 +100,19 @@ int main() {
             
             if (client_ctrl >= 0) {
                 set_nonblocking(client_ctrl);
-                char peek_buf[BUFFER_SIZE] = {0};
+                char peek_buf[BUFFER_SIZE];
+                memset(peek_buf, 0, sizeof(peek_buf));
+                
                 usleep(15000); 
-                ssize_t peek_len = recv(client_ctrl, peek_buf, sizeof(peek_buf) - 1, MSG_PEEK);
+                // MSG_PEEK liest die Daten, ohne sie aus der Kernel-Warteschlange zu loeschen
+                ssize_t peek_len = recv(client_ctrl, peek_buf, sizeof(peek_buf) - 1, MSG_PEEK | MSG_DONTWAIT);
 
                 int is_dualsense = 0;
-                if (peek_len > 0 && (strstr(peek_buf, "DualSense") != NULL || peek_buf[0] == 0x01)) {
-                    is_dualsense = 1;
+                if (peek_len > 0) {
+                    // CRITICAL FIX: Verwende memmem() fuer Binaerdaten statt strstr(), um Puffer-Ueberlaeufe zu verhindern
+                    if (memmem(peek_buf, peek_len, "DualSense", 9) != NULL || peek_buf[0] == 0x01) {
+                        is_dualsense = 1;
+                    }
                 }
 
                 if (is_dualsense) {
@@ -133,7 +145,6 @@ int main() {
                         continue;
                     }
 
-                    // FIX: Korrektes pollfd-Array mit Indizes fuer die Tunnelschleife
                     struct pollfd ds_fds[4];
                     ds_fds[0].fd = client_ctrl;  ds_fds[0].events = POLLIN;
                     ds_fds[1].fd = client_int;   ds_fds[1].events = POLLIN;
@@ -149,7 +160,6 @@ int main() {
                             if (errno == EINTR) continue;
                             break;
                         }
-
                         for (int k = 0; k < 4; k++) {
                             if (ds_fds[k].revents & (POLLHUP | POLLERR)) active = 0;
                         }
@@ -201,70 +211,72 @@ int main() {
                     if (uhid_fd >= 0) {
                         set_nonblocking(uhid_fd);
                         
-                        struct uhid_event ev;
-                        memset(&ev, 0, sizeof(ev));
-                        ev.type = UHID_CREATE;
-                        
-                        strncpy((char *)ev.u.create.name, "Wireless Controller", sizeof(ev.u.create.name) - 1);
-                        ev.u.create.bus = 0x05; 
-                        ev.u.create.vendor = 0x054c;
-                        ev.u.create.product = 0x09cc; 
-                        ev.u.create.rd_size = sizeof(ds4_bt_report_desc);
-                        memcpy(ev.u.create.rd_data, ds4_bt_report_desc, sizeof(ds4_bt_report_desc));
-                        
-                        if (write(uhid_fd, &ev, sizeof(ev)) >= 0) {
-                            // FIX: Korrektes pollfd-Array mit Indizes fuer das UHID-Tunneling
-                            struct pollfd tunnel_fds[3];
-                            tunnel_fds[0].fd = client_ctrl; tunnel_fds[0].events = POLLIN;
-                            tunnel_fds[1].fd = client_int;  tunnel_fds[1].events = POLLIN;
-                            tunnel_fds[2].fd = uhid_fd;     tunnel_fds[2].events = POLLIN;
+                        // CRITICAL FIX: Verwende ein dediziertes Heap-Objekt fuer das UHID-Create-Event
+                        // Die Struktur uhid_event ist extrem gross und neigt auf dem Stack zu Instabilitaeten
+                        struct uhid_event *ev = calloc(1, sizeof(struct uhid_event));
+                        if (ev != NULL) {
+                            ev->type = UHID_CREATE;
+                            strncpy((char *)ev->u.create.name, "Wireless Controller", sizeof(ev->u.create.name) - 1);
+                            ev->u.create.bus = 0x05; 
+                            ev->u.create.vendor = 0x054c;
+                            ev->u.create.product = 0x09cc; 
+                            ev->u.create.rd_size = sizeof(ds4_bt_report_desc);
+                            memcpy(ev->u.create.rd_data, ds4_bt_report_desc, sizeof(ds4_bt_report_desc));
+                            
+                            if (write(uhid_fd, ev, sizeof(struct uhid_event)) >= 0) {
+                                struct pollfd tunnel_fds[3];
+                                tunnel_fds[0].fd = client_ctrl; tunnel_fds[0].events = POLLIN;
+                                tunnel_fds[1].fd = client_int;  tunnel_fds[1].events = POLLIN;
+                                tunnel_fds[2].fd = uhid_fd;     tunnel_fds[2].events = POLLIN;
 
-                            unsigned char io_buf[BUFFER_SIZE];
-                            int tunnel_active = 1;
+                                unsigned char io_buf[BUFFER_SIZE];
+                                int tunnel_active = 1;
 
-                            while (tunnel_active) {
-                                int t_ret = poll(tunnel_fds, 3, -1);
-                                if (t_ret < 0) {
-                                    if (errno == EINTR) continue;
-                                    break;
-                                }
-                                
-                                if ((tunnel_fds[0].revents & (POLLHUP|POLLERR)) || 
-                                    (tunnel_fds[1].revents & (POLLHUP|POLLERR)) ||
-                                    (tunnel_fds[2].revents & (POLLHUP|POLLERR))) {
-                                    break;
-                                }
-
-                                if (tunnel_fds[1].revents & POLLIN) {
-                                    ssize_t len = read(client_int, io_buf, sizeof(io_buf));
-                                    if (len <= 0) break;
-                                    
-                                    struct uhid_event in_ev;
-                                    memset(&in_ev, 0, sizeof(in_ev));
-                                    in_ev.type = UHID_INPUT2; 
-                                    in_ev.u.input2.size = len;
-                                    memcpy(in_ev.u.input2.data, io_buf, len);
-                                    if (write(uhid_fd, &in_ev, sizeof(in_ev)) < 0) break;
-                                }
-
-                                if (tunnel_fds[0].revents & POLLIN) {
-                                    ssize_t len = read(client_ctrl, io_buf, sizeof(io_buf));
-                                    if (len <= 0) break;
-                                }
-
-                                if (tunnel_fds[2].revents & POLLIN) {
-                                    struct uhid_event out_ev;
-                                    memset(&out_ev, 0, sizeof(out_ev));
-                                    ssize_t u_len = read(uhid_fd, &out_ev, sizeof(out_ev));
-                                    if (u_len > 0) {
-                                        if (out_ev.type == UHID_OUTPUT) {
-                                            if (write(client_int, out_ev.u.output.data, out_ev.u.output.size) < 0) break;
-                                        }
-                                    } else if (u_len < 0 && errno != EAGAIN) {
+                                while (tunnel_active) {
+                                    int t_ret = poll(tunnel_fds, 3, -1);
+                                    if (t_ret < 0) {
+                                        if (errno == EINTR) continue;
                                         break;
+                                    }
+                                    
+                                    if ((tunnel_fds[0].revents & (POLLHUP|POLLERR)) || 
+                                        (tunnel_fds[1].revents & (POLLHUP|POLLERR)) ||
+                                        (tunnel_fds[2].revents & (POLLHUP|POLLERR))) {
+                                        break;
+                                    }
+
+                                    if (tunnel_fds[1].revents & POLLIN) {
+                                        ssize_t len = read(client_int, io_buf, sizeof(io_buf));
+                                        if (len <= 0) break;
+                                        
+                                        struct uhid_event in_ev;
+                                        memset(&in_ev, 0, sizeof(in_ev));
+                                        in_ev.type = UHID_INPUT2; 
+                                        in_ev.u.input2.size = len;
+                                        memcpy(in_ev.u.input2.data, io_buf, len);
+                                        if (write(uhid_fd, &in_ev, sizeof(in_ev)) < 0) break;
+                                    }
+
+                                    if (tunnel_fds[0].revents & POLLIN) {
+                                        ssize_t len = read(client_ctrl, io_buf, sizeof(io_buf));
+                                        if (len <= 0) break;
+                                    }
+
+                                    if (tunnel_fds[2].revents & POLLIN) {
+                                        struct uhid_event out_ev;
+                                        memset(&out_ev, 0, sizeof(out_ev));
+                                        ssize_t u_len = read(uhid_fd, &out_ev, sizeof(out_ev));
+                                        if (u_len > 0) {
+                                            if (out_ev.type == UHID_OUTPUT) {
+                                                if (write(client_int, out_ev.u.output.data, out_ev.u.output.size) < 0) break;
+                                            }
+                                        } else if (u_len < 0 && errno != EAGAIN) {
+                                            break;
+                                        }
                                     }
                                 }
                             }
+                            free(ev);
                         }
                         close(uhid_fd);
                     }
