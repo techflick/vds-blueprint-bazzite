@@ -92,7 +92,7 @@ modules:
             sed -i 's/kHidInterruptPsm = 0x0013;/kHidInterruptPsm = 0x0023;/g' src/platform/linux/vds_bt.cc && \
             mkdir -p build
 
-        # Block 4: Initialize PKG_ROOT structure, build binaries, and stage files (HARMONIZED PATHS)
+        # Block 4: Initialize PKG_ROOT structure, build binaries, and stage files
         COPY vds-proxy.c /vds_build_dir/vds-proxy.c
         RUN KERNEL_VERSION=$(basename $(ls -d /usr/lib/modules/*fc* | head -n 1)) && \
             PKG_ROOT="/vds-pkg-root" && \
@@ -100,6 +100,7 @@ modules:
             mkdir -p "${PKG_ROOT}/usr/lib/modules-load.d" && \
             mkdir -p "${PKG_ROOT}/usr/bin" && \
             mkdir -p "${PKG_ROOT}/usr/lib/systemd/system/bluetooth.service.d" && \
+            mkdir -p "${PKG_ROOT}/usr/lib/systemd/system-preset" && \
             mkdir -p "${PKG_ROOT}/usr/share/dbus-1/system.d" && \
             mkdir -p "${PKG_ROOT}/usr/lib/udev/rules.d" && \
             mkdir -p "${PKG_ROOT}/usr/share/vdsd" && \
@@ -115,9 +116,10 @@ modules:
             cp /vds_build_dir/build/vds-proxy "${PKG_ROOT}/usr/bin/vds-proxy" && \
             chmod 755 "${PKG_ROOT}/usr/bin/vdsd" "${PKG_ROOT}/usr/bin/vdsctl" "${PKG_ROOT}/usr/bin/vds-proxy"
             
-        # Block 5: Deploy monolithic system daemons mit originaler Pufferung
+        # Block 5: Deploy system daemons mit korrigiertem Pfad /var/lib/vdsd & Systemd-Presets
         RUN PKG_ROOT="/vds-pkg-root" && \
             printf "vds_hcd\n" > "${PKG_ROOT}/usr/lib/modules-load.d/vds.conf" && \
+            printf "enable vdsd.service\nenable vds-proxy.service\nenable vds-chmod-sdp.path\n" > "${PKG_ROOT}/usr/lib/systemd/system-preset/99-vds.preset" && \
             ( \        
               echo '[Unit]'; \
               echo 'Description=vDS Dynamic Bluetooth Socket Router'; \
@@ -134,6 +136,9 @@ modules:
               echo 'CapabilityBoundingSet=CAP_NET_RAW CAP_SYS_ADMIN CAP_NET_ADMIN CAP_NET_BIND_SERVICE'; \
               echo 'AmbientCapabilities=CAP_NET_RAW CAP_SYS_ADMIN CAP_NET_ADMIN CAP_NET_BIND_SERVICE'; \
               echo 'Nice=-10'; \
+              echo ''; \
+              echo '[Install]'; \
+              echo 'WantedBy=multi-user.target'; \
             ) > "${PKG_ROOT}/usr/lib/systemd/system/vds-proxy.service" && \
             ( \
               echo '[Unit]'; \
@@ -143,7 +148,7 @@ modules:
               echo ''; \
               echo '[Service]'; \
               echo 'Type=idle'; \
-              echo 'ExecStartPre=/usr/bin/mkdir -p /var/lib/vds'; \
+              echo 'ExecStartPre=/usr/bin/mkdir -p /var/lib/vdsd'; \
               echo 'ExecStartPre=/usr/bin/chmod 666 /dev/uhid'; \
               echo 'ExecStartPre=/usr/bin/sleep 7'; \
               echo 'ExecStart=/usr/bin/vdsd'; \
@@ -158,6 +163,9 @@ modules:
               echo 'CapabilityBoundingSet=CAP_NET_RAW CAP_SYS_ADMIN CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_SYS_RAWIO'; \
               echo 'AmbientCapabilities=CAP_NET_RAW CAP_SYS_ADMIN CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_SYS_RAWIO'; \
               echo 'Nice=-10'; \
+              echo ''; \
+              echo '[Install]'; \
+              echo 'WantedBy=multi-user.target'; \
             ) > "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service"
             
         # Block 6: Apply BlueZ compat configuration and optimized database udev triggers
@@ -236,7 +244,7 @@ modules:
               echo ']'; \
             ) > "${PKG_ROOT}/usr/share/wireplumber/wireplumber.conf.d/99-vds-prioritisation.conf"
 
-        # Block 7: Generate isolated RPM package tracking the strict target image kernel
+        # Block 7: Generate isolated RPM package with fixed post-install script macros
         RUN KERNEL_VERSION=$(basename $(ls -d /usr/lib/modules/*fc* | head -n 1)) && \
             mkdir -p /root/rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS} && \
             ( \
@@ -247,11 +255,12 @@ modules:
               echo 'License: MIT'; \
               echo ''; \
               echo '%description'; \
-              echo 'Virtual DualSense Driver und Daemon fuer Bazzite.'; \
+              echo 'Virtual DualSense Driver und Daemon.'; \
               echo ''; \
               echo '%files'; \
               echo '/usr/lib/modules/'"${KERNEL_VERSION}"'/extra/vds_hcd.ko'; \
               echo '/usr/lib/modules-load.d/vds.conf'; \
+              echo '/usr/lib/systemd/system-preset/99-vds.preset'; \
               echo '/usr/bin/vdsd'; \
               echo '/usr/bin/vdsctl'; \
               echo '/usr/bin/vds-proxy'; \
@@ -270,17 +279,9 @@ modules:
             mkdir -p /tmp/vds-rpm && \
             cp /root/rpmbuild/RPMS/x86_64/kmod-vds-1.0.0-1.x86_64.rpm /tmp/vds-rpm/
 
-        # Block 8: Lock-free extraction of the self-built RPM payload into the unchangeable root & FORCED LOCAL DEPMOD
+        # Block 8, 9 & 10: Lock-free extraction & native preset deployment targeting Ostree slices
         RUN rpm2cpio /tmp/vds-rpm/kmod-vds-1.0.0-1.x86_64.rpm | cpio -idmv -D / && \
             KERNEL_VERSION=$(basename $(ls -d /usr/lib/modules/*fc* | head -n 1)) && \
-            echo "Erzwinge depmod-Indexierung direkt im OCI-Image fuer: ${KERNEL_VERSION}" && \
-            depmod -a "${KERNEL_VERSION}"
-
-        # Block 9: Systemd-Autostart über Symlinks direkt im Image verankern
-        RUN mkdir -p /usr/lib/systemd/system/multi-user.target.wants && \
-            ln -sf /usr/lib/systemd/system/vds-proxy.service /usr/lib/systemd/system/multi-user.target.wants/vds-proxy.service && \
-            ln -sf /usr/lib/systemd/system/vdsd.service /usr/lib/systemd/system/multi-user.target.wants/vdsd.service && \
-            ln -sf /usr/lib/systemd/system/vds-chmod-sdp.path /usr/lib/systemd/system/multi-user.target.wants/vds-chmod-sdp.path
-
-        # Block 10: Temporäre Build-Verzeichnisse restlos löschen
-        RUN rm -rf /vds_build_dir /vds-pkg-root
+            depmod -a "${KERNEL_VERSION}" && \
+            systemctl preset vdsd.service vds-proxy.service vds-chmod-sdp.path >/dev/null 2>&1 || : && \
+            rm -rf /vds_build_dir /vds-pkg-root /tmp/vds-rpm
