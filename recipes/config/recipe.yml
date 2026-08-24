@@ -92,7 +92,7 @@ modules:
             sed -i 's/kHidInterruptPsm = 0x0013;/kHidInterruptPsm = 0x0023;/g' src/platform/linux/vds_bt.cc && \
             mkdir -p build
 
-        # Block 4: Initialize PKG_ROOT structure, build binaries, and stage files (STRONGLY TARGETED PATHS)
+        # Block 4: Initialize PKG_ROOT structure, build binaries, and stage files (HARMONIZED PATHS)
         COPY vds-proxy.c /vds_build_dir/vds-proxy.c
         RUN KERNEL_VERSION=$(basename $(ls -d /usr/lib/modules/*fc* | head -n 1)) && \
             PKG_ROOT="/vds-pkg-root" && \
@@ -100,11 +100,10 @@ modules:
             mkdir -p "${PKG_ROOT}/usr/lib/modules-load.d" && \
             mkdir -p "${PKG_ROOT}/usr/bin" && \
             mkdir -p "${PKG_ROOT}/usr/lib/systemd/system/bluetooth.service.d" && \
-            mkdir -p "${PKG_ROOT}/usr/lib/systemd/system" && \
             mkdir -p "${PKG_ROOT}/usr/share/dbus-1/system.d" && \
             mkdir -p "${PKG_ROOT}/usr/lib/udev/rules.d" && \
             mkdir -p "${PKG_ROOT}/usr/share/vdsd" && \
-            mkdir -p "${PKG_ROOT}/etc/wireplumber/wireplumber.conf.d" && \
+            mkdir -p "${PKG_ROOT}/usr/share/wireplumber/wireplumber.conf.d" && \
             cp /vds_build_dir/module/vds_hcd.ko "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra/vds_hcd.ko" && \
             chmod 644 "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra/vds_hcd.ko" && \
             cd /vds_build_dir/build && \
@@ -116,7 +115,7 @@ modules:
             cp /vds_build_dir/build/vds-proxy "${PKG_ROOT}/usr/bin/vds-proxy" && \
             chmod 755 "${PKG_ROOT}/usr/bin/vdsd" "${PKG_ROOT}/usr/bin/vdsctl" "${PKG_ROOT}/usr/bin/vds-proxy"
             
-        # Block 5: Deploy monolithic system daemons mit originaler Pufferung (Type=idle)
+        # Block 5: Deploy monolithic system daemons mit originaler Pufferung
         RUN PKG_ROOT="/vds-pkg-root" && \
             printf "vds_hcd\n" > "${PKG_ROOT}/usr/lib/modules-load.d/vds.conf" && \
             ( \        
@@ -250,13 +249,6 @@ modules:
               echo '%description'; \
               echo 'Virtual DualSense Driver und Daemon fuer Bazzite.'; \
               echo ''; \
-              echo '%posttrans'; \
-              echo '# Dieser Sektor laeuft nach der vollstaendigen Dateitransaktion im Ostree-Slicing'; \
-              echo 'if [ -d "/usr/lib/modules/'"${KERNEL_VERSION}"'" ]; then'; \
-              echo '    echo "vDS: Running depmod for absolute image kernel '"${KERNEL_VERSION}"'..."'; \
-              echo '    /usr/sbin/depmod -a "'"${KERNEL_VERSION}"'" || true'; \
-              echo 'fi'; \
-              echo ''; \
               echo '%files'; \
               echo '/usr/lib/modules/'"${KERNEL_VERSION}"'/extra/vds_hcd.ko'; \
               echo '/usr/lib/modules-load.d/vds.conf'; \
@@ -278,8 +270,11 @@ modules:
             mkdir -p /tmp/vds-rpm && \
             cp /root/rpmbuild/RPMS/x86_64/kmod-vds-1.0.0-1.x86_64.rpm /tmp/vds-rpm/
 
-        # Block 8: Lock-free extraction of the self-built RPM payload into the unchangeable root
-        RUN rpm2cpio /tmp/vds-rpm/kmod-vds-1.0.0-1.x86_64.rpm | cpio -idmv -D /
+        # Block 8: Lock-free extraction of the self-built RPM payload into the unchangeable root & FORCED LOCAL DEPMOD
+        RUN rpm2cpio /tmp/vds-rpm/kmod-vds-1.0.0-1.x86_64.rpm | cpio -idmv -D / && \
+            KERNEL_VERSION=$(basename $(ls -d /usr/lib/modules/*fc* | head -n 1)) && \
+            echo "Erzwinge depmod-Indexierung direkt im OCI-Image fuer: ${KERNEL_VERSION}" && \
+            depmod -a "${KERNEL_VERSION}"
 
         # Block 9: Systemd-Autostart über Symlinks direkt im Image verankern
         RUN mkdir -p /usr/lib/systemd/system/multi-user.target.wants && \
