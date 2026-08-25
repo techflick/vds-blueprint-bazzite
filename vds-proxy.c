@@ -4,14 +4,14 @@
 #include <string.h>
 #include <stdint.h>
 #include <unistd.h>
-#include <sys/socket.h>
+#include <sys/socket.h> // Zwingend erforderlich für sockaddr_storage
 #include <sys/ioctl.h>
 #include <sys/poll.h>
 #include <fcntl.h>
 #include <errno.h>
 #include <linux/uhid.h>
 
-// Binde die im Rezept generierten Standalone-Header ein
+// Binde Ihre im Rezept generierten Standalone-Header ein (Bleiben auf 14 Byte fixiert!)
 #include <bluetooth/bluetooth.h>
 #include <bluetooth/l2cap.h>
 
@@ -37,7 +37,8 @@ int create_l2cap_socket(uint16_t psm) {
     int opt = 1;
     setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
 
-    // CRITICAL FIX [II, VI]: Struktur-Größe strikt auf 14 Byte via l2cap.h-Definition
+    // Hier nutzt der Proxy die 14-Byte-Struktur aus Ihrem Original-Rezept.
+    // Da wir dem Kernel die Daten übergeben, akzeptiert er die 14 Byte fehlerfrei.
     struct sockaddr_l2 addr;
     memset(&addr, 0, sizeof(addr));
     addr.l2_family = AF_BLUETOOTH;
@@ -56,6 +57,7 @@ int connect_to_vdsd(uint16_t target_psm) {
     int sock = socket(AF_BLUETOOTH, SOCK_SEQPACKET, BTPROTO_L2CAP);
     if (sock < 0) return -1;
 
+    // Garantiert die strikte 14-Byte-Kompatibilität beim Andocken an vdsd!
     struct sockaddr_l2 addr;
     memset(&addr, 0, sizeof(addr));
     addr.l2_family = AF_BLUETOOTH;
@@ -94,8 +96,9 @@ int main() {
         }
 
         if (s_fds[0].revents & POLLIN) {
-            struct sockaddr_l2 client_addr;
-            socklen_t addr_len = sizeof(struct sockaddr_l2);
+            // FIX 1: Elastischer 128-Byte-Behälter für den unvorhersehbaren Host-Kernel
+            struct sockaddr_storage client_addr;
+            socklen_t addr_len = sizeof(struct sockaddr_storage);
             int client_ctrl = accept(server_ctrl, (struct sockaddr *)&client_addr, &addr_len);
             
             if (client_ctrl >= 0) {
@@ -104,12 +107,10 @@ int main() {
                 memset(peek_buf, 0, sizeof(peek_buf));
                 
                 usleep(15000); 
-                // MSG_PEEK liest die Daten, ohne sie aus der Kernel-Warteschlange zu loeschen
                 ssize_t peek_len = recv(client_ctrl, peek_buf, sizeof(peek_buf) - 1, MSG_PEEK | MSG_DONTWAIT);
 
                 int is_dualsense = 0;
                 if (peek_len > 0) {
-                    // CRITICAL FIX: Verwende memmem() fuer Binaerdaten statt strstr(), um Puffer-Ueberlaeufe zu verhindern
                     if (memmem(peek_buf, peek_len, "DualSense", 9) != NULL || peek_buf[0] == 0x01) {
                         is_dualsense = 1;
                     }
@@ -124,7 +125,8 @@ int main() {
                     int client_int = -1;
                     
                     if (poll(&int_check, 1, 1500) > 0 && (int_check.revents & POLLIN)) {
-                        addr_len = sizeof(struct sockaddr_l2);
+                        // FIX 2: Auch beim Interrupt-Kanal fängt sockaddr_storage den Kernel ab
+                        addr_len = sizeof(struct sockaddr_storage);
                         client_int = accept(server_int, (struct sockaddr *)&client_addr, &addr_len);
                     }
 
@@ -197,7 +199,8 @@ int main() {
                     int client_int = -1;
                     
                     if (poll(&int_check, 1, 1500) > 0 && (int_check.revents & POLLIN)) {
-                        addr_len = sizeof(struct sockaddr_l2);
+                        // FIX 3: Adress-Schutz im DualShock 4 Zweig integriert
+                        addr_len = sizeof(struct sockaddr_storage);
                         client_int = accept(server_int, (struct sockaddr *)&client_addr, &addr_len);
                     }
 
@@ -211,8 +214,6 @@ int main() {
                     if (uhid_fd >= 0) {
                         set_nonblocking(uhid_fd);
                         
-                        // CRITICAL FIX: Verwende ein dediziertes Heap-Objekt fuer das UHID-Create-Event
-                        // Die Struktur uhid_event ist extrem gross und neigt auf dem Stack zu Instabilitaeten
                         struct uhid_event *ev = calloc(1, sizeof(struct uhid_event));
                         if (ev != NULL) {
                             ev->type = UHID_CREATE;
@@ -232,49 +233,54 @@ int main() {
                                 unsigned char io_buf[BUFFER_SIZE];
                                 int tunnel_active = 1;
 
-                                while (tunnel_active) {
-                                    int t_ret = poll(tunnel_fds, 3, -1);
-                                    if (t_ret < 0) {
-                                        if (errno == EINTR) continue;
-                                        break;
-                                    }
-                                    
-                                    if ((tunnel_fds[0].revents & (POLLHUP|POLLERR)) || 
-                                        (tunnel_fds[1].revents & (POLLHUP|POLLERR)) ||
-                                        (tunnel_fds[2].revents & (POLLHUP|POLLERR))) {
-                                        break;
-                                    }
+                                struct uhid_event *in_ev = calloc(1, sizeof(struct uhid_event));
+                                struct uhid_event *out_ev = calloc(1, sizeof(struct uhid_event));
 
-                                    if (tunnel_fds[1].revents & POLLIN) {
-                                        ssize_t len = read(client_int, io_buf, sizeof(io_buf));
-                                        if (len <= 0) break;
-                                        
-                                        struct uhid_event in_ev;
-                                        memset(&in_ev, 0, sizeof(in_ev));
-                                        in_ev.type = UHID_INPUT2; 
-                                        in_ev.u.input2.size = len;
-                                        memcpy(in_ev.u.input2.data, io_buf, len);
-                                        if (write(uhid_fd, &in_ev, sizeof(in_ev)) < 0) break;
-                                    }
-
-                                    if (tunnel_fds[0].revents & POLLIN) {
-                                        ssize_t len = read(client_ctrl, io_buf, sizeof(io_buf));
-                                        if (len <= 0) break;
-                                    }
-
-                                    if (tunnel_fds[2].revents & POLLIN) {
-                                        struct uhid_event out_ev;
-                                        memset(&out_ev, 0, sizeof(out_ev));
-                                        ssize_t u_len = read(uhid_fd, &out_ev, sizeof(out_ev));
-                                        if (u_len > 0) {
-                                            if (out_ev.type == UHID_OUTPUT) {
-                                                if (write(client_int, out_ev.u.output.data, out_ev.u.output.size) < 0) break;
-                                            }
-                                        } else if (u_len < 0 && errno != EAGAIN) {
+                                if (in_ev != NULL && out_ev != NULL) {
+                                    while (tunnel_active) {
+                                        int t_ret = poll(tunnel_fds, 3, -1);
+                                        if (t_ret < 0) {
+                                            if (errno == EINTR) continue;
                                             break;
+                                        }
+                                        
+                                        if ((tunnel_fds[0].revents & (POLLHUP|POLLERR)) || 
+                                            (tunnel_fds[1].revents & (POLLHUP|POLLERR)) ||
+                                            (tunnel_fds[2].revents & (POLLHUP|POLLERR))) {
+                                            break;
+                                        }
+
+                                        if (tunnel_fds[1].revents & POLLIN) {
+                                            ssize_t len = read(client_int, io_buf, sizeof(io_buf));
+                                            if (len <= 0) break;
+                                            
+                                            memset(in_ev, 0, sizeof(struct uhid_event));
+                                            in_ev->type = UHID_INPUT2; 
+                                            in_ev->u.input2.size = len;
+                                            memcpy(in_ev->u.input2.data, io_buf, len);
+                                            if (write(uhid_fd, in_ev, sizeof(struct uhid_event)) < 0) break;
+                                        }
+
+                                        if (tunnel_fds[0].revents & POLLIN) {
+                                            ssize_t len = read(client_ctrl, io_buf, sizeof(io_buf));
+                                            if (len <= 0) break;
+                                        }
+
+                                        if (tunnel_fds[2].revents & POLLIN) {
+                                            memset(out_ev, 0, sizeof(struct uhid_event));
+                                            ssize_t u_len = read(uhid_fd, out_ev, sizeof(struct uhid_event));
+                                            if (u_len > 0) {
+                                                if (out_ev->type == UHID_OUTPUT) {
+                                                    if (write(client_int, out_ev->u.output.data, out_ev->u.output.size) < 0) break;
+                                                }
+                                            } else if (u_len < 0 && errno != EAGAIN) {
+                                                break;
+                                            }
                                         }
                                     }
                                 }
+                                if (in_ev) free(in_ev);
+                                if (out_ev) free(out_ev);
                             }
                             free(ev);
                         }
