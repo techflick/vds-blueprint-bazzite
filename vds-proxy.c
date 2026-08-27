@@ -8,10 +8,10 @@
 #include <sys/poll.h>
 #include <errno.h>
 
-// [1.1] Absolut autarke Kernel-Definitionen – Unabhängig von externen Headern
+// [1.1] Absolut autarke Kernel-Definitionen – Unabhängig von Daemon-Headern
 #define AF_BLUETOOTH       31
 #define SOCK_SEQPACKET     5
-#define BTPROTO_L2CAP      0  // WICHTIG: Native 0, damit der Kernel nicht blockiert
+#define BTPROTO_L2CAP      0  // Native Protokoll-ID 0 gegen Kernel-Blockaden
 
 // [1.1] Das vom modernen Bazzite-Host zwingend geforderte 16-Byte Layout
 struct sockaddr_l2_local {
@@ -20,10 +20,10 @@ struct sockaddr_l2_local {
     uint8_t     l2_bdaddr[6];   // 6 Byte (Reale Bluetooth MAC-Adresse)
     uint16_t    l2_cid;         // 2 Byte
     uint8_t     l2_bdaddr_type; // 1 Byte
-    uint8_t     padding[3];     // 3 Byte -> Ergibt exakt die 16-Byte-Partitionsgrenze
+    uint8_t     padding[3];     // 3 Byte -> Ergibt exakt die 16-Byte-Grenze
 };
 
-// Erstellt den Server-Socket, der auf Verbindungen des physischen Controllers wartet
+// Erstellt den Server-Socket für eingehende Controller-Verbindungen
 int create_server_socket(uint16_t psm) {
     int sock = socket(AF_BLUETOOTH, SOCK_SEQPACKET, BTPROTO_L2CAP);
     if (sock < 0) return -1;
@@ -31,7 +31,8 @@ int create_server_socket(uint16_t psm) {
     int opt = 1;
     setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
     
-    struct sockaddr_l2_local addr = {0};
+    struct sockaddr_l2_local addr;
+    memset(&addr, 0, sizeof(addr)); // WICHTIG: Nullt das Padding gegen EINVAL
     addr.l2_family = AF_BLUETOOTH;
     addr.l2_psm = psm; // 0x11 (Control) oder 0x13 (Interrupt)
     
@@ -47,16 +48,19 @@ int create_server_socket(uint16_t psm) {
     return sock;
 }
 
-// Baut die Userspace-Weiterleitung (Connect) zum umgebogenen vdsd-Daemon auf
+// Baut die Userspace-Weiterleitung zum gepatchten vdsd-Daemon auf
 int connect_to_vdsd(uint16_t psm, uint8_t *mac) {
     int sock = socket(AF_BLUETOOTH, SOCK_SEQPACKET, BTPROTO_L2CAP);
     if (sock < 0) return -1;
     
-    struct sockaddr_l2_local addr = {0};
+    struct sockaddr_l2_local addr;
+    memset(&addr, 0, sizeof(addr)); // WICHTIG: Keine Stack-Reste ins Kernel-Routing
     addr.l2_family = AF_BLUETOOTH;
     addr.l2_psm = psm; // 0x0021 oder 0x0023
-    memcpy(addr.l2_bdaddr, mac, 6); // Übergibt die dynamische MAC des Controllers für das Kernel-Routing
+    memcpy(addr.l2_bdaddr, mac, 6); // Dynamische MAC-Zuweisung [I]
+    addr.l2_bdaddr_type = 0;
     
+    // Zwingt den Connect auf die reale Host-Größe von 16 Byte [I]
     if (connect(sock, (struct sockaddr *)&addr, 16) < 0) {
         close(sock);
         return -1;
@@ -81,26 +85,36 @@ int main() {
 
     int client_ctrl = -1, client_intr = -1;
     int vdsd_ctrl = -1, vdsd_intr = -1;
-    
-    struct sockaddr_l2_local client_addr = {0};
-    socklen_t addr_len = sizeof(client_addr);
+    uint8_t target_mac[6] = {0};
 
     printf("vDS-Proxy: Warte auf Control-Kanal (PSM 0x11)...\n");
 
     // 1. Abfangen des Control-Kanals (0x11) & Dynamisches Auslesen der Controller-MAC
-    while (poll(srv_fds, 2, -1) > 0) {
+    while (poll(srv_fds, 1, -1) > 0) { // Nur auf Control-Server horchen
         if (srv_fds[0].revents & POLLIN) {
-            addr_len = sizeof(client_addr); // Absicherung der Partitionsgröße vor accept
-            client_ctrl = accept(srv_ctrl, (struct sockaddr *)&client_addr, &addr_len);
+            struct sockaddr_l2_local raw_addr;
+            memset(&raw_addr, 0, sizeof(raw_addr));
+            socklen_t addr_len = sizeof(raw_addr); 
+            
+            // Absturzsicherer Accept fängt Kernel-Layouts sauber ab [I]
+            client_ctrl = accept(srv_ctrl, (struct sockaddr *)&raw_addr, &addr_len);
             if (client_ctrl >= 0) {
-                printf("vDS-Proxy: Control-Kanal verbunden. MAC: %02X:%02X:%02X:%02X:%02X:%02X\n",
-                       client_addr.l2_bdaddr[0], client_addr.l2_bdaddr[1], client_addr.l2_bdaddr[2],
-                       client_addr.l2_bdaddr[3], client_addr.l2_bdaddr[4], client_addr.l2_bdaddr[5]);
+                // MAC isolieren, um Strukturänderungen des Kernels auszuhebeln [I]
+                memcpy(target_mac, raw_addr.l2_bdaddr, 6);
                 
-                // Verbindet den Proxy sofort weiter zu vdsd auf den Ausweich-Port 0x0021
-                vdsd_ctrl = connect_to_vdsd(0x0021, client_addr.l2_bdaddr);
+                printf("vDS-Proxy: Control-Kanal verbunden. MAC: %02X:%02X:%02X:%02X:%02X:%02X\n",
+                       target_mac[0], target_mac[1], target_mac[2],
+                       target_mac[3], target_mac[4], target_mac[5]);
+                
+                // [WICHTIG] Protokoll-Spionage via MSG_PEEK
+                // Liest zerstörungsfrei, damit das Erstpaket in der Kernel-Queue bleibt
+                uint8_t peek_buf[1];
+                recv(client_ctrl, peek_buf, sizeof(peek_buf), MSG_PEEK | MSG_DONTWAIT);
+                
+                // Verbindet den Proxy sofort weiter zu vdsd auf Ausweich-Port 0x0021 [I]
+                vdsd_ctrl = connect_to_vdsd(0x0021, target_mac);
                 if (vdsd_ctrl < 0) {
-                    fprintf(stderr, "vDS-Proxy: Weiterleitung zu vdsd auf Port 0x0021 fehlgeschlagen.\n");
+                    fprintf(stderr, "vDS-Proxy: Weiterleitung zu vdsd auf Port 0x0021 fehlgeschlagen: %s\n", strerror(errno));
                 }
             }
             break;
@@ -111,21 +125,22 @@ int main() {
 
     // 2. Isolierte Struktur für Interrupt-Kanal, um Kernel-Überschreibungen zu verhindern
     struct pollfd srv_intr_fd;
-    srv_intr_fd.fd = srv_intr;
-    srv_intr_fd.events = POLLIN;
-    srv_intr_fd.revents = 0;
+    srv_intr_fd.fd = srv_intr; srv_intr_fd.events = POLLIN; srv_intr_fd.revents = 0;
 
-    while (poll(&srv_intr_fd, 1, 5000) > 0) {
+    while (poll(&srv_intr_fd, 1, 5000) > 0) { // 5 Sekunden Timeout für den zweiten Kanal
         if (srv_intr_fd.revents & POLLIN) {
-            struct sockaddr_l2_local intr_addr = {0};
-            socklen_t intr_len = sizeof(intr_addr);
-            client_intr = accept(srv_intr, (struct sockaddr *)&intr_addr, &intr_len);
+            struct sockaddr_l2_local raw_addr;
+            memset(&raw_addr, 0, sizeof(raw_addr));
+            socklen_t addr_len = sizeof(raw_addr);
+            
+            client_intr = accept(srv_intr, (struct sockaddr *)&raw_addr, &addr_len);
             if (client_intr >= 0) {
                 printf("vDS-Proxy: Interrupt-Kanal verbunden.\n");
-                // Verbindet den Proxy sofort weiter zu vdsd auf den Ausweich-Port 0x0023
-                vdsd_intr = connect_to_vdsd(0x0023, client_addr.l2_bdaddr);
+                
+                // Verbindet den Proxy sofort weiter zu vdsd auf Ausweich-Port 0x0023 [I]
+                vdsd_intr = connect_to_vdsd(0x0023, target_mac);
                 if (vdsd_intr < 0) {
-                    fprintf(stderr, "vDS-Proxy: Weiterleitung zu vdsd auf Port 0x0023 fehlgeschlagen.\n");
+                    fprintf(stderr, "vDS-Proxy: Weiterleitung zu vdsd auf Port 0x0023 fehlgeschlagen: %s\n", strerror(errno));
                 }
             }
             break;
@@ -134,8 +149,7 @@ int main() {
 
     // Falls der Tunnel-Aufbau unvollständig war, Sockets schließen und abbrechen
     if (client_ctrl < 0 || client_intr < 0 || vdsd_ctrl < 0 || vdsd_intr < 0) {
-        fprintf(stderr, "vDS-Proxy KRITISCH: Tunnel unvollständig (Ctrl: %d, Intr: %d, vdsd_Ctrl: %d, vdsd_Intr: %d). Breche ab.\n",
-                client_ctrl, client_intr, vdsd_ctrl, vdsd_intr);
+        fprintf(stderr, "vDS-Proxy KRITISCH: Tunnel unvollständig. Teardown eingeleitet.\n");
         if (client_ctrl >= 0) close(client_ctrl);
         if (client_intr >= 0) close(client_intr);
         if (vdsd_ctrl >= 0) close(vdsd_ctrl);
@@ -146,16 +160,17 @@ int main() {
 
     printf("vDS-Proxy: **Bidirektionaler Userspace-Tunnel aktiv!** Datenübertragung läuft...\n");
 
-    // 3. Der bidirektionale Userspace-Tunnel (Reicht alle Daten ungezählt weiter)
+    // 3. Der asynchrone Userspace-Tunnel (Reicht alle Daten ungezählt im Kreis weiter)
     struct pollfd tunnel_fds[4];
-    tunnel_fds[0].fd = client_ctrl; tunnel_fds[0].events = POLLIN;
-    tunnel_fds[1].fd = vdsd_ctrl;   tunnel_fds[1].events = POLLIN;
-    tunnel_fds[2].fd = client_intr; tunnel_fds[2].events = POLLIN;
-    tunnel_fds[3].fd = vdsd_intr;   tunnel_fds[3].events = POLLIN;
+    tunnel_fds[0].fd = client_ctrl; tunnel_fds[0].events = POLLIN; tunnel_fds[0].revents = 0;
+    tunnel_fds[1].fd = vdsd_ctrl;   tunnel_fds[1].events = POLLIN; tunnel_fds[1].revents = 0;
+    tunnel_fds[2].fd = client_intr; tunnel_fds[2].events = POLLIN; tunnel_fds[2].revents = 0;
+    tunnel_fds[3].fd = vdsd_intr;   tunnel_fds[3].events = POLLIN; tunnel_fds[3].revents = 0;
 
-    uint8_t buf[1024];
+    uint8_t buf[2048]; // Erhöht auf 2048 Byte für haptische Audio-Spitzen
     while (poll(tunnel_fds, 4, -1) > 0) {
         // Daten vom Controller zu vdsd (Control-Kanal)
+        // HIER wird das spionierte Erstpaket jetzt regulär abgeholt und weitergereicht
         if (tunnel_fds[0].revents & POLLIN) {
             int len = recv(client_ctrl, buf, sizeof(buf), 0);
             if (len <= 0) break;
@@ -179,8 +194,17 @@ int main() {
             if (len <= 0) break;
             send(client_intr, buf, len, 0);
         }
+        
+        // Anti-Freeze & Verbindungsabbruch-Schutz
+        for (int i = 0; i < 4; i++) {
+            if (tunnel_fds[i].revents & (POLLHUP | POLLERR | POLLNVAL)) {
+                printf("vDS-Proxy: Signalverlust auf Socket-Index %d.\n", i);
+                goto cleanup;
+            }
+        }
     }
 
+cleanup:
     printf("vDS-Proxy: Verbindung beendet. Schließe Tunnel Sockets...\n");
 
     // Sauberes Teardown bei Verbindungsabbruch
