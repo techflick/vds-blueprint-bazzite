@@ -98,7 +98,7 @@ modules:
         RUN KERNEL_VERSION=$(basename $(ls -d /usr/lib/modules/*fc* | head -n 1)) && \
             PKG_ROOT="/vds-pkg-root" && \
             mkdir -p "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra" && \
-            mkdir -p "${PKG_ROOT}/usr/modules-load.d" && \
+            mkdir -p "${PKG_ROOT}/usr/lib/modules-load.d" && \
             mkdir -p "${PKG_ROOT}/usr/bin" && \
             mkdir -p "${PKG_ROOT}/usr/lib/systemd/system/bluetooth.service.d" && \
             mkdir -p "${PKG_ROOT}/usr/lib/systemd/system-preset" && \
