@@ -84,15 +84,15 @@ modules:
         #endif
         EOF
 
-        # Block 4: Override package configuration and apply Port-Patch
+        #Block 4: Override package configuration and apply Port-Patch (NUR NOCH vdsd!)
         RUN cd /vds_build_dir && \
             sed -i '/pkg_check_modules.*bluez/c\set(bluez_FOUND TRUE)\nset(bluez_INCLUDE_DIRS "/vds_build_dir/include")\nset(bluez_LIBRARIES "")' CMakeLists.txt && \
             sed -i 's/PkgConfig::BLUEZ//g' CMakeLists.txt && \
-            sed -i 's/kHidControlPsm = 0x0011;/kHidControlPsm = 0x0021;/g' src/platform/linux/vds_bt.cc && \
-            sed -i 's/kHidInterruptPsm = 0x0013;/kHidInterruptPsm = 0x0023;/g' src/platform/linux/vds_bt.cc && \
+            sed -i -E 's/(kHidControlPsm\s*=\s*)0x[0-9a-fA-F]+/\\10x0021/g' src/platform/linux/vds_bt.cc && \
+            sed -i -E 's/(kHidInterruptPsm\s*=\s*)0x[0-9a-fA-F]+/\\10x0023/g' src/platform/linux/vds_bt.cc && \
             mkdir -p build
 
-        # Block 5: Initialize PKG_ROOT structure, build binaries, and stage files
+        # Block 5: Initialize PKG_ROOT structure, build binaries independently, and stage files
         COPY vds-proxy.c /vds_build_dir/vds-proxy.c
         RUN KERNEL_VERSION=$(basename $(ls -d /usr/lib/modules/*fc* | head -n 1)) && \
             PKG_ROOT="/vds-pkg-root" && \
@@ -105,12 +105,20 @@ modules:
             mkdir -p "${PKG_ROOT}/usr/lib/udev/rules.d" && \
             mkdir -p "${PKG_ROOT}/usr/share/vdsd" && \
             mkdir -p "${PKG_ROOT}/usr/share/wireplumber/wireplumber.conf.d" && \
+            \
+            # 1. Kernel-Modul stagen
             cp /vds_build_dir/module/vds_hcd.ko "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra/vds_hcd.ko" && \
             chmod 644 "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra/vds_hcd.ko" && \
+            \
+            # 2. Daemon (vdsd) kompilieren (Nutzt isoliert die Dummy-Header aus CMake)
             cd /vds_build_dir/build && \
             cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS="-isystem /vds_build_dir/include" -DCMAKE_CXX_FLAGS="-isystem /vds_build_dir/include" && \
             make -j$(nproc) && \
-            gcc -O2 -Wall -I/vds_build_dir/include /vds_build_dir/vds-proxy.c -o /vds_build_dir/build/vds-proxy -lsystemd && \
+            \
+            # 3. Proxy absolut autark kompilieren (OHNE Dummy-Header-Bezug!)
+            gcc -O2 -Wall /vds_build_dir/vds-proxy.c -o /vds_build_dir/build/vds-proxy -lsystemd && \
+            \
+            # 4. Alle fertigen Payloads stagen
             cp /vds_build_dir/build/vdsd "${PKG_ROOT}/usr/bin/vdsd" && \
             cp /vds_build_dir/build/vdsctl "${PKG_ROOT}/usr/bin/vdsctl" && \
             cp /vds_build_dir/build/vds-proxy "${PKG_ROOT}/usr/bin/vds-proxy" && \
