@@ -84,12 +84,13 @@ modules:
         #endif
         EOF
 
-        #Block 4: Override package configuration and apply Port-Patch (NUR NOCH vdsd!)
+        # Block 4: Override package configuration and apply Port-Patch (Escaping-Fix)
         RUN cd /vds_build_dir && \
             sed -i '/pkg_check_modules.*bluez/c\set(bluez_FOUND TRUE)\nset(bluez_INCLUDE_DIRS "/vds_build_dir/include")\nset(bluez_LIBRARIES "")' CMakeLists.txt && \
             sed -i 's/PkgConfig::BLUEZ//g' CMakeLists.txt && \
-            sed -i -E 's/(kHidControlPsm\s*=\s*)0x[0-9a-fA-F]+/\\10x0021/g' src/platform/linux/vds_bt.cc && \
-            sed -i -E 's/(kHidInterruptPsm\s*=\s*)0x[0-9a-fA-F]+/\\10x0023/g' src/platform/linux/vds_bt.cc && \
+            # Direkte Ersetzung ohne \1 Backreferences, um Containerfile-Parser-Fehler zu vermeiden
+            sed -i -E 's/kHidControlPsm\s*=\s*0x[0-9a-fA-F]+/kHidControlPsm = 0x0021/g' src/platform/linux/vds_bt.cc && \
+            sed -i -E 's/kHidInterruptPsm\s*=\s*0x[0-9a-fA-F]+/kHidInterruptPsm = 0x0023/g' src/platform/linux/vds_bt.cc && \
             mkdir -p build
 
         # Block 5: Initialize PKG_ROOT structure, build binaries independently, and stage files
