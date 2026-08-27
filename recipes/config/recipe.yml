@@ -88,9 +88,9 @@ modules:
         RUN cd /vds_build_dir && \
             sed -i '/pkg_check_modules.*bluez/c\set(bluez_FOUND TRUE)\nset(bluez_INCLUDE_DIRS "/vds_build_dir/include")\nset(bluez_LIBRARIES "")' CMakeLists.txt && \
             sed -i 's/PkgConfig::BLUEZ//g' CMakeLists.txt && \
-            # Direkte Ersetzung ohne \1 Backreferences, um Containerfile-Parser-Fehler zu vermeiden
-            sed -i -E 's/kHidControlPsm\s*=\s*0x[0-9a-fA-F]+/kHidControlPsm = 0x0021/g' src/platform/linux/vds_bt.cc && \
-            sed -i -E 's/kHidInterruptPsm\s*=\s*0x[0-9a-fA-F]+/kHidInterruptPsm = 0x0023/g' src/platform/linux/vds_bt.cc && \
+            # ERWEITERTER REGEX: Fängt den Typ-Präfix (constexpr...) und Whitespaces flexibel ab [I]
+            sed -i -E 's/.*kHidControlPsm\s*=\s*0x[0-9a-fA-F]+.*/constexpr std::uint16_t kHidControlPsm = 0x0021;/g' src/platform/linux/vds_bt.cc && \
+            sed -i -E 's/.*kHidInterruptPsm\s*=\s*0x[0-9a-fA-F]+.*/constexpr std::uint16_t kHidInterruptPsm = 0x0023;/g' src/platform/linux/vds_bt.cc && \
             mkdir -p build
 
         # Block 5: Initialize PKG_ROOT structure, build binaries independently, and stage files
@@ -98,7 +98,7 @@ modules:
         RUN KERNEL_VERSION=$(basename $(ls -d /usr/lib/modules/*fc* | head -n 1)) && \
             PKG_ROOT="/vds-pkg-root" && \
             mkdir -p "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra" && \
-            mkdir -p "${PKG_ROOT}/usr/lib/modules-load.d" && \
+            mkdir -p "${PKG_ROOT}/usr/modules-load.d" && \
             mkdir -p "${PKG_ROOT}/usr/bin" && \
             mkdir -p "${PKG_ROOT}/usr/lib/systemd/system/bluetooth.service.d" && \
             mkdir -p "${PKG_ROOT}/usr/lib/systemd/system-preset" && \
@@ -107,7 +107,7 @@ modules:
             mkdir -p "${PKG_ROOT}/usr/share/vdsd" && \
             mkdir -p "${PKG_ROOT}/usr/share/wireplumber/wireplumber.conf.d" && \
             \
-            # 1. Kernel-Modul stagen
+            # 1. Kernel-Modul stagen (Fest unter /usr/lib/modules... laut Protokoll Block 10)
             cp /vds_build_dir/module/vds_hcd.ko "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra/vds_hcd.ko" && \
             chmod 644 "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra/vds_hcd.ko" && \
             \
@@ -116,8 +116,8 @@ modules:
             cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS="-isystem /vds_build_dir/include" -DCMAKE_CXX_FLAGS="-isystem /vds_build_dir/include" && \
             make -j$(nproc) && \
             \
-            # 3. Proxy absolut autark kompilieren (OHNE Dummy-Header-Bezug!)
-            gcc -O2 -Wall /vds_build_dir/vds-proxy.c -o /vds_build_dir/build/vds-proxy -lsystemd && \
+            # 3. Proxy absolut autark kompilieren (OHNE Dummy-Header-Bezug und OHNE -lsystemd!) [I]
+            gcc -O3 -Wall /vds_build_dir/vds-proxy.c -o /vds_build_dir/build/vds-proxy && \
             \
             # 4. Alle fertigen Payloads stagen
             cp /vds_build_dir/build/vdsd "${PKG_ROOT}/usr/bin/vdsd" && \
