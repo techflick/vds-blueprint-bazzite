@@ -57,7 +57,7 @@ int connect_to_vdsd(uint16_t psm, uint8_t *mac) {
     addr.l2_family = AF_BLUETOOTH;
     addr.l2_psm = psm;
     
-    // Direktes Kopieren der vom Kernel gelieferten Byte-Reihenfolge
+    // Übergabe der gespiegelten MAC-Adresse an den Daemon
     memcpy(addr.l2_bdaddr, mac, 6);
     addr.l2_bdaddr_type = 0;
     
@@ -80,10 +80,10 @@ int main() {
         return 1;
     }
 
-    struct pollfd srv_fds[1];
-    srv_fds[0].fd = srv_ctrl; 
-    srv_fds[0].events = POLLIN; 
-    srv_fds[0].revents = 0;
+    struct pollfd srv_fds;
+    srv_fds.fd = srv_ctrl; 
+    srv_fds.events = POLLIN; 
+    srv_fds.revents = 0;
 
     int client_ctrl = -1, client_intr = -1;
     int vdsd_ctrl = -1, vdsd_intr = -1;
@@ -92,21 +92,25 @@ int main() {
     printf("vDS-Proxy: Warte auf Control-Kanal (PSM 0x11)...\n");
 
     // 1. Control-Kanal (0x11) abfangen & MAC isolieren
-    while (poll(srv_fds, 1, -1) > 0) {
-        if (srv_fds[0].revents & POLLIN) {
-            uint8_t sockaddr_storage[32]; 
+    while (poll(&srv_fds, 1, -1) > 0) {
+        if (srv_fds.revents & POLLIN) {
+            // Großer, neutraler Speicherblock fängt Layout-Schwankungen des Kernels ab
+            uint8_t sockaddr_storage[64]; 
             memset(sockaddr_storage, 0, sizeof(sockaddr_storage));
             socklen_t addr_len = sizeof(sockaddr_storage);
             
-             client_ctrl = accept(srv_ctrl, (struct sockaddr *)&raw_addr, &addr_len);
+            // FIX: Nutzt jetzt korrekt den deklarierten Speicherblock
+            client_ctrl = accept(srv_ctrl, (struct sockaddr *)sockaddr_storage, &addr_len);
             if (client_ctrl >= 0) {
-                // MAC-Endianness korrigieren: Kernel (Little-Endian) zu Daemon (Big-Endian)
-                target_mac[0] = raw_addr.l2_bdaddr[5];
-                target_mac[1] = raw_addr.l2_bdaddr[4];
-                target_mac[2] = raw_addr.l2_bdaddr[3];
-                target_mac[3] = raw_addr.l2_bdaddr[2];
-                target_mac[4] = raw_addr.l2_bdaddr[1];
-                target_mac[5] = raw_addr.l2_bdaddr[0];
+                struct sockaddr_l2_local *raw_addr = (struct sockaddr_l2_local *)sockaddr_storage;
+                
+                // MAC-Endianness korrigieren: Kernel (Little-Endian) zu Daemon (Big-Endian) spiegeln
+                target_mac[0] = raw_addr->l2_bdaddr[5];
+                target_mac[1] = raw_addr->l2_bdaddr[4];
+                target_mac[2] = raw_addr->l2_bdaddr[3];
+                target_mac[3] = raw_addr->l2_bdaddr[2];
+                target_mac[4] = raw_addr->l2_bdaddr[1];
+                target_mac[5] = raw_addr->l2_bdaddr[0];
                 
                 printf("vDS-Proxy: Control-Kanal verbunden. MAC (korrigiert): %02X:%02X:%02X:%02X:%02X:%02X\n",
                        target_mac[0], target_mac[1], target_mac[2],
@@ -116,10 +120,10 @@ int main() {
                 uint8_t peek_buf[1];
                 recv(client_ctrl, peek_buf, sizeof(peek_buf), MSG_PEEK | MSG_DONTWAIT);
                 
-                // Verbindet den Proxy jetzt mit der richtigen MAC zu vdsd
+                // Verbindet sofort weiter zu vdsd auf Ausweich-Port 0x0021
                 vdsd_ctrl = connect_to_vdsd(0x0021, target_mac);
                 if (vdsd_ctrl < 0) {
-                    fprintf(stderr, "vDS-Proxy: Weiterleitung zu vdsd auf Port 0x0021 fehlgeschlagen: %s\n", strerror(errno));
+                    fprintf(stderr, "vDS-Proxy: Weiterleitung zu vdsd auf Port 0x0021 fehlgeschlagen.\n");
                 }
             }
             break;
@@ -128,14 +132,14 @@ int main() {
 
     printf("vDS-Proxy: Warte auf Interrupt-Kanal (PSM 0x13)...\n");
 
-    struct pollfd srv_intr_fd[1];
-    srv_intr_fd[0].fd = srv_intr; 
-    srv_intr_fd[0].events = POLLIN; 
-    srv_intr_fd[0].revents = 0;
+    struct pollfd srv_intr_fd;
+    srv_intr_fd.fd = srv_intr; 
+    srv_intr_fd.events = POLLIN; 
+    srv_intr_fd.revents = 0;
 
-    while (poll(srv_intr_fd, 1, 5000) > 0) { // 5 Sekunden Timeout
-        if (srv_intr_fd[0].revents & POLLIN) {
-            uint8_t sockaddr_storage[32];
+    while (poll(&srv_intr_fd, 1, 5000) > 0) { // 5 Sekunden Timeout
+        if (srv_intr_fd.revents & POLLIN) {
+            uint8_t sockaddr_storage[64];
             memset(sockaddr_storage, 0, sizeof(sockaddr_storage));
             socklen_t addr_len = sizeof(sockaddr_storage);
             
