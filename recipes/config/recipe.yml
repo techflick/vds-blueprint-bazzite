@@ -111,12 +111,16 @@ modules:
             cp /vds_build_dir/module/vds_hcd.ko "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra/vds_hcd.ko" && \
             chmod 644 "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra/vds_hcd.ko" && \
             \
+            # 1b. Autoload für Kernel-Modul registrieren (Jetzt absolut crash-sicher!)
+            printf "vds_hcd\n" > "${PKG_ROOT}/usr/lib/modules-load.d/vds.conf" && \
+            chmod 644 "${PKG_ROOT}/usr/lib/modules-load.d/vds.conf" && \
+            \
             # 2. Daemon (vdsd) kompilieren (Nutzt isoliert die Dummy-Header aus CMake)
             cd /vds_build_dir/build && \
             cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS="-isystem /vds_build_dir/include" -DCMAKE_CXX_FLAGS="-isystem /vds_build_dir/include" && \
             make -j$(nproc) && \
             \
-            # 3. Proxy absolut autark kompilieren (OHNE Dummy-Header-Bezug und OHNE -lsystemd!) [I]
+            # 3. Proxy absolut autark kompilieren (OHNE Dummy-Header-Bezug und OHNE -lsystemd!)
             gcc -O3 -Wall /vds_build_dir/vds-proxy.c -o /vds_build_dir/build/vds-proxy && \
             \
             # 4. Alle fertigen Payloads stagen
