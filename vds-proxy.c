@@ -108,7 +108,6 @@ int main() {
 
     while (1) {
         if (state == 0) {
-            // Überwachung der Server-Sockets mit sicherem 1-Sekunden-Timeout gegen Boot-Freezes
             struct pollfd srv_fds[2];
             srv_fds[0].fd = srv_ctrl; srv_fds[0].events = POLLIN; srv_fds[0].revents = 0;
             srv_fds[1].fd = srv_intr; srv_fds[1].events = POLLIN; srv_fds[1].revents = 0;
@@ -118,7 +117,7 @@ int main() {
                 if (errno == EINTR) continue;
                 break;
             }
-            if (ret == 0) continue; // Kein Gerät da? Loop läuft weiter, blockiert aber nicht das System!
+            if (ret == 0) continue;
 
             // 1. Control-Kanal (PSM 0x11) nimmt Verbindung an
             if (srv_fds[0].revents & POLLIN) {
@@ -131,7 +130,7 @@ int main() {
                     set_nonblocking(client_ctrl);
                     struct sockaddr_l2_local *raw_addr = (struct sockaddr_l2_local *)sockaddr_storage;
                     
-                    // MAC spiegeln (Endianness-Fix)
+                    // Native Protokoll-Spiegelung laut Wissensprotokoll beibehalten
                     for(int i = 0; i < 6; i++) {
                         target_mac[i] = raw_addr->l2_bdaddr[5 - i];
                     }
@@ -161,13 +160,12 @@ int main() {
                 }
             }
 
-            // Wenn alle 4 Endpunkte stehen, schalte in den Tunnel-Modus
             if (client_ctrl >= 0 && client_intr >= 0 && vdsd_ctrl >= 0 && vdsd_intr >= 0) {
                 printf("vDS-Proxy: **Bidirektionaler Userspace-Tunnel aktiv!**\n");
                 state = 1;
             }
         } else {
-            // TUNNEL-MODUS: Volles, asynchrones Daten-Routing
+            // TUNNEL-MODUS: Volles, asynchrones Daten-Routing (CPU-gesichert)
             struct pollfd tunnel_fds[4];
             uint8_t buf[2048];
 
@@ -176,40 +174,57 @@ int main() {
             tunnel_fds[2].fd = client_intr; tunnel_fds[2].events = POLLIN; tunnel_fds[2].revents = 0;
             tunnel_fds[3].fd = vdsd_intr;   tunnel_fds[3].events = POLLIN; tunnel_fds[3].revents = 0;
 
-            // Kurzer Timeout im Tunnel, um Abbrüche sofort mitzubekommen
-            if (poll(tunnel_fds, 4, 500) <= 0) {
-                // Signalverlust-Schutz
-                int disconnect = 0;
-                for (int i = 0; i < 4; i++) {
-                    if (tunnel_fds[i].revents & (POLLHUP | POLLERR | POLLNVAL)) {
-                        disconnect = 1;
-                        break;
-                    }
-                }
-                if (disconnect) goto clean_disconnect;
-                continue;
+            int ret = poll(tunnel_fds, 4, 500);
+            
+            // System-Fehler abfangen (verhindert unendliche -1 Loops)
+            if (ret < 0) {
+                if (errno == EINTR) continue;
+                goto clean_disconnect;
             }
+
+            // Unabhängig vom Rückgabewert: Sockets immer auf Abbruch prüfen
+            for (int i = 0; i < 4; i++) {
+                if (tunnel_fds[i].revents & (POLLHUP | POLLERR | POLLNVAL)) {
+                    goto clean_disconnect;
+                }
+            }
+
+            // Reiner Timeout (keine Daten, Sockets gesund): Schlafen und Neustarten
+            if (ret == 0) continue;
 
             // Daten-Weichen-Routing (Control)
             if (tunnel_fds[0].revents & POLLIN) {
                 int len = recv(client_ctrl, buf, sizeof(buf), 0);
-                if (len <= 0) goto clean_disconnect;
+                if (len <= 0) {
+                    if (len < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) continue;
+                    goto clean_disconnect;
+                }
                 send(vdsd_ctrl, buf, len, 0);
             }
             if (tunnel_fds[1].revents & POLLIN) {
                 int len = recv(vdsd_ctrl, buf, sizeof(buf), 0);
-                if (len <= 0) goto clean_disconnect;
+                if (len <= 0) {
+                    if (len < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) continue;
+                    goto clean_disconnect;
+                }
                 send(client_ctrl, buf, len, 0);
             }
+
             // Daten-Weichen-Routing (Interrupt)
             if (tunnel_fds[2].revents & POLLIN) {
                 int len = recv(client_intr, buf, sizeof(buf), 0);
-                if (len <= 0) goto clean_disconnect;
+                if (len <= 0) {
+                    if (len < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) continue;
+                    goto clean_disconnect;
+                }
                 send(vdsd_intr, buf, len, 0);
             }
             if (tunnel_fds[3].revents & POLLIN) {
                 int len = recv(vdsd_intr, buf, sizeof(buf), 0);
-                if (len <= 0) goto clean_disconnect;
+                if (len <= 0) {
+                    if (len < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) continue;
+                    goto clean_disconnect;
+                }
                 send(client_intr, buf, len, 0);
             }
             continue;
@@ -221,7 +236,7 @@ int main() {
             if (vdsd_ctrl >= 0) close(vdsd_ctrl);
             if (vdsd_intr >= 0) close(vdsd_intr);
             client_ctrl = client_intr = vdsd_ctrl = vdsd_intr = -1;
-            state = 0; // Zurück in den Warte-Modus, kein Programmabsturz!
+            state = 0; // Zurück in den Warte-Modus
         }
     }
 
