@@ -147,11 +147,11 @@ int main() {
             }
 
             if (client_ctrl >= 0 && client_intr >= 0) {
-                printf("vDS-Proxy: Reiche Daten ueber RAM-Dateien an den Daemon weiter...\n");
+                printf("vDS-Proxy: Reiche Daten ueber RAM-Sockets an den Daemon weiter...\n");
                 
-                // Da vdsd durch AF_UNIX nun unter /var/lib/vdsd/ lauscht, binden wir uns direkt ein
-                vdsd_ctrl = connect_unix_pipe("/var/lib/vdsd/vdsd_ctrl.sock");
-                vdsd_intr = connect_unix_pipe("/var/lib/vdsd/vdsd_intr.sock");
+                // Wir binden uns direkt an die vom Daemon im Arbeitsverzeichnis erzeugten Kurz-Pipes
+                vdsd_ctrl = connect_unix_pipe("v_c");
+                vdsd_intr = connect_unix_pipe("v_i");
 
                 if (vdsd_ctrl >= 0 && vdsd_intr >= 0) {
                     printf("vDS-Proxy: **Latenzfreie Speicher-Pipeline aktiv!**\n");
