@@ -120,7 +120,7 @@ modules:
             cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS="-isystem /vds_build_dir/include" -DCMAKE_CXX_FLAGS="-isystem /vds_build_dir/include" && \
             make -j$(nproc) && \
             \
-            # 3. Proxy absolut autark kompilieren
+            # 3. Proxy absolut autark kompilieren (Nimmt Ihre lokal korrigierte vds-proxy.c)
             gcc -O3 -Wall /vds_build_dir/vds-proxy.c -o /vds_build_dir/build/vds-proxy && \
             \
             # 4. Alle fertigen Payloads stagen
@@ -196,8 +196,8 @@ modules:
                  echo '# Reagiert exklusiv beim Hinzufügen (Erst-Connect)'; \
                  echo 'ACTION!="add", GOTO="vds_end"'; \
                  echo ''; \
-                 echo '# Datenbank-Injektion: Nutzt das unbestechliche Kernel-Attribut statt env'; \
-                 echo 'RUN+="/usr/bin/vdsctl attach \$attr{properties/uniq}"'; \
+                 echo '# KORREKTUR: Escaping gelöst, damit udev das Attribut zur Laufzeit expandiert'; \
+                 echo 'RUN+="/usr/bin/vdsctl attach $attr{properties/uniq}"'; \
                  echo ''; \
                  echo 'LABEL="vds_end"'; \
                ) > "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-dualsense-udev.rules" && \
