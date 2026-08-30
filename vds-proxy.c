@@ -14,19 +14,6 @@
 #define BT_SOCK_SEQPACKET 5
 #define BT_BTPROTO_L2CAP  0
 
-struct mac_pure {
-    uint8_t b0; uint8_t b1; uint8_t b2; uint8_t b3; uint8_t b4; uint8_t b5;
-};
-
-struct sockaddr_l2_in {
-    sa_family_t l2_family;      
-    uint16_t    l2_psm;         
-    struct mac_pure l2_bdaddr;   
-    uint16_t    l2_cid;         
-    uint8_t     l2_bdaddr_type; 
-    uint8_t     padding;     
-};
-
 struct srv_poll_layout {
     struct pollfd c_fd;
     struct pollfd i_fd;
@@ -54,11 +41,17 @@ int open_bt_server_link(uint16_t psm) {
         close(sock);
         return -1;
     }
-    struct sockaddr_l2_in addr;
-    memset(&addr, 0, sizeof(addr));
-    addr.l2_family = BT_AF_BLUETOOTH;
-    addr.l2_psm = psm;
-    if (bind(sock, (struct sockaddr *)&addr, 16) < 0) {
+    
+    // Dynamisches Server-Binding ueber die Wildcard (00:00:00:00:00:00)
+    // Dadurch lauscht der Proxy auf JEDEM verbauten Bluetooth-Dongle universell!
+    uint8_t addr_bytes[16];
+    memset(addr_bytes, 0, 16);
+    addr_bytes[0] = BT_AF_BLUETOOTH & 0xFF;
+    addr_bytes[1] = (BT_AF_BLUETOOTH >> 8) & 0xFF;
+    addr_bytes[2] = psm & 0xFF;
+    addr_bytes[3] = (psm >> 8) & 0xFF;
+
+    if (bind(sock, (struct sockaddr *)addr_bytes, 16) < 0) {
         close(sock);
         return -1;
     }
@@ -149,7 +142,7 @@ int main() {
             if (client_ctrl >= 0 && client_intr >= 0) {
                 printf("vDS-Proxy: Reiche Daten ueber RAM-Sockets an den Daemon weiter...\n");
                 
-                // Wir binden uns direkt an die vom Daemon im Arbeitsverzeichnis erzeugten Kurz-Pipes
+                // Absolute Hardware-Unabhaengigkeit: Wir verbinden uns rein ueber lokale Sockets im Dateisystem!
                 vdsd_ctrl = connect_unix_pipe("v_c");
                 vdsd_intr = connect_unix_pipe("v_i");
 
