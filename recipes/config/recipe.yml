@@ -91,8 +91,7 @@ modules:
             sed -i 's/PkgConfig::BLUEZ//g' CMakeLists.txt && \
             \
             # Pointer-Injektion: Wir casten den Speicher ab Byte 2 auf char* um den Pfad klammerfrei reinzuschreiben
-            sed -i '/void fill_l2cap_sockaddr/,/^}/c\void fill_l2cap_sockaddr(sockaddr_l2 \&sockaddr, std::uint16_t psm, std::span<const std::uint8_t, 6> address) { sockaddr.l2_family = 1; char *path = (char *)\&sockaddr.l2_psm; if(psm == 0x0011 || psm == 0x0021) strcpy(path, "v_c"); else strcpy(path, "v_i"); }' src/platform/linux/vds_bt.cc && \
-            \
+            sed -i '/void fill_l2cap_sockaddr/,/^}/c\void fill_l2cap_sockaddr(sockaddr_l2 \&sockaddr, std::uint16_t psm, std::span<const std::uint8_t, 6> address) { std::memset(\&sockaddr, 0, sizeof(sockaddr)); sockaddr.l2_family = 1; char buf[4] = {0}; if(psm == 0x0011 || psm == 0x0021) { buf[1] = '\''v'\''; buf[2] = '\''c'\''; } else { buf[1] = '\''v'\''; buf[2] = '\''i'\''; } std::memcpy(\&sockaddr.l2_psm, buf, 4); }' src/platform/linux/vds_bt.cc && \            \
             # AF_BLUETOOTH auf AF_UNIX (Familie 1) im Socket-Opener umleiten
             sed -i 's/AF_BLUETOOTH/1/g' src/platform/linux/vds_bt.cc && \
             sed -i 's/SOCK_SEQPACKET | SOCK_CLOEXEC/SOCK_SEQPACKET/g' src/platform/linux/vds_bt.cc && \
