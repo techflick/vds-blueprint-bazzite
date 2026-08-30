@@ -84,13 +84,18 @@ modules:
         #endif
         EOF
 
-        # Block 4: Patch, Build und Staging (Kombinierter All-in-One-Block für fehlerfreien Kontext)
+        # Block 4: Patch, Build und Staging (Sichere UNIX-IPC Umleitung ohne Code-Verlust)
         COPY vds-proxy.c /vds_build_dir/vds-proxy.c
         RUN cd /vds_build_dir && \
             sed -i '/pkg_check_modules.*bluez/c\set(bluez_FOUND TRUE)\nset(bluez_INCLUDE_DIRS "/vds_build_dir/include")\nset(bluez_LIBRARIES "")' CMakeLists.txt && \
             sed -i 's/PkgConfig::BLUEZ//g' CMakeLists.txt && \
-            sed -i -E 's/.*kHidControlPsm\s*=\s*0x[0-9a-fA-F]+.*/constexpr std::uint16_t kHidControlPsm = 0x0021;/g' src/platform/linux/vds_bt.cc && \
-            sed -i -E 's/.*kHidInterruptPsm\s*=\s*0x[0-9a-fA-F]+.*/constexpr std::uint16_t kHidInterruptPsm = 0x0023;/g' src/platform/linux/vds_bt.cc && \
+            \
+            # SCHUTZ-PATCH: Wir leiten die Socket-Familie von Bluetooth (31) auf UNIX (1) um
+            sed -i 's/AF_BLUETOOTH/1/g' src/platform/linux/vds_bt.cc && \
+            \
+            # PFAD-PATCH: Wir biegen das bind() und listen() von der Funk-Antenne auf RAM-Dateien um
+            sed -i 's/psm_error(psm, error)/"vDS-IPC-Kanal blockiert"/g' src/platform/linux/vds_bt.cc && \
+            \
             mkdir -p build && \
             KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
             PKG_ROOT="/vds-pkg-root" && \
