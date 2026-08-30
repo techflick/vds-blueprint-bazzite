@@ -97,19 +97,17 @@ modules:
             echo '    std::memset(&sockaddr, 0, sizeof(sockaddr));' >> /tmp/new_func.cc && \
             echo '    sockaddr.l2_family = 1;' >> /tmp/new_func.cc && \
             echo '    char buf[4] = {0, 0, 0, 0};' >> /tmp/new_func.cc && \
-            echo '    buf[0] = 0;' >> /tmp/new_func.cc && \
             echo '    buf[1] = '"'"'v'"'"';' >> /tmp/new_func.cc && \
             echo '    if(psm == 0x0011 || psm == 0x0021) { buf[2] = '"'"'c'"'"'; }' >> /tmp/new_func.cc && \
             echo '    else { buf[2] = '"'"'i'"'"'; }' >> /tmp/new_func.cc && \
             echo '    std::memcpy(&sockaddr.l2_psm, buf, 4);' >> /tmp/new_func.cc && \
             echo '}' >> /tmp/new_func.cc
 
-        # III. Den alten L2CAP-Block gezielt loeschen und den neuen RAM-Socket-Block verankern
-        # Wir loeschen das Original und fuegen die neue Funktion direkt VOR dem Ende des anonymen Namespaces ein.
+        # III. Den alten L2CAP-Block gezielt loeschen und die neue Funktion ganz oben verankern
+        # Das loescht die alte Funktion rückstandslos und injiziert die neue direkt hinter den Include-Statements.
         RUN cd /vds_build_dir && \
             sed -i '/void fill_l2cap_sockaddr/,/^}/d' src/platform/linux/vds_bt.cc && \
-            sed -i '/^} \/\/ namespace/e cat /tmp/new_func.cc' src/platform/linux/vds_bt.cc && \
-            sed -i '/^} \/\/ namespace/i \\' src/platform/linux/vds_bt.cc && \
+            sed -i '/#include/ { :a; n; /#include/ba; r /tmp/new_func.cc' -e '}' src/platform/linux/vds_bt.cc && \
             rm -f /tmp/new_func.cc
 
         # IV. Kernel-Bypass Patches (Anpassung von AF_BLUETOOTH auf AF_UNIX / Familie 1)
