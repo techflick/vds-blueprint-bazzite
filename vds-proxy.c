@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <stddef.h>
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <sys/poll.h>
@@ -48,7 +49,6 @@ int open_bt_server_link(uint16_t psm) {
     return sock;
 }
 
-// KORRIGIERT: Nutzt nun den abstrakten RAM-Namensraum passend zum Daemon-Patch
 int connect_unix_pipe(const char *name) {
     int sock = socket(AF_UNIX, SOCK_SEQPACKET, 0);
     if (sock < 0) return -1;
@@ -61,12 +61,11 @@ int connect_unix_pipe(const char *name) {
     memset(&addr, 0, sizeof(addr));
     addr.sun_family = AF_UNIX;
     
-    // Das erste Byte MUSS 0 sein für den abstrakten Namensraum!
+    // Index 0 ist \0 für abstrakten Namespace
     addr.sun_path[0] = '\0';
-    // Der Name wird direkt dahinter ab Index 1 in den Puffer geschoben
+    // Name folgt ab Index 1
     strncpy(&addr.sun_path[1], name, sizeof(addr.sun_path) - 2);
     
-    // Berechnen der exakten Strukturlaenge fuer den abstrakten Kernel-Aufruf
     int len = offsetof(struct sockaddr_un, sun_path) + 1 + strlen(name);
 
     int res = connect(sock, (struct sockaddr *)&addr, len);
@@ -105,7 +104,6 @@ int main() {
             srv_fds[0].fd = srv_ctrl; srv_fds[0].events = POLLIN;
             srv_fds[1].fd = srv_intr; srv_fds[1].events = POLLIN;
 
-            // Ein einziger kompakter Poll-Aufruf fuer beide Server-Kanäle
             int ret = poll(srv_fds, 2, 100);
             if (ret > 0) {
                 if (srv_fds[0].revents & POLLIN) {
@@ -137,7 +135,6 @@ int main() {
             if (client_ctrl >= 0 && client_intr >= 0) {
                 printf("vDS-Proxy: Reiche Daten ueber RAM-Sockets an den Daemon weiter...\n");
                 
-                // Absolute Schreibrechte-Unabhaengigkeit: Abstrakte RAM-Verbindungen initiieren
                 vdsd_ctrl = connect_unix_pipe("v_c");
                 vdsd_intr = connect_unix_pipe("v_i");
 
@@ -149,7 +146,6 @@ int main() {
                 goto shutdown_link;
             }
         } else {
-            // OPTIMIERT: Alle 4 Kanaele in einem einzigen, synchronen Poll-Array bündeln
             struct pollfd tunnel_fds[4];
             memset(tunnel_fds, 0, sizeof(tunnel_fds));
             tunnel_fds[0].fd = client_ctrl; tunnel_fds[0].events = POLLIN;
@@ -157,7 +153,6 @@ int main() {
             tunnel_fds[2].fd = client_intr; tunnel_fds[2].events = POLLIN;
             tunnel_fds[3].fd = vdsd_intr;   tunnel_fds[3].events = POLLIN;
 
-            // Timeout auf 5ms setzen, aber fuer ALLE zeitgleich auswerten!
             int ret = poll(tunnel_fds, 4, 5);
 
             if (ret > 0) {
