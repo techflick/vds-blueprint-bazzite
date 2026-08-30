@@ -84,43 +84,67 @@ modules:
         #endif
         EOF
 
-        # Block 4: Patch, Build und Staging (Sichere UNIX-IPC Umleitung über Byte-Array-Cast)
+        # Block 4: Patch, Build und Staging (KORRIGIERTE UNIX-IPC-VERSION)
         COPY vds-proxy.c /vds_build_dir/vds-proxy.c
         RUN cd /vds_build_dir && \
+            # I. BlueZ-Paketprüfung im CMake-Skript aushebeln
             sed -i '/pkg_check_modules.*bluez/c\set(bluez_FOUND TRUE)\nset(bluez_INCLUDE_DIRS "/vds_build_dir/include")\nset(bluez_LIBRARIES "")' CMakeLists.txt && \
             sed -i 's/PkgConfig::BLUEZ//g' CMakeLists.txt && \
             \
-            # Pointer-Injektion: Wir casten den Speicher ab Byte 2 auf char* um den Pfad klammerfrei reinzuschreiben
-            sed -i '/void fill_l2cap_sockaddr/,/^}/c\void fill_l2cap_sockaddr(sockaddr_l2 \&sockaddr, std::uint16_t psm, std::span<const std::uint8_t, 6> address) { std::memset(\&sockaddr, 0, sizeof(sockaddr)); sockaddr.l2_family = 1; char buf[4] = {0}; if(psm == 0x0011 || psm == 0x0021) { buf[1] = '\''v'\''; buf[2] = '\''c'\''; } else { buf[1] = '\''v'\''; buf[2] = '\''i'\''; } std::memcpy(\&sockaddr.l2_psm, buf, 4); }' src/platform/linux/vds_bt.cc && \            \
-            # AF_BLUETOOTH auf AF_UNIX (Familie 1) im Socket-Opener umleiten
+            # II. Den neuen abstrakten UNIX-Socket-Code in eine temporäre Datei schreiben
+            echo 'void fill_l2cap_sockaddr(sockaddr_l2 &sockaddr, std::uint16_t psm, std::span<const std::uint8_t, 6> address) {' > /tmp/new_func.cc && \
+            echo '    std::memset(&sockaddr, 0, sizeof(sockaddr));' >> /tmp/new_func.cc && \
+            echo '    sockaddr.l2_family = 1;' >> /tmp/new_func.cc && \
+            echo '    char buf[4] = {0, 0, 0, 0};' >> /tmp/new_func.cc && \
+            echo '    buf[1] = '"'"'v'"'"';' >> /tmp/new_func.cc && \
+            echo '    if(psm == 0x0011 || psm == 0x0021) { buf[2] = '"'"'c'"'"'; }' >> /tmp/new_func.cc && \
+            echo '    else { buf[2] = '"'"'i'"'"'; }' >> /tmp/new_func.cc && \
+            echo '    std::memcpy(&sockaddr.l2_psm, buf, 4);' >> /tmp/new_func.cc && \
+            echo '}' >> /tmp/new_func.cc && \
+            \
+            # III. Den alten L2CAP-Block gezielt loeschen und den neuen RAM-Socket-Block verankern
+            sed -i '/void fill_l2cap_sockaddr/,/^}/ { /^}/r /tmp/new_func.cc' -e 'd }' src/platform/linux/vds_bt.cc && \
+            rm -f /tmp/new_func.cc && \
+            \
+            # IV. Kernel-Bypass Patches (Anpassung von AF_BLUETOOTH auf AF_UNIX / Familie 1)
+            sed -i 's/sizeof(peer)/14/g' src/platform/linux/vds_bt.cc && \
             sed -i 's/AF_BLUETOOTH/1/g' src/platform/linux/vds_bt.cc && \
             sed -i 's/SOCK_SEQPACKET | SOCK_CLOEXEC/SOCK_SEQPACKET/g' src/platform/linux/vds_bt.cc && \
             sed -i 's/if (peer_size < sizeof(peer))/if (false)/g' src/platform/linux/vds_bt.cc && \
             \
+            # V. Build-Verzeichnisse vorbereiten und Staging-Umgebung aufbauen
             mkdir -p build && \
-            KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
+            KERNEL_VERSION=\$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
             PKG_ROOT="/vds-pkg-root" && \
-            mkdir -p "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra" && \
-            mkdir -p "${PKG_ROOT}/usr/lib/modules-load.d" && \
-            mkdir -p "${PKG_ROOT}/usr/bin" && \
-            mkdir -p "${PKG_ROOT}/usr/lib/systemd/system/bluetooth.service.d" && \
-            mkdir -p "${PKG_ROOT}/usr/lib/systemd/system-preset" && \
-            mkdir -p "${PKG_ROOT}/usr/share/dbus-1/system.d" && \
-            mkdir -p "${PKG_ROOT}/usr/lib/udev/rules.d" && \
-            mkdir -p "${PKG_ROOT}/usr/share/vdsd" && \
-            mkdir -p "${PKG_ROOT}/etc/wireplumber/wireplumber.conf.d" && \
-            cp /vds_build_dir/module/vds_hcd.ko "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra/vds_hcd.ko" && \
-            chmod 644 "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra/vds_hcd.ko" && \
-            printf "vds_hcd\n" > "${PKG_ROOT}/usr/lib/modules-load.d/vds.conf" && \
-            chmod 644 "${PKG_ROOT}/usr/lib/modules-load.d/vds.conf" && \
+            mkdir -p "\${PKG_ROOT}/usr/lib/modules/\${KERNEL_VERSION}/extra" && \
+            mkdir -p "\${PKG_ROOT}/usr/lib/modules-load.d" && \
+            mkdir -p "\${PKG_ROOT}/usr/bin" && \
+            mkdir -p "\${PKG_ROOT}/usr/lib/systemd/system/bluetooth.service.d" && \
+            mkdir -p "\${PKG_ROOT}/usr/lib/systemd/system-preset" && \
+            mkdir -p "\${PKG_ROOT}/usr/share/dbus-1/system.d" && \
+            mkdir -p "\${PKG_ROOT}/usr/lib/udev/rules.d" && \
+            mkdir -p "\${PKG_ROOT}/usr/share/vdsd" && \
+            mkdir -p "\${PKG_ROOT}/etc/wireplumber/wireplumber.conf.d" && \
+            \
+            # VI. Kernel-Modul kopieren und Autoload einrichten
+            cp /vds_build_dir/module/vds_hcd.ko "\text{–}\${PKG_ROOT}/usr/lib/modules/\${KERNEL_VERSION}/extra/vds_hcd.ko" && \
+            chmod 644 "\text{–}\s\${PKG_ROOT}/usr/lib/modules/\${KERNEL_VERSION}/extra/vds_hcd.ko" && \
+            printf "vds_hcd\n" > "\${PKG_ROOT}/usr/lib/modules-load.d/vds.conf" && \
+            chmod 644 "\${PKG_ROOT}/usr/lib/modules-load.d/vds.conf" && \
+            \
+            # VII. Daemon kompilieren und Binaries verknuepfen
             cd build && \
             cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS="-isystem /vds_build_dir/include" -DCMAKE_CXX_FLAGS="-isystem /vds_build_dir/include" && \
-            make -j$(nproc) && \
+            make -j\$(nproc) && \
+            \
+            # VIII. Eigenen Proxy mit isoliertem Kontext bauen
             gcc -O3 -Wall /vds_build_dir/vds-proxy.c -o /vds_build_dir/build/vds-proxy && \
-            cp /vds_build_dir/build/vdsd "${PKG_ROOT}/usr/bin/vdsd" && \
-            cp /vds_build_dir/build/vdsctl "${PKG_ROOT}/usr/bin/vdsctl" && \
-            cp /vds_build_dir/build/vds-proxy "${PKG_ROOT}/usr/bin/vds-proxy" && \
-            chmod 755 "${PKG_ROOT}/usr/bin/vdsd" "${PKG_ROOT}/usr/bin/vdsctl" "${PKG_ROOT}/usr/bin/vds-proxy"
+            \
+            # IX. Finales Staging der ausfuehrbaren Dateien
+            cp /vds_build_dir/build/vdsd "\${PKG_ROOT}/usr/bin/vdsd" && \
+            cp /vds_build_dir/build/vdsctl "\${PKG_ROOT}/usr/bin/vdsctl" && \
+            cp /vds_build_dir/build/vds-proxy "\${PKG_ROOT}/usr/bin/vds-proxy" && \
+            chmod 755 "\${PKG_ROOT}/usr/bin/vdsd" "\${PKG_ROOT}/usr/bin/vdsctl" "\${PKG_ROOT}/usr/bin/vds-proxy"
 
         # Block 5: Deploy system daemons mit korrigiertem Pfad /var/lib/vdsd & Systemd-Presets
         RUN PKG_ROOT="/vds-pkg-root" && \
