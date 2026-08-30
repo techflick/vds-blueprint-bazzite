@@ -23,14 +23,12 @@ struct sockaddr_l2_local {
     uint8_t     padding[3];     // 3 Byte -> Ergibt exakt 16 Byte
 };
 
-// Setzt Sockets auf Non-Blocking, um Kernel-Deadlocks zu verhindern
 int set_nonblocking(int fd) {
     int flags = fcntl(fd, F_GETFL, 0);
     if (flags == -1) return -1;
     return fcntl(fd, F_SETFL, flags | O_NONBLOCK);
 }
 
-// Erstellt den Server-Socket für eingehende Controller-Verbindungen
 int create_server_socket(uint16_t psm) {
     int sock = socket(AF_BLUETOOTH, SOCK_SEQPACKET, BTPROTO_L2CAP);
     if (sock < 0) return -1;
@@ -59,7 +57,6 @@ int create_server_socket(uint16_t psm) {
     return sock;
 }
 
-// Baut die Weiterleitung zum via Regex gepatchten vdsd-Daemon auf
 int connect_to_vdsd(uint16_t psm, uint8_t *mac) {
     int sock = socket(AF_BLUETOOTH, SOCK_SEQPACKET, BTPROTO_L2CAP);
     if (sock < 0) return -1;
@@ -86,7 +83,6 @@ int connect_to_vdsd(uint16_t psm, uint8_t *mac) {
 }
 
 int main() {
-    // Ungepuffertes Logging für Systemd/Journalctl erzwingen
     setvbuf(stdout, NULL, _IOLBF, 0);
     setvbuf(stderr, NULL, _IOLBF, 0);
 
@@ -102,7 +98,7 @@ int main() {
     int client_ctrl = -1, client_intr = -1;
     int vdsd_ctrl = -1, vdsd_intr = -1;
     uint8_t target_mac[6] = {0};
-    int state = 0; // 0 = Warte auf Controller, 1 = Tunnel aktiv
+    int state = 0; 
 
     printf("vDS-Proxy: Initialisierung erfolgreich. Warte auf Geräte...\n");
 
@@ -126,22 +122,21 @@ int main() {
                 int tmp_client = accept(srv_ctrl, (struct sockaddr *)sockaddr_storage, &addr_len);
                 
                 if (tmp_client >= 0) {
+                    if (client_ctrl >= 0) close(client_ctrl); 
                     client_ctrl = tmp_client;
                     set_nonblocking(client_ctrl);
                     struct sockaddr_l2_local *raw_addr = (struct sockaddr_l2_local *)sockaddr_storage;
                     
-                    // Native Protokoll-Spiegelung laut Wissensprotokoll beibehalten
+                    // WICHTIGER ARCHITEKTUR-FOKUS: Invertiert die MAC, da vdsd sie gedreht erwartet!
                     for(int i = 0; i < 6; i++) {
                         target_mac[i] = raw_addr->l2_bdaddr[5 - i];
                     }
                     
-                    printf("vDS-Proxy: Control-Kanal aktiv. MAC: %02X:%02X:%02X:%02X:%02X:%02X\n",
+                    printf("vDS-Proxy: Control-Kanal aktiv. Invertierte Ziel-MAC: %02X:%02X:%02X:%02X:%02X:%02X\n",
                            target_mac[0], target_mac[1], target_mac[2], target_mac[3], target_mac[4], target_mac[5]);
                     
                     uint8_t peek_buf[1];
                     recv(client_ctrl, peek_buf, sizeof(peek_buf), MSG_PEEK | MSG_DONTWAIT);
-                    
-                    vdsd_ctrl = connect_to_vdsd(0x0021, target_mac);
                 }
             }
 
@@ -152,20 +147,27 @@ int main() {
                 int tmp_client = accept(srv_intr, (struct sockaddr *)sockaddr_storage, &addr_len);
                 
                 if (tmp_client >= 0) {
+                    if (client_intr >= 0) close(client_intr); 
                     client_intr = tmp_client;
                     set_nonblocking(client_intr);
                     printf("vDS-Proxy: Interrupt-Kanal aktiv.\n");
-                    
-                    vdsd_intr = connect_to_vdsd(0x0023, target_mac);
                 }
             }
 
-            if (client_ctrl >= 0 && client_intr >= 0 && vdsd_ctrl >= 0 && vdsd_intr >= 0) {
-                printf("vDS-Proxy: **Bidirektionaler Userspace-Tunnel aktiv!**\n");
-                state = 1;
+            // Erst wenn beide physischen Kanäle bereitstehen, wird vdsd gekoppelt
+            if (client_ctrl >= 0 && client_intr >= 0) {
+                vdsd_ctrl = connect_to_vdsd(0x0021, target_mac);
+                vdsd_intr = connect_to_vdsd(0x0023, target_mac);
+
+                if (vdsd_ctrl >= 0 && vdsd_intr >= 0) {
+                    printf("vDS-Proxy: **Bidirektionaler Userspace-Tunnel aktiv!**\n");
+                    state = 1;
+                } else {
+                    fprintf(stderr, "vDS-Proxy: Weiterleitung an vdsd fehlgeschlagen. Setze Kanäle zurück.\n");
+                    goto clean_disconnect;
+                }
             }
         } else {
-            // TUNNEL-MODUS: Volles, asynchrones Daten-Routing (CPU-gesichert)
             struct pollfd tunnel_fds[4];
             uint8_t buf[2048];
 
@@ -176,20 +178,17 @@ int main() {
 
             int ret = poll(tunnel_fds, 4, 500);
             
-            // System-Fehler abfangen (verhindert unendliche -1 Loops)
             if (ret < 0) {
                 if (errno == EINTR) continue;
                 goto clean_disconnect;
             }
 
-            // Unabhängig vom Rückgabewert: Sockets immer auf Abbruch prüfen
             for (int i = 0; i < 4; i++) {
                 if (tunnel_fds[i].revents & (POLLHUP | POLLERR | POLLNVAL)) {
                     goto clean_disconnect;
                 }
             }
 
-            // Reiner Timeout (keine Daten, Sockets gesund): Schlafen und Neustarten
             if (ret == 0) continue;
 
             // Daten-Weichen-Routing (Control)
@@ -209,7 +208,7 @@ int main() {
                 }
                 send(client_ctrl, buf, len, 0);
             }
-
+            
             // Daten-Weichen-Routing (Interrupt)
             if (tunnel_fds[2].revents & POLLIN) {
                 int len = recv(client_intr, buf, sizeof(buf), 0);
@@ -236,7 +235,7 @@ int main() {
             if (vdsd_ctrl >= 0) close(vdsd_ctrl);
             if (vdsd_intr >= 0) close(vdsd_intr);
             client_ctrl = client_intr = vdsd_ctrl = vdsd_intr = -1;
-            state = 0; // Zurück in den Warte-Modus
+            state = 0; 
         }
     }
 
