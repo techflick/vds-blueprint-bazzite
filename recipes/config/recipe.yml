@@ -92,8 +92,9 @@ modules:
             sed -i '/pkg_check_modules.*bluez/c\set(bluez_FOUND TRUE)\nset(bluez_INCLUDE_DIRS "/vds_build_dir/include")\nset(bluez_LIBRARIES "")' CMakeLists.txt && \
             sed -i 's/PkgConfig::BLUEZ//g' CMakeLists.txt
 
-        # II. Die echte abstrakte UNIX-Socket-Funktion fuer das Dateiende vorbereiten
-        RUN echo 'void fill_l2cap_sockaddr(sockaddr_l2 &sockaddr, std::uint16_t psm, std::span<const std::uint8_t, 6> address) {' > /tmp/new_func.cc && \
+        # II. Die echte abstrakte UNIX-Socket-Funktion verpackt in die korrekten Namespaces schreiben
+        RUN echo 'namespace vds { namespace {' > /tmp/new_func.cc && \
+            echo 'void fill_l2cap_sockaddr(sockaddr_l2 &sockaddr, std::uint16_t psm, std::span<const std::uint8_t, 6> address) {' >> /tmp/new_func.cc && \
             echo '    std::memset(&sockaddr, 0, sizeof(sockaddr));' >> /tmp/new_func.cc && \
             echo '    sockaddr.l2_family = 1;' >> /tmp/new_func.cc && \
             echo '    char buf[4] = {0, 0, 0, 0};' >> /tmp/new_func.cc && \
@@ -101,10 +102,10 @@ modules:
             echo '    if(psm == 0x0011 || psm == 0x0021) { buf[2] = '"'"'c'"'"'; }' >> /tmp/new_func.cc && \
             echo '    else { buf[2] = '"'"'i'"'"'; }' >> /tmp/new_func.cc && \
             echo '    std::memcpy(&sockaddr.l2_psm, buf, 4);' >> /tmp/new_func.cc && \
-            echo '}' >> /tmp/new_func.cc
+            echo '}' >> /tmp/new_func.cc && \
+            echo '}} // closing anonymous and vds namespace' >> /tmp/new_func.cc
 
         # III. Original-Logik loeschen, Forward Declaration hinterlassen, Inhalt ans Ende haengen
-        # Wir ersetzen den alten Block durch einen reinen Prototyp-String, der den Namespace nicht verletzt.
         RUN cd /vds_build_dir && \
             sed -i '/void fill_l2cap_sockaddr/,/^}/c\void fill_l2cap_sockaddr(sockaddr_l2 \&sockaddr, std::uint16_t psm, std::span<const std::uint8_t, 6> address);' src/platform/linux/vds_bt.cc && \
             cat /tmp/new_func.cc >> src/platform/linux/vds_bt.cc && \
@@ -149,7 +150,7 @@ modules:
             cp /vds_build_dir/build/vdsctl "${PKG_ROOT}/usr/bin/vdsctl" && \
             cp /vds_build_dir/build/vds-proxy "${PKG_ROOT}/usr/bin/vds-proxy" && \
             chmod 755 "${PKG_ROOT}/usr/bin/vdsd" "${PKG_ROOT}/usr/bin/vdsctl" "${PKG_ROOT}/usr/bin/vds-proxy"
-
+            
         # Block 5: Deploy system daemons mit korrigiertem Pfad /var/lib/vdsd & Systemd-Presets
         RUN PKG_ROOT="/vds-pkg-root" && \
             printf "enable vdsd.service\nenable vds-proxy.service\nenable vds-chmod-sdp.path\n" > "${PKG_ROOT}/usr/lib/systemd/system-preset/99-vds.preset" && \
