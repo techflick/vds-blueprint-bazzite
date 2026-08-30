@@ -14,18 +14,6 @@
 #define BT_SOCK_SEQPACKET 5
 #define BT_BTPROTO_L2CAP  0
 
-struct srv_poll_layout {
-    struct pollfd c_fd;
-    struct pollfd i_fd;
-};
-
-struct shuttle_poll_layout {
-    struct pollfd cc;
-    struct pollfd vc;
-    struct pollfd ci;
-    struct pollfd vi;
-};
-
 int set_nonblocking_fd(int fd) {
     int fl = fcntl(fd, F_GETFL, 0);
     if (fl == -1) return -1;
@@ -42,8 +30,6 @@ int open_bt_server_link(uint16_t psm) {
         return -1;
     }
     
-    // Dynamisches Server-Binding ueber die Wildcard (00:00:00:00:00:00)
-    // Dadurch lauscht der Proxy auf JEDEM verbauten Bluetooth-Dongle universell!
     uint8_t addr_bytes[16];
     memset(addr_bytes, 0, 16);
     addr_bytes[0] = BT_AF_BLUETOOTH & 0xFF;
@@ -62,19 +48,28 @@ int open_bt_server_link(uint16_t psm) {
     return sock;
 }
 
-int connect_unix_pipe(const char *path) {
+// KORRIGIERT: Nutzt nun den abstrakten RAM-Namensraum passend zum Daemon-Patch
+int connect_unix_pipe(const char *name) {
     int sock = socket(AF_UNIX, SOCK_SEQPACKET, 0);
     if (sock < 0) return -1;
     if (set_nonblocking_fd(sock) < 0) {
         close(sock);
         return -1;
     }
+    
     struct sockaddr_un addr;
     memset(&addr, 0, sizeof(addr));
     addr.sun_family = AF_UNIX;
-    strncpy(addr.sun_path, path, sizeof(addr.sun_path) - 1);
     
-    int res = connect(sock, (struct sockaddr *)&addr, sizeof(addr));
+    // Das erste Byte MUSS 0 sein für den abstrakten Namensraum!
+    addr.sun_path[0] = '\0';
+    // Der Name wird direkt dahinter ab Index 1 in den Puffer geschoben
+    strncpy(&addr.sun_path[1], name, sizeof(addr.sun_path) - 2);
+    
+    // Berechnen der exakten Strukturlaenge fuer den abstrakten Kernel-Aufruf
+    int len = offsetof(struct sockaddr_un, sun_path) + 1 + strlen(name);
+
+    int res = connect(sock, (struct sockaddr *)&addr, len);
     if (res < 0 && errno != EINPROGRESS) {
         close(sock);
         return -1;
@@ -105,44 +100,44 @@ int main() {
 
     while (1) {
         if (state == 0) {
-            struct srv_poll_layout srv_fds;
-            memset(&srv_fds, 0, sizeof(srv_fds));
-            srv_fds.c_fd.fd = srv_ctrl; srv_fds.c_fd.events = POLLIN;
-            srv_fds.i_fd.fd = srv_intr; srv_fds.i_fd.events = POLLIN;
+            struct pollfd srv_fds[2];
+            memset(srv_fds, 0, sizeof(srv_fds));
+            srv_fds[0].fd = srv_ctrl; srv_fds[0].events = POLLIN;
+            srv_fds[1].fd = srv_intr; srv_fds[1].events = POLLIN;
 
-            int ret_c = poll(&srv_fds.c_fd, 1, 100);
-            int ret_i = poll(&srv_fds.i_fd, 1, 100);
-
-            if (ret_c > 0 && (srv_fds.c_fd.revents & POLLIN)) {
-                struct sockaddr_storage remote;
-                socklen_t len = sizeof(remote);
-                int tmp = accept(srv_ctrl, (struct sockaddr *)&remote, &len);
-                if (tmp >= 0) {
-                    if (client_ctrl >= 0) close(client_ctrl);
-                    client_ctrl = tmp;
-                    set_nonblocking_fd(client_ctrl);
-                    printf("vDS-Proxy: Controller Control-Kanal aktiv abgefangen.\n");
-                    uint8_t peek = 0;
-                    recv(client_ctrl, &peek, 1, MSG_PEEK | MSG_DONTWAIT);
+            // Ein einziger kompakter Poll-Aufruf fuer beide Server-Kanäle
+            int ret = poll(srv_fds, 2, 100);
+            if (ret > 0) {
+                if (srv_fds[0].revents & POLLIN) {
+                    struct sockaddr_storage remote;
+                    socklen_t len = sizeof(remote);
+                    int tmp = accept(srv_ctrl, (struct sockaddr *)&remote, &len);
+                    if (tmp >= 0) {
+                        if (client_ctrl >= 0) close(client_ctrl);
+                        client_ctrl = tmp;
+                        set_nonblocking_fd(client_ctrl);
+                        printf("vDS-Proxy: Controller Control-Kanal aktiv abgefangen.\n");
+                        uint8_t peek = 0;
+                        recv(client_ctrl, &peek, 1, MSG_PEEK | MSG_DONTWAIT);
+                    }
                 }
-            }
-
-            if (ret_i > 0 && (srv_fds.i_fd.revents & POLLIN)) {
-                struct sockaddr_storage remote;
-                socklen_t len = sizeof(remote);
-                int tmp = accept(srv_intr, (struct sockaddr *)&remote, &len);
-                if (tmp >= 0) {
-                    if (client_intr >= 0) close(client_intr);
-                    client_intr = tmp;
-                    set_nonblocking_fd(client_intr);
-                    printf("vDS-Proxy: Controller Interrupt-Kanal aktiv abgefangen.\n");
+                if (srv_fds[1].revents & POLLIN) {
+                    struct sockaddr_storage remote;
+                    socklen_t len = sizeof(remote);
+                    int tmp = accept(srv_intr, (struct sockaddr *)&remote, &len);
+                    if (tmp >= 0) {
+                        if (client_intr >= 0) close(client_intr);
+                        client_intr = tmp;
+                        set_nonblocking_fd(client_intr);
+                        printf("vDS-Proxy: Controller Interrupt-Kanal aktiv abgefangen.\n");
+                    }
                 }
             }
 
             if (client_ctrl >= 0 && client_intr >= 0) {
                 printf("vDS-Proxy: Reiche Daten ueber RAM-Sockets an den Daemon weiter...\n");
                 
-                // Absolute Hardware-Unabhaengigkeit: Wir verbinden uns rein ueber lokale Sockets im Dateisystem!
+                // Absolute Schreibrechte-Unabhaengigkeit: Abstrakte RAM-Verbindungen initiieren
                 vdsd_ctrl = connect_unix_pipe("v_c");
                 vdsd_intr = connect_unix_pipe("v_i");
 
@@ -154,39 +149,42 @@ int main() {
                 goto shutdown_link;
             }
         } else {
-            struct shuttle_poll_layout tunnel_fds;
-            memset(&tunnel_fds, 0, sizeof(tunnel_fds));
-            tunnel_fds.cc.fd = client_ctrl; tunnel_fds.cc.events = POLLIN;
-            tunnel_fds.vc.fd = vdsd_ctrl;   tunnel_fds.vc.events = POLLIN;
-            tunnel_fds.ci.fd = client_intr; tunnel_fds.ci.events = POLLIN;
-            tunnel_fds.vi.fd = vdsd_intr;   tunnel_fds.vi.events = POLLIN;
+            // OPTIMIERT: Alle 4 Kanaele in einem einzigen, synchronen Poll-Array bündeln
+            struct pollfd tunnel_fds[4];
+            memset(tunnel_fds, 0, sizeof(tunnel_fds));
+            tunnel_fds[0].fd = client_ctrl; tunnel_fds[0].events = POLLIN;
+            tunnel_fds[1].fd = vdsd_ctrl;   tunnel_fds[1].events = POLLIN;
+            tunnel_fds[2].fd = client_intr; tunnel_fds[2].events = POLLIN;
+            tunnel_fds[3].fd = vdsd_intr;   tunnel_fds[3].events = POLLIN;
 
-            poll(&tunnel_fds.cc, 1, 5); poll(&tunnel_fds.vc, 1, 5);
-            poll(&tunnel_fds.ci, 1, 5); poll(&tunnel_fds.vi, 1, 5);
+            // Timeout auf 5ms setzen, aber fuer ALLE zeitgleich auswerten!
+            int ret = poll(tunnel_fds, 4, 5);
 
-            if ((tunnel_fds.cc.revents | tunnel_fds.vc.revents | tunnel_fds.ci.revents | tunnel_fds.vi.revents) & (POLLHUP | POLLERR | POLLNVAL)) {
-                goto shutdown_link;
-            }
+            if (ret > 0) {
+                if ((tunnel_fds[0].revents | tunnel_fds[1].revents | tunnel_fds[2].revents | tunnel_fds[3].revents) & (POLLHUP | POLLERR | POLLNVAL)) {
+                    goto shutdown_link;
+                }
 
-            if (tunnel_fds.cc.revents & POLLIN) {
-                int len = recv(client_ctrl, heap_buffer, 1024, 0);
-                if (len <= 0) goto shutdown_link;
-                send(vdsd_ctrl, heap_buffer, len, 0);
-            }
-            if (tunnel_fds.vc.revents & POLLIN) {
-                int len = recv(vdsd_ctrl, heap_buffer, 1024, 0);
-                if (len <= 0) goto shutdown_link;
-                send(client_ctrl, heap_buffer, len, 0);
-            }
-            if (tunnel_fds.ci.revents & POLLIN) {
-                int len = recv(client_intr, heap_buffer, 1024, 0);
-                if (len <= 0) goto shutdown_link;
-                send(vdsd_intr, heap_buffer, len, 0);
-            }
-            if (tunnel_fds.vi.revents & POLLIN) {
-                int len = recv(vdsd_intr, heap_buffer, 1024, 0);
-                if (len <= 0) goto shutdown_link;
-                send(client_intr, heap_buffer, len, 0);
+                if (tunnel_fds[0].revents & POLLIN) {
+                    int len = recv(client_ctrl, heap_buffer, 1024, 0);
+                    if (len <= 0) goto shutdown_link;
+                    send(vdsd_ctrl, heap_buffer, len, 0);
+                }
+                if (tunnel_fds[1].revents & POLLIN) {
+                    int len = recv(vdsd_ctrl, heap_buffer, 1024, 0);
+                    if (len <= 0) goto shutdown_link;
+                    send(client_ctrl, heap_buffer, len, 0);
+                }
+                if (tunnel_fds[2].revents & POLLIN) {
+                    int len = recv(client_intr, heap_buffer, 1024, 0);
+                    if (len <= 0) goto shutdown_link;
+                    send(vdsd_intr, heap_buffer, len, 0);
+                }
+                if (tunnel_fds[3].revents & POLLIN) {
+                    int len = recv(vdsd_intr, heap_buffer, 1024, 0);
+                    if (len <= 0) goto shutdown_link;
+                    send(client_intr, heap_buffer, len, 0);
+                }
             }
             continue;
 
