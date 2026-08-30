@@ -13,14 +13,13 @@
 #define SOCK_SEQPACKET     5
 #define BTPROTO_L2CAP      0
 
-// Das vom Host-Kernel (Bazzite) geforderte reale 16-Byte Layout
 struct sockaddr_l2_local {
-    sa_family_t l2_family;      // 2 Byte
-    uint16_t    l2_psm;         // 2 Byte
-    uint8_t     l2_bdaddr[6];   // 6 Byte
-    uint16_t    l2_cid;         // 2 Byte
-    uint8_t     l2_bdaddr_type; // 1 Byte
-    uint8_t     padding[3];     // 3 Byte -> Ergibt exakt 16 Byte
+    sa_family_t l2_family;      
+    uint16_t    l2_psm;         
+    uint8_t     l2_bdaddr[6];   
+    uint16_t    l2_cid;         
+    uint8_t     l2_bdaddr_type; 
+    uint8_t     padding[3];     
 };
 
 int set_nonblocking(int fd) {
@@ -115,7 +114,6 @@ int main() {
             }
             if (ret == 0) continue;
 
-            // 1. Control-Kanal (PSM 0x11) nimmt Verbindung an
             if (srv_fds[0].revents & POLLIN) {
                 uint8_t sockaddr_storage[64];
                 socklen_t addr_len = sizeof(sockaddr_storage);
@@ -127,10 +125,8 @@ int main() {
                     set_nonblocking(client_ctrl);
                     struct sockaddr_l2_local *raw_addr = (struct sockaddr_l2_local *)sockaddr_storage;
                     
-                    // ARCHITEKTUR-FIX: Für den Kernel (connect) MUSS die Adresse 1:1 kopiert werden
                     memcpy(target_mac, raw_addr->l2_bdaddr, 6);
                     
-                    // ARCHITEKTUR-FIX: Für udev/vdsctl (Logs) invertieren wir in ein separates Array
                     uint8_t human_mac[6];
                     for(int i = 0; i < 6; i++) {
                         human_mac[i] = raw_addr->l2_bdaddr[5 - i];
@@ -144,7 +140,6 @@ int main() {
                 }
             }
 
-            // 2. Interrupt-Kanal (PSM 0x13) nimmt Verbindung an
             if (srv_fds[1].revents & POLLIN) {
                 uint8_t sockaddr_storage[64];
                 socklen_t addr_len = sizeof(sockaddr_storage);
@@ -158,14 +153,39 @@ int main() {
                 }
             }
 
-            // Erst wenn beide physischen Kanäle bereitstehen, wird vdsd gekoppelt
             if (client_ctrl >= 0 && client_intr >= 0) {
                 vdsd_ctrl = connect_to_vdsd(0x0021, target_mac);
                 vdsd_intr = connect_to_vdsd(0x0023, target_mac);
 
                 if (vdsd_ctrl >= 0 && vdsd_intr >= 0) {
-                    printf("vDS-Proxy: **Bidirektionaler Userspace-Tunnel aktiv!**\n");
-                    state = 1;
+                    // ASYNCHRONER HANDSHAKE-FIX: Warte bis Sockets schreibbar (verbunden) sind
+                    struct pollfd connect_fds[2];
+                    connect_fds[0].fd = vdsd_ctrl; connect_fds[0].events = POLLOUT; connect_fds[0].revents = 0;
+                    connect_fds[1].fd = vdsd_intr; connect_fds[1].events = POLLOUT; connect_fds[1].revents = 0;
+                    
+                    int conn_ret = poll(connect_fds, 2, 2000); // 2 Sekunden Timeout für den Daemon-Handshake
+                    
+                    if (conn_ret > 0 && 
+                        (connect_fds[0].revents & POLLOUT) && 
+                        (connect_fds[1].revents & POLLOUT)) {
+                        
+                        // Überprüfe via SO_ERROR, ob die Verbindung wirklich steht
+                        int error_c = 0, error_i = 0;
+                        socklen_t len_c = sizeof(error_c), len_i = sizeof(error_i);
+                        getsockopt(vdsd_ctrl, SOL_SOCKET, SO_ERROR, &error_c, &len_c);
+                        getsockopt(vdsd_intr, SOL_SOCKET, SO_ERROR, &error_i, &len_i);
+                        
+                        if (error_c == 0 && error_i == 0) {
+                            printf("vDS-Proxy: **Bidirektionaler Userspace-Tunnel aktiv!**\n");
+                            state = 1;
+                        } else {
+                            fprintf(stderr, "vDS-Proxy: Verbindungsaufbau verweigert (SO_ERROR). Setze zurück.\n");
+                            goto clean_disconnect;
+                        }
+                    } else {
+                        fprintf(stderr, "vDS-Proxy: Handshake-Timeout an vdsd. Setze Kanäle zurück.\n");
+                        goto clean_disconnect;
+                    }
                 } else {
                     fprintf(stderr, "vDS-Proxy: Weiterleitung an vdsd fehlgeschlagen. Setze Kanäle zurück.\n");
                     goto clean_disconnect;
@@ -195,7 +215,6 @@ int main() {
 
             if (ret == 0) continue;
 
-            // Daten-Weichen-Routing (Control)
             if (tunnel_fds[0].revents & POLLIN) {
                 int len = recv(client_ctrl, buf, sizeof(buf), 0);
                 if (len <= 0) {
@@ -212,8 +231,6 @@ int main() {
                 }
                 send(client_ctrl, buf, len, 0);
             }
-            
-            // Daten-Weichen-Routing (Interrupt)
             if (tunnel_fds[2].revents & POLLIN) {
                 int len = recv(client_intr, buf, sizeof(buf), 0);
                 if (len <= 0) {
