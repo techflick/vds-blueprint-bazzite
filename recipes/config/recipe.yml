@@ -95,7 +95,7 @@ modules:
 
         # Block 5: Initialize PKG_ROOT structure, build binaries independently, and stage files
         COPY vds-proxy.c /vds_build_dir/vds-proxy.c
-        RUN KERNEL_VERSION=$(basename $(ls -d /usr/lib/modules/*fc* | head -n 1)) && \
+        RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
             PKG_ROOT="/vds-pkg-root" && \
             mkdir -p "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra" && \
             mkdir -p "${PKG_ROOT}/usr/lib/modules-load.d" && \
@@ -105,22 +105,22 @@ modules:
             mkdir -p "${PKG_ROOT}/usr/share/dbus-1/system.d" && \
             mkdir -p "${PKG_ROOT}/usr/lib/udev/rules.d" && \
             mkdir -p "${PKG_ROOT}/usr/share/vdsd" && \
-            mkdir -p "${PKG_ROOT}/usr/share/wireplumber/wireplumber.conf.d" && \
+            mkdir -p "${PKG_ROOT}/etc/wireplumber/wireplumber.conf.d" && \
             \
-            # 1. Kernel-Modul stagen (Fest unter /usr/lib/modules... laut Protokoll Block 10)
+            # 1. Kernel-Modul stagen (Nativer RPM-Query Pfad)
             cp /vds_build_dir/module/vds_hcd.ko "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra/vds_hcd.ko" && \
             chmod 644 "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra/vds_hcd.ko" && \
             \
-            # 1b. Autoload für Kernel-Modul registrieren (Jetzt absolut crash-sicher!)
+            # 1b. Autoload für Kernel-Modul registrieren
             printf "vds_hcd\n" > "${PKG_ROOT}/usr/lib/modules-load.d/vds.conf" && \
             chmod 644 "${PKG_ROOT}/usr/lib/modules-load.d/vds.conf" && \
             \
-            # 2. Daemon (vdsd) kompilieren (Nutzt isoliert die Dummy-Header aus CMake)
+            # 2. Daemon (vdsd) kompilieren
             cd /vds_build_dir/build && \
             cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS="-isystem /vds_build_dir/include" -DCMAKE_CXX_FLAGS="-isystem /vds_build_dir/include" && \
             make -j$(nproc) && \
             \
-            # 3. Proxy absolut autark kompilieren (OHNE Dummy-Header-Bezug und OHNE -lsystemd!)
+            # 3. Proxy absolut autark kompilieren
             gcc -O3 -Wall /vds_build_dir/vds-proxy.c -o /vds_build_dir/build/vds-proxy && \
             \
             # 4. Alle fertigen Payloads stagen
@@ -128,10 +128,9 @@ modules:
             cp /vds_build_dir/build/vdsctl "${PKG_ROOT}/usr/bin/vdsctl" && \
             cp /vds_build_dir/build/vds-proxy "${PKG_ROOT}/usr/bin/vds-proxy" && \
             chmod 755 "${PKG_ROOT}/usr/bin/vdsd" "${PKG_ROOT}/usr/bin/vdsctl" "${PKG_ROOT}/usr/bin/vds-proxy"
-            
+
         # Block 6: Deploy system daemons mit korrigiertem Pfad /var/lib/vdsd & Systemd-Presets
         RUN PKG_ROOT="/vds-pkg-root" && \
-            printf "vds_hcd\n" > "${PKG_ROOT}/usr/lib/modules-load.d/vds.conf" && \
             printf "enable vdsd.service\nenable vds-proxy.service\nenable vds-chmod-sdp.path\n" > "${PKG_ROOT}/usr/lib/systemd/system-preset/99-vds.preset" && \
             ( \        
               echo '[Unit]'; \
@@ -204,61 +203,58 @@ modules:
                ) > "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-dualsense-udev.rules" && \
                printf 'KERNEL=="uinput", MODE="0660", GROUP="input", OPTIONS+="static_node=uinput"\n' > "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-uinput.rules" && \
                printf 'KERNEL=="vds[0-9]*", MODE="0660", GROUP="input", TAG+="systemd"\n' >> "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-uinput.rules"
-
-        # Block 8: Configure native WirePlumber quadraphonic audio and masking rules
+        
+        # Block 8: Configure native WirePlumber quadraphonic audio - Saubere JSON-Syntax (KORRIGIERT)
         RUN PKG_ROOT="/vds-pkg-root" && \
-            mkdir -p "${PKG_ROOT}/usr/share/wireplumber/wireplumber.conf.d" && \
             ( \
               echo 'monitor.alsa.rules = ['; \
               echo '  {'; \
-              echo '    # REGEL 1: vDS-GERAET MASKIEREN (WILD-CARD MATCH)'; \
               echo '    matches = ['; \
               echo '      {'; \
-              echo '        "node.name" = "~alsa_output.usb-Sony_Interactive_Entertainment.*"'; \
+              echo '        node.name = "~alsa_output.usb-Sony_Interactive_Entertainment.*"'; \
               echo '      }'; \
               echo '    ]'; \
               echo '    actions = {'; \
               echo '      update-props = {'; \
-              echo '        "alsa.card_id"        = "WirelessController"'; \
-              echo '        "alsa.card_name"      = "WirelessController"'; \
-              echo '        "device.nick"         = "WirelessController"'; \
-              echo '        "node.name"           = "alsa_output.usb-Sony_Interactive_Entertainment_WirelessController-00.pro-audio"'; \
-              echo '        "node.description"    = "WirelessController"'; \
-              echo '        "node.nick"           = "WirelessController"'; \
-              echo '        "api.alsa.use-acp"    = false'; \
-              echo '        "audio.channels"      = 4'; \
-              echo '        "audio.position"      = [ "FL", "FR", "RL", "RR" ]'; \
-              echo '        "priority.driver"     = 1500'; \
-              echo '        "priority.session"    = 1500'; \
-              echo '        "session.suspend-on-idle" = false'; \
+              echo '        alsa.card_id        = "WirelessController"'; \
+              echo '        alsa.card_name      = "WirelessController"'; \
+              echo '        device.nick         = "WirelessController"'; \
+              echo '        node.name           = "alsa_output.usb-Sony_Interactive_Entertainment_WirelessController-00.pro-audio"'; \
+              echo '        node.description    = "WirelessController"'; \
+              echo '        node.nick           = "WirelessController"'; \
+              echo '        api.alsa.use-acp    = false'; \
+              echo '        audio.channels      = 4'; \
+              echo '        audio.position      = [ "FL", "FR", "RL", "RR" ]'; \
+              echo '        priority.driver     = 1500'; \
+              echo '        priority.session    = 1500'; \
+              echo '        session.suspend-on-idle = false'; \
               echo '      }'; \
               echo '    }'; \
               echo '  },'; \
               echo '  {'; \
-              echo '    # REGEL 2: REALE BLUETOOTH-KARTE DEAKTIVIEREN'; \
               echo '    matches = ['; \
               echo '      {'; \
-              echo '        "node.name" = "~alsa_output.pci.*DualSense.*"'; \
+              echo '        node.name = "~alsa_output.pci.*DualSense.*"'; \
               echo '      },'; \
               echo '      {'; \
-              echo '        "node.name" = "~alsa_input.pci.*DualSense.*"'; \
+              echo '        node.name = "~alsa_input.pci.*DualSense.*"'; \
               echo '      },'; \
               echo '      {'; \
-              echo '        "node.description" = "~.*DualSense wireless controller.*"'; \
+              echo '        node.description = "~.*DualSense wireless controller.*"'; \
               echo '      }'; \
               echo '    ]'; \
               echo '    actions = {'; \
               echo '      update-props = {'; \
-              echo '        "device.disabled" = true'; \
-              echo '        "node.disabled"   = true'; \
+              echo '        device.disabled = true'; \
+              echo '        node.disabled   = true'; \
               echo '      }'; \
               echo '    }'; \
               echo '  }'; \
               echo ']'; \
-            ) > "${PKG_ROOT}/usr/share/wireplumber/wireplumber.conf.d/99-vds-prioritisation.conf"
+            ) > "${PKG_ROOT}/etc/wireplumber/wireplumber.conf.d/99-vds-prioritisation.conf"
 
-        # Block 9: Generate isolated RPM package with fixed post-install script macros
-        RUN KERNEL_VERSION=$(basename $(ls -d /usr/lib/modules/*fc* | head -n 1)) && \
+        # Block 9: Generate isolated RPM package via rpmbuild without system locks
+        RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
             mkdir -p /root/rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS} && \
             ( \
               echo 'Name: kmod-vds'; \
@@ -284,7 +280,7 @@ modules:
               echo '/usr/share/dbus-1/system.d/org.vds.conf'; \
               echo '/usr/lib/udev/rules.d/99-vds-uinput.rules'; \
               echo '/usr/lib/udev/rules.d/99-vds-dualsense-udev.rules'; \
-              echo '/usr/share/wireplumber/wireplumber.conf.d/99-vds-prioritisation.conf'; \
+              echo '/etc/wireplumber/wireplumber.conf.d/99-vds-prioritisation.conf'; \
               echo '/usr/lib/systemd/system/bluetooth.service.d/override.conf'; \
               echo '/usr/share/vdsd/main.conf'; \
             ) > /root/rpmbuild/SPECS/vds.spec && \
@@ -294,26 +290,14 @@ modules:
 
         # Block 10: Lock-free extraction, immutable symlink injection & native module indexing
         RUN rpm2cpio /tmp/vds-rpm/kmod-vds-1.0.0-1.x86_64.rpm | cpio -idmv -D / && \
-            KERNEL_VERSION=$(basename $(ls -d /usr/lib/modules/*fc* | head -n 1)) && \
-            \
-            # 1. Kernel-Modul-Indexierung fehlerfrei erzwingen
+            KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
             depmod -a "${KERNEL_VERSION}" && \
-            \
-            # 2. Immutable Symlink-Injektion (Bypasst die fehlende systemctl-Engine im OCI-Build)
             mkdir -p /usr/lib/systemd/system/multi-user.target.wants && \
-            \
-            # vds-proxy.service permanent verlinken
             ln -sf /usr/lib/systemd/system/vds-proxy.service \
                    /usr/lib/systemd/system/multi-user.target.wants/vds-proxy.service && \
-            \
-            # vdsd.service permanent verlinken
             ln -sf /usr/lib/systemd/system/vdsd.service \
                    /usr/lib/systemd/system/multi-user.target.wants/vdsd.service && \
-            \
-            # vds-chmod-sdp.path permanent verlinken
             ln -sf /usr/lib/systemd/system/vds-chmod-sdp.path \
                    /usr/lib/systemd/system/multi-user.target.wants/vds-chmod-sdp.path && \
-            \
-            # 3. Aggressive Bereinigung aller Build-Überreste
             rm -rf /vds_build_dir /vds-pkg-root /tmp/vds-rpm /root/rpmbuild
 
