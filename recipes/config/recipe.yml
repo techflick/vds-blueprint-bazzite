@@ -105,7 +105,8 @@ modules:
 
         # III. Den alten L2CAP-Block gezielt loeschen und den neuen RAM-Socket-Block verankern
         RUN cd /vds_build_dir && \
-            sed -i '/void fill_l2cap_sockaddr/,/^}/ { /^}/r /tmp/new_func.cc' -e 'd }' src/platform/linux/vds_bt.cc && \
+            sed -i '/void fill_l2cap_sockaddr/,/^}/d' src/platform/linux/vds_bt.cc && \
+            sed -i '/# namespace vds {/r /tmp/new_func.cc' src/platform/linux/vds_bt.cc && \
             rm -f /tmp/new_func.cc
 
         # IV. Kernel-Bypass Patches (Anpassung von AF_BLUETOOTH auf AF_UNIX / Familie 1)
