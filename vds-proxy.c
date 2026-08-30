@@ -127,13 +127,17 @@ int main() {
                     set_nonblocking(client_ctrl);
                     struct sockaddr_l2_local *raw_addr = (struct sockaddr_l2_local *)sockaddr_storage;
                     
-                    // WICHTIGER ARCHITEKTUR-FOKUS: Invertiert die MAC, da vdsd sie gedreht erwartet!
+                    // ARCHITEKTUR-FIX: Für den Kernel (connect) MUSS die Adresse 1:1 kopiert werden
+                    memcpy(target_mac, raw_addr->l2_bdaddr, 6);
+                    
+                    // ARCHITEKTUR-FIX: Für udev/vdsctl (Logs) invertieren wir in ein separates Array
+                    uint8_t human_mac[6];
                     for(int i = 0; i < 6; i++) {
-                        target_mac[i] = raw_addr->l2_bdaddr[5 - i];
+                        human_mac[i] = raw_addr->l2_bdaddr[5 - i];
                     }
                     
                     printf("vDS-Proxy: Control-Kanal aktiv. Invertierte Ziel-MAC: %02X:%02X:%02X:%02X:%02X:%02X\n",
-                           target_mac[0], target_mac[1], target_mac[2], target_mac[3], target_mac[4], target_mac[5]);
+                           human_mac[0], human_mac[1], human_mac[2], human_mac[3], human_mac[4], human_mac[5]);
                     
                     uint8_t peek_buf[1];
                     recv(client_ctrl, peek_buf, sizeof(peek_buf), MSG_PEEK | MSG_DONTWAIT);
