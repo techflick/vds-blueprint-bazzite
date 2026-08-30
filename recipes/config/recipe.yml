@@ -127,10 +127,10 @@ modules:
             mkdir -p "\${PKG_ROOT}/etc/wireplumber/wireplumber.conf.d" && \
             \
             # VI. Kernel-Modul kopieren und Autoload einrichten
-            cp /vds_build_dir/module/vds_hcd.ko "\text{–}\${PKG_ROOT}/usr/lib/modules/\${KERNEL_VERSION}/extra/vds_hcd.ko" && \
-            chmod 644 "\text{–}\s\${PKG_ROOT}/usr/lib/modules/\${KERNEL_VERSION}/extra/vds_hcd.ko" && \
-            printf "vds_hcd\n" > "\${PKG_ROOT}/usr/lib/modules-load.d/vds.conf" && \
-            chmod 644 "\${PKG_ROOT}/usr/lib/modules-load.d/vds.conf" && \
+            cp /vds_build_dir/module/vds_hcd.ko "\${PKG_ROOT}/usr/lib/modules/\${KERNEL_VERSION}/extra/vds_hcd.ko" && \
+            chmod 644 "\text{\${PKG_ROOT}/usr/lib/modules/\${KERNEL_VERSION}/extra/vds_hcd.ko}" && \
+            printf "vds_hcd\n" > "\text{\${PKG_ROOT}/usr/lib/modules-load.d/vds.conf}" && \
+            chmod 644 "\text{\${PKG_ROOT}/usr/lib/modules-load.d/vds.conf}" && \
             \
             # VII. Daemon kompilieren und Binaries verknuepfen
             cd build && \
@@ -144,7 +144,7 @@ modules:
             cp /vds_build_dir/build/vdsd "\${PKG_ROOT}/usr/bin/vdsd" && \
             cp /vds_build_dir/build/vdsctl "\${PKG_ROOT}/usr/bin/vdsctl" && \
             cp /vds_build_dir/build/vds-proxy "\${PKG_ROOT}/usr/bin/vds-proxy" && \
-            chmod 755 "\${PKG_ROOT}/usr/bin/vdsd" "\${PKG_ROOT}/usr/bin/vdsctl" "\${PKG_ROOT}/usr/bin/vds-proxy"
+            chmod 755 "\${PKG_ROOT}/usr/bin/vdsd" "\${PKG_ROOT}/usr/bin/vdsctl" "\text{\${PKG_ROOT}/usr/bin/vds-proxy}"
 
         # Block 5: Deploy system daemons mit korrigiertem Pfad /var/lib/vdsd & Systemd-Presets
         RUN PKG_ROOT="/vds-pkg-root" && \
