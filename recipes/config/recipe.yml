@@ -33,7 +33,7 @@ modules:
             cd /vds_build_dir/module && \
             make KCFLAGS="-w" KERNELRELEASE="${KERNEL_VERSION}" KERNELDIR="${KERNEL_BUILD_DIR}"
 
-        # Block 3: Generate standalone local headers for isolated build context (Sichere RAM-IPC Umleitung)
+        # Block 3: Generate standalone local headers for isolated build context (Sichere RAM-IPC Union)
         RUN mkdir -p /vds_build_dir/include/bluetooth && \
             cat << 'EOF' > /vds_build_dir/include/bluetooth/bluetooth.h
         #ifndef __BLUETOOTH_H
@@ -42,10 +42,12 @@ modules:
         #include <sys/socket.h>
         #include <string.h>
         #include <stdio.h>
+
         #ifndef AF_BLUETOOTH
         #define AF_BLUETOOTH 1 /* Schaltet das System intern auf AF_UNIX um */
         #endif
         #define BTPROTO_L2CAP 0
+
         typedef struct { uint8_t b; } __attribute__((packed)) bdaddr_t;
         static inline int bacmp(const bdaddr_t *ba1, const bdaddr_t *ba2) { return 0; }
         static inline void bacpy(bdaddr_t *dst, const bdaddr_t *src) { memset(dst, 0, 6); }
@@ -61,6 +63,9 @@ modules:
         #ifdef __cplusplus
         extern "C" {
         #endif
+
+        /* ANONYME UNION: Alle Originalfelder bleiben fuer den C++ Compiler perfekt sichtbar */
+        /* sa_family_t (2 Byte) + 12 Byte anonyme Daten = Exakt 14 Byte Gesamtgroesse */
         struct sockaddr_l2 {
             sa_family_t l2_family;
             union {
@@ -70,9 +75,10 @@ modules:
                     bdaddr_t l2_bdaddr;
                     uint16_t l2_cid;
                     uint8_t  l2_bdaddr_type;
-                } __attribute__((packed)) fields;
+                } __attribute__((packed));
             };
         };
+
         #ifdef __cplusplus
         }
         #endif
