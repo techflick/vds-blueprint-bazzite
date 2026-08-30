@@ -33,7 +33,7 @@ modules:
             cd /vds_build_dir/module && \
             make KCFLAGS="-w" KERNELRELEASE="${KERNEL_VERSION}" KERNELDIR="${KERNEL_BUILD_DIR}"
 
-        # Block 3: Generate standalone local headers for isolated build context (Sichere RAM-IPC Union)
+        # Block 3: Generate standalone local headers for isolated build context (ORIGINAL & UNBERÜHRT)
         RUN mkdir -p /vds_build_dir/include/bluetooth && \
             cat << 'EOF' > /vds_build_dir/include/bluetooth/bluetooth.h
         #ifndef __BLUETOOTH_H
@@ -42,17 +42,20 @@ modules:
         #include <sys/socket.h>
         #include <string.h>
         #include <stdio.h>
-
         #ifndef AF_BLUETOOTH
-        #define AF_BLUETOOTH 1 /* Schaltet das System intern auf AF_UNIX um */
+        #define AF_BLUETOOTH 31
+        #endif
+        #ifndef PF_BLUETOOTH
+        #define PF_BLUETOOTH AF_BLUETOOTH
         #endif
         #define BTPROTO_L2CAP 0
-
-        typedef struct { uint8_t b; } __attribute__((packed)) bdaddr_t;
-        static inline int bacmp(const bdaddr_t *ba1, const bdaddr_t *ba2) { return 0; }
-        static inline void bacpy(bdaddr_t *dst, const bdaddr_t *src) { memset(dst, 0, 6); }
+        typedef struct { uint8_t b[6]; } __attribute__((packed)) bdaddr_t;
+        static inline int bacmp(const bdaddr_t *ba1, const bdaddr_t *ba2) { return memcmp(ba1, ba2, 6); }
+        static inline void bacpy(bdaddr_t *dst, const bdaddr_t *src) { memcpy(dst, src, 6); }
         static inline uint16_t htobs(uint16_t n) { return n; }
-        static inline int ba2str(const bdaddr_t *ba, char *str) { return sprintf(str, "00:00:00:00:00:00"); }
+        static inline int ba2str(const bdaddr_t *ba, char *str) { 
+            return sprintf(str, "%02x:%02x:%02x:%02x:%02x:%02x", ba->b[5], ba->b[4], ba->b[3], ba->b[2], ba->b[1], ba->b[0]); 
+        }
         #endif
         EOF
 
@@ -63,22 +66,13 @@ modules:
         #ifdef __cplusplus
         extern "C" {
         #endif
-
-        /* ANONYME UNION: Alle Originalfelder bleiben fuer den C++ Compiler perfekt sichtbar */
-        /* sa_family_t (2 Byte) + 12 Byte anonyme Daten = Exakt 14 Byte Gesamtgroesse */
         struct sockaddr_l2 {
-            sa_family_t l2_family;
-            union {
-                char sun_path;
-                struct {
-                    uint16_t l2_psm;
-                    bdaddr_t l2_bdaddr;
-                    uint16_t l2_cid;
-                    uint8_t  l2_bdaddr_type;
-                } __attribute__((packed));
-            };
+        	sa_family_t l2_family;
+        	uint16_t l2_psm;
+        	bdaddr_t l2_bdaddr;
+        	uint16_t l2_cid;
+        	uint8_t l2_bdaddr_type;
         };
-
         #ifdef __cplusplus
         }
         #endif
@@ -90,17 +84,14 @@ modules:
         #endif
         EOF
 
-        # Block 4: Patch, Build und Staging (Sichere UNIX-IPC Umleitung über Pointer-Cast)
+        # Block 4: Patch, Build und Staging (Sichere UNIX-IPC Umleitung über Byte-Array-Cast)
         COPY vds-proxy.c /vds_build_dir/vds-proxy.c
         RUN cd /vds_build_dir && \
             sed -i '/pkg_check_modules.*bluez/c\set(bluez_FOUND TRUE)\nset(bluez_INCLUDE_DIRS "/vds_build_dir/include")\nset(bluez_LIBRARIES "")' CMakeLists.txt && \
             sed -i 's/PkgConfig::BLUEZ//g' CMakeLists.txt && \
             \
-            # Header-Erweiterung: Wir injizieren sys/un.h fuer die UNIX-Strukturen in vds_bt.cc
-            sed -i 's/#include <bluetooth\/l2cap.h>/#include <bluetooth\/l2cap.h>\n#include <sys\/un.h>/g' src/platform/linux/vds_bt.cc && \
-            \
-            # Pointer-Cast-Injektion: Wir biegen die Zuweisung im RAM klammerfrei auf die Pfade "v_c" und "v_i" um
-            sed -i '/void fill_l2cap_sockaddr/,/^}/c\void fill_l2cap_sockaddr(sockaddr_l2 \&sockaddr, std::uint16_t psm, std::span<const std::uint8_t, 6> address) { struct sockaddr_un *un = (struct sockaddr_un *)\&sockaddr; un->sun_family = 1; if(psm == 0x0011 || psm == 0x0021) strcpy(un->sun_path, "v_c"); else strcpy(un->sun_path, "v_i"); }' src/platform/linux/vds_bt.cc && \
+            # Pointer-Injektion: Wir casten den Speicher ab Byte 2 auf char* um den Pfad klammerfrei reinzuschreiben
+            sed -i '/void fill_l2cap_sockaddr/,/^}/c\void fill_l2cap_sockaddr(sockaddr_l2 \&sockaddr, std::uint16_t psm, std::span<const std::uint8_t, 6> address) { sockaddr.l2_family = 1; char *path = (char *)\&sockaddr.l2_psm; if(psm == 0x0011 || psm == 0x0021) strcpy(path, "v_c"); else strcpy(path, "v_i"); }' src/platform/linux/vds_bt.cc && \
             \
             # AF_BLUETOOTH auf AF_UNIX (Familie 1) im Socket-Opener umleiten
             sed -i 's/AF_BLUETOOTH/1/g' src/platform/linux/vds_bt.cc && \
