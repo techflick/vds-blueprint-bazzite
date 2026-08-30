@@ -135,8 +135,8 @@ int main() {
             if (client_ctrl >= 0 && client_intr >= 0) {
                 printf("vDS-Proxy: Reiche Daten ueber RAM-Sockets an den Daemon weiter...\n");
                 
-                vdsd_ctrl = connect_unix_pipe("v_c");
-                vdsd_intr = connect_unix_pipe("v_i");
+                vdsd_ctrl = connect_unix_pipe("vc");
+                vdsd_intr = connect_unix_pipe("vi");
 
                 if (vdsd_ctrl >= 0 && vdsd_intr >= 0) {
                     printf("vDS-Proxy: **Latenzfreie Speicher-Pipeline aktiv!**\n");
