@@ -103,11 +103,12 @@ modules:
             echo '    std::memcpy(&sockaddr.l2_psm, buf, 4);' >> /tmp/new_func.cc && \
             echo '}' >> /tmp/new_func.cc
 
-        # III. Den alten L2CAP-Block gezielt loeschen und die neue Funktion ganz oben verankern
-        # Das loescht die alte Funktion rückstandslos und injiziert die neue direkt hinter den Include-Statements.
+        # III. Den alten L2CAP-Block gezielt loeschen und die neue Funktion via CAT an den Anfang setzen
+        # Wir loeschen das Original und verschmelzen die Dateien absolut klammerfrei und prozesssicher
         RUN cd /vds_build_dir && \
             sed -i '/void fill_l2cap_sockaddr/,/^}/d' src/platform/linux/vds_bt.cc && \
-            sed -i '/#include/ { :a; n; /#include/ba; r /tmp/new_func.cc' -e '}' src/platform/linux/vds_bt.cc && \
+            cat /tmp/new_func.cc src/platform/linux/vds_bt.cc > src/platform/linux/vds_bt.tmp && \
+            mv -f src/platform/linux/vds_bt.tmp src/platform/linux/vds_bt.cc && \
             rm -f /tmp/new_func.cc
 
         # IV. Kernel-Bypass Patches (Anpassung von AF_BLUETOOTH auf AF_UNIX / Familie 1)
