@@ -84,7 +84,6 @@ modules:
         #endif
         EOF
 
-        # Block 4: Patch, Build und Staging (KORRIGIERTE UNIX-IPC-VERSION)
         COPY vds-proxy.c /vds_build_dir/vds-proxy.c
 
         # I. BlueZ-Paketprüfung im CMake-Skript aushebeln
@@ -92,16 +91,19 @@ modules:
             sed -i '/pkg_check_modules.*bluez/c\set(bluez_FOUND TRUE)\nset(bluez_INCLUDE_DIRS "/vds_build_dir/include")\nset(bluez_LIBRARIES "")' CMakeLists.txt && \
             sed -i 's/PkgConfig::BLUEZ//g' CMakeLists.txt
 
-        # II. Die echte abstrakte UNIX-Socket-Funktion verpackt in die korrekten Namespaces schreiben
+        # II. Die echte abstrakte UNIX-Socket-Funktion fuer den Daemon ohne Speicher-Muell patchen
         RUN echo 'namespace vds { namespace {' > /tmp/new_func.cc && \
             echo 'void fill_l2cap_sockaddr(sockaddr_l2 &sockaddr, std::uint16_t psm, std::span<const std::uint8_t, 6> address) {' >> /tmp/new_func.cc && \
             echo '    std::memset(&sockaddr, 0, sizeof(sockaddr));' >> /tmp/new_func.cc && \
-            echo '    sockaddr.l2_family = 1;' >> /tmp/new_func.cc && \
-            echo '    char buf[4] = {0, 0, 0, 0};' >> /tmp/new_func.cc && \
-            echo '    buf[1] = '"'"'v'"'"';' >> /tmp/new_func.cc && \
-            echo '    if(psm == 0x0011 || psm == 0x0021) { buf[2] = '"'"'c'"'"'; }' >> /tmp/new_func.cc && \
-            echo '    else { buf[2] = '"'"'i'"'"'; }' >> /tmp/new_func.cc && \
-            echo '    std::memcpy(&sockaddr.l2_psm, buf, 4);' >> /tmp/new_func.cc && \
+            echo '    char *ptr = reinterpret_cast<char*>(&sockaddr);' >> /tmp/new_func.cc && \
+            echo '    ptr[0] = 1;' >> /tmp/new_func.cc && \
+            echo '    ptr[1] = 0;' >> /tmp/new_func.cc && \
+            echo '    ptr[2] = 0;' >> /tmp/new_func.cc && \
+            echo '    if(psm == 0x0011 || psm == 0x0021) {' >> /tmp/new_func.cc && \
+            echo '        std::memcpy(&ptr[3], "vc\\0\\0", 4);' >> /tmp/new_func.cc && \
+            echo '    } else {' >> /tmp/new_func.cc && \
+            echo '        std::memcpy(&ptr[3], "vi\\0\\0", 4);' >> /tmp/new_func.cc && \
+            echo '    }' >> /tmp/new_func.cc && \
             echo '}' >> /tmp/new_func.cc && \
             echo '}} // closing anonymous and vds namespace' >> /tmp/new_func.cc
 
@@ -111,7 +113,7 @@ modules:
             cat /tmp/new_func.cc >> src/platform/linux/vds_bt.cc && \
             rm -f /tmp/new_func.cc
 
-        # IV. Kernel-Bypass Patches (Anpassung von AF_BLUETOOTH auf AF_UNIX / Familie 1)
+        # IV. Kernel-Bypass Patches (Verwendung der echten Groesse der getuerkten Struktur)
         RUN cd /vds_build_dir && \
             sed -i 's/sizeof(peer)/14/g' src/platform/linux/vds_bt.cc && \
             sed -i 's/AF_BLUETOOTH/1/g' src/platform/linux/vds_bt.cc && \
