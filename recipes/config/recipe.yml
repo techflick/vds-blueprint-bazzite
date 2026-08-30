@@ -84,18 +84,15 @@ modules:
         #endif
         EOF
 
-        # Block 4: Override package configuration and apply Port-Patch (Escaping-Fix)
+        # Block 4: Patch, Build und Staging (Kombinierter All-in-One-Block für fehlerfreien Kontext)
+        COPY vds-proxy.c /vds_build_dir/vds-proxy.c
         RUN cd /vds_build_dir && \
             sed -i '/pkg_check_modules.*bluez/c\set(bluez_FOUND TRUE)\nset(bluez_INCLUDE_DIRS "/vds_build_dir/include")\nset(bluez_LIBRARIES "")' CMakeLists.txt && \
             sed -i 's/PkgConfig::BLUEZ//g' CMakeLists.txt && \
-            # ERWEITERTER REGEX: Fängt den Typ-Präfix (constexpr...) und Whitespaces flexibel ab [I]
             sed -i -E 's/.*kHidControlPsm\s*=\s*0x[0-9a-fA-F]+.*/constexpr std::uint16_t kHidControlPsm = 0x0021;/g' src/platform/linux/vds_bt.cc && \
             sed -i -E 's/.*kHidInterruptPsm\s*=\s*0x[0-9a-fA-F]+.*/constexpr std::uint16_t kHidInterruptPsm = 0x0023;/g' src/platform/linux/vds_bt.cc && \
-            mkdir -p build
-
-        # Block 5: Initialize PKG_ROOT structure, build binaries independently, and stage files
-        COPY vds-proxy.c /vds_build_dir/vds-proxy.c
-        RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
+            mkdir -p build && \
+            KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
             PKG_ROOT="/vds-pkg-root" && \
             mkdir -p "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra" && \
             mkdir -p "${PKG_ROOT}/usr/lib/modules-load.d" && \
@@ -106,30 +103,20 @@ modules:
             mkdir -p "${PKG_ROOT}/usr/lib/udev/rules.d" && \
             mkdir -p "${PKG_ROOT}/usr/share/vdsd" && \
             mkdir -p "${PKG_ROOT}/etc/wireplumber/wireplumber.conf.d" && \
-            \
-            # 1. Kernel-Modul stagen (Nativer RPM-Query Pfad)
             cp /vds_build_dir/module/vds_hcd.ko "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra/vds_hcd.ko" && \
             chmod 644 "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra/vds_hcd.ko" && \
-            \
-            # 1b. Autoload für Kernel-Modul registrieren
             printf "vds_hcd\n" > "${PKG_ROOT}/usr/lib/modules-load.d/vds.conf" && \
             chmod 644 "${PKG_ROOT}/usr/lib/modules-load.d/vds.conf" && \
-            \
-            # 2. Daemon (vdsd) kompilieren
-            cd /vds_build_dir/build && \
+            cd build && \
             cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS="-isystem /vds_build_dir/include" -DCMAKE_CXX_FLAGS="-isystem /vds_build_dir/include" && \
             make -j$(nproc) && \
-            \
-            # 3. Proxy absolut autark kompilieren (Nimmt Ihre lokal korrigierte vds-proxy.c)
             gcc -O3 -Wall /vds_build_dir/vds-proxy.c -o /vds_build_dir/build/vds-proxy && \
-            \
-            # 4. Alle fertigen Payloads stagen
             cp /vds_build_dir/build/vdsd "${PKG_ROOT}/usr/bin/vdsd" && \
             cp /vds_build_dir/build/vdsctl "${PKG_ROOT}/usr/bin/vdsctl" && \
             cp /vds_build_dir/build/vds-proxy "${PKG_ROOT}/usr/bin/vds-proxy" && \
             chmod 755 "${PKG_ROOT}/usr/bin/vdsd" "${PKG_ROOT}/usr/bin/vdsctl" "${PKG_ROOT}/usr/bin/vds-proxy"
 
-        # Block 6: Deploy system daemons mit korrigiertem Pfad /var/lib/vdsd & Systemd-Presets
+        # Block 5: Deploy system daemons mit korrigiertem Pfad /var/lib/vdsd & Systemd-Presets
         RUN PKG_ROOT="/vds-pkg-root" && \
             printf "enable vdsd.service\nenable vds-proxy.service\nenable vds-chmod-sdp.path\n" > "${PKG_ROOT}/usr/lib/systemd/system-preset/99-vds.preset" && \
             ( \        
@@ -180,7 +167,7 @@ modules:
               echo 'WantedBy=multi-user.target'; \
             ) > "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service"
             
-        # Block 7: Apply BlueZ compat configuration and optimized database udev triggers
+        # Block 6: Apply BlueZ compat configuration and optimized database udev triggers
         RUN PKG_ROOT="/vds-pkg-root" && \
                printf "[Unit]\nDescription=Setze Berechtigungen für vDS SDP-Socket wenn er erscheint\n\n[Service]\nType=oneshot\nExecStart=/usr/bin/chmod 0777 /run/sdp\nRemainAfterExit=yes\n" > "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.service" && \
                printf "[Unit]\nDescription=Überwache BlueZ SDP-Socket für vDS\n\n[Path]\nPathChanged=/run/sdp\nUnit=vds-chmod-sdp.service\n\n[Install]\nWantedBy=multi-user.target\n" > "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.path" && \
@@ -204,7 +191,7 @@ modules:
                printf 'KERNEL=="uinput", MODE="0660", GROUP="input", OPTIONS+="static_node=uinput"\n' > "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-uinput.rules" && \
                printf 'KERNEL=="vds[0-9]*", MODE="0660", GROUP="input", TAG+="systemd"\n' >> "${PKG_ROOT}/usr/lib/udev/rules.d/99-vds-uinput.rules"
         
-        # Block 8: Configure native WirePlumber quadraphonic audio - Saubere JSON-Syntax (KORRIGIERT)
+        # Block 7: Configure native WirePlumber quadraphonic audio - Saubere JSON-Syntax (KORRIGIERT)
         RUN PKG_ROOT="/vds-pkg-root" && \
             ( \
               echo 'monitor.alsa.rules = ['; \
@@ -253,7 +240,7 @@ modules:
               echo ']'; \
             ) > "${PKG_ROOT}/etc/wireplumber/wireplumber.conf.d/99-vds-prioritisation.conf"
 
-        # Block 9: Generate isolated RPM package via rpmbuild without system locks
+        # Block 8: Generate isolated RPM package via rpmbuild without system locks
         RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
             mkdir -p /root/rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS} && \
             ( \
@@ -288,7 +275,7 @@ modules:
             mkdir -p /tmp/vds-rpm && \
             cp /root/rpmbuild/RPMS/x86_64/kmod-vds-1.0.0-1.x86_64.rpm /tmp/vds-rpm/
 
-        # Block 10: Lock-free extraction, immutable symlink injection & native module indexing
+        # Block 9: Lock-free extraction, immutable symlink injection & native module indexing
         RUN rpm2cpio /tmp/vds-rpm/kmod-vds-1.0.0-1.x86_64.rpm | cpio -idmv -D / && \
             KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
             depmod -a "${KERNEL_VERSION}" && \
