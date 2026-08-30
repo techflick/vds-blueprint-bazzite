@@ -33,7 +33,7 @@ modules:
             cd /vds_build_dir/module && \
             make KCFLAGS="-w" KERNELRELEASE="${KERNEL_VERSION}" KERNELDIR="${KERNEL_BUILD_DIR}"
 
-        # Block 3: Generate standalone local headers for isolated build context (UNIX-IPC Redirection)
+        # Block 3: Generate standalone local headers for isolated build context (Sichere RAM-IPC Umleitung)
         RUN mkdir -p /vds_build_dir/include/bluetooth && \
             cat << 'EOF' > /vds_build_dir/include/bluetooth/bluetooth.h
         #ifndef __BLUETOOTH_H
@@ -42,12 +42,10 @@ modules:
         #include <sys/socket.h>
         #include <string.h>
         #include <stdio.h>
-        
         #ifndef AF_BLUETOOTH
-        #define AF_BLUETOOTH 1 /* Erzwingt intern AF_UNIX im Kernel */
+        #define AF_BLUETOOTH 1 /* Schaltet das System intern auf AF_UNIX um */
         #endif
         #define BTPROTO_L2CAP 0
-        
         typedef struct { uint8_t b; } __attribute__((packed)) bdaddr_t;
         static inline int bacmp(const bdaddr_t *ba1, const bdaddr_t *ba2) { return 0; }
         static inline void bacpy(bdaddr_t *dst, const bdaddr_t *src) { memset(dst, 0, 6); }
@@ -55,7 +53,7 @@ modules:
         static inline int ba2str(const bdaddr_t *ba, char *str) { return sprintf(str, "00:00:00:00:00:00"); }
         #endif
         EOF
-        
+
         RUN cat << 'EOF' > /vds_build_dir/include/bluetooth/l2cap.h
         #ifndef __L2CAP_H
         #define __L2CAP_H
@@ -63,11 +61,17 @@ modules:
         #ifdef __cplusplus
         extern "C" {
         #endif
-        /* Maskierung: Wir verkleiden das UNIX-Socket-Pfadfeld als 12-Byte-String. */
-        /* Zusammen mit sa_family_t (2 Byte) ergibt das exakt die geforderten 14 Byte! */
         struct sockaddr_l2 {
             sa_family_t l2_family;
-            char sun_path;
+            union {
+                char sun_path;
+                struct {
+                    uint16_t l2_psm;
+                    bdaddr_t l2_bdaddr;
+                    uint16_t l2_cid;
+                    uint8_t  l2_bdaddr_type;
+                } __attribute__((packed)) fields;
+            };
         };
         #ifdef __cplusplus
         }
@@ -80,16 +84,20 @@ modules:
         #endif
         EOF
 
-        # Block 4: Patch, Build und Staging (Sichere UNIX-IPC Umleitung ohne Code-Verlust)
+        # Block 4: Patch, Build und Staging (Sichere UNIX-IPC Umleitung über Pointer-Cast)
         COPY vds-proxy.c /vds_build_dir/vds-proxy.c
         RUN cd /vds_build_dir && \
             sed -i '/pkg_check_modules.*bluez/c\set(bluez_FOUND TRUE)\nset(bluez_INCLUDE_DIRS "/vds_build_dir/include")\nset(bluez_LIBRARIES "")' CMakeLists.txt && \
             sed -i 's/PkgConfig::BLUEZ//g' CMakeLists.txt && \
             \
-            # Pfad-Injektion: Wir schreiben ultrakurze RAM-Sockets ("v_c" und "v_i") direkt in das sun_path Feld
-            sed -i '/void fill_l2cap_sockaddr/,/^}/c\void fill_l2cap_sockaddr(sockaddr_l2 \&sockaddr, std::uint16_t psm, std::span<const std::uint8_t, 6> address) { sockaddr.l2_family = 1; if(psm == 0x0011 || psm == 0x0021) strcpy(sockaddr.sun_path, "v_c"); else strcpy(sockaddr.sun_path, "v_i"); }' src/platform/linux/vds_bt.cc && \
+            # Header-Erweiterung: Wir injizieren sys/un.h fuer die UNIX-Strukturen in vds_bt.cc
+            sed -i 's/#include <bluetooth\/l2cap.h>/#include <bluetooth\/l2cap.h>\n#include <sys\/un.h>/g' src/platform/linux/vds_bt.cc && \
             \
-            # Bereinigung des Socket-Openers fuer AF_UNIX Kompatibilitaet
+            # Pointer-Cast-Injektion: Wir biegen die Zuweisung im RAM klammerfrei auf die Pfade "v_c" und "v_i" um
+            sed -i '/void fill_l2cap_sockaddr/,/^}/c\void fill_l2cap_sockaddr(sockaddr_l2 \&sockaddr, std::uint16_t psm, std::span<const std::uint8_t, 6> address) { struct sockaddr_un *un = (struct sockaddr_un *)\&sockaddr; un->sun_family = 1; if(psm == 0x0011 || psm == 0x0021) strcpy(un->sun_path, "v_c"); else strcpy(un->sun_path, "v_i"); }' src/platform/linux/vds_bt.cc && \
+            \
+            # AF_BLUETOOTH auf AF_UNIX (Familie 1) im Socket-Opener umleiten
+            sed -i 's/AF_BLUETOOTH/1/g' src/platform/linux/vds_bt.cc && \
             sed -i 's/SOCK_SEQPACKET | SOCK_CLOEXEC/SOCK_SEQPACKET/g' src/platform/linux/vds_bt.cc && \
             sed -i 's/if (peer_size < sizeof(peer))/if (false)/g' src/platform/linux/vds_bt.cc && \
             \
@@ -117,7 +125,6 @@ modules:
             cp /vds_build_dir/build/vdsctl "${PKG_ROOT}/usr/bin/vdsctl" && \
             cp /vds_build_dir/build/vds-proxy "${PKG_ROOT}/usr/bin/vds-proxy" && \
             chmod 755 "${PKG_ROOT}/usr/bin/vdsd" "${PKG_ROOT}/usr/bin/vdsctl" "${PKG_ROOT}/usr/bin/vds-proxy"
-
 
         # Block 5: Deploy system daemons mit korrigiertem Pfad /var/lib/vdsd & Systemd-Presets
         RUN PKG_ROOT="/vds-pkg-root" && \
