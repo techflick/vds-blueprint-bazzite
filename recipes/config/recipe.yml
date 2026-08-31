@@ -84,6 +84,7 @@ modules:
         #endif
         EOF
 
+        # Block 4: Patch, Build und Staging (KORRIGIERTE UNIX-IPC-VERSION)
         COPY vds-proxy.c /vds_build_dir/vds-proxy.c
 
         # I. BlueZ-Paketprüfung im CMake-Skript aushebeln
@@ -91,7 +92,7 @@ modules:
             sed -i '/pkg_check_modules.*bluez/c\set(bluez_FOUND TRUE)\nset(bluez_INCLUDE_DIRS "/vds_build_dir/include")\nset(bluez_LIBRARIES "")' CMakeLists.txt && \
             sed -i 's/PkgConfig::BLUEZ//g' CMakeLists.txt
 
-        # II. Die echte abstrakte UNIX-Socket-Funktion fuer den Daemon ohne Speicher-Muell patchen
+        # II. Die echte abstrakte UNIX-Socket-Funktion fuer den Daemon fehlerfrei patchen
         RUN echo 'namespace vds { namespace {' > /tmp/new_func.cc && \
             echo 'void fill_l2cap_sockaddr(sockaddr_l2 &sockaddr, std::uint16_t psm, std::span<const std::uint8_t, 6> address) {' >> /tmp/new_func.cc && \
             echo '    std::memset(&sockaddr, 0, sizeof(sockaddr));' >> /tmp/new_func.cc && \
@@ -100,14 +101,14 @@ modules:
             echo '    ptr[1] = 0;' >> /tmp/new_func.cc && \
             echo '    ptr[2] = 0;' >> /tmp/new_func.cc && \
             echo '    if(psm == 0x0011 || psm == 0x0021) {' >> /tmp/new_func.cc && \
-            echo '        std::memcpy(&ptr[3], "vc\\0\\0", 4);' >> /tmp/new_func.cc && \
+            echo '        std::memcpy(&ptr[3], "v_c", 3);' >> /tmp/new_func.cc && \
             echo '    } else {' >> /tmp/new_func.cc && \
-            echo '        std::memcpy(&ptr[3], "vi\\0\\0", 4);' >> /tmp/new_func.cc && \
+            echo '        std::memcpy(&ptr[3], "v_i", 3);' >> /tmp/new_func.cc && \
             echo '    }' >> /tmp/new_func.cc && \
             echo '}' >> /tmp/new_func.cc && \
             echo '}} // closing anonymous and vds namespace' >> /tmp/new_func.cc
 
-        # III. Original-Logik loeschen, Forward Declaration hinterlassen, Inhalt ans Ende haengen
+        # III. Original-Logik loeschen, Forward Declaration hinterlassen, Inhalt sauber verpacken
         RUN cd /vds_build_dir && \
             sed -i '/void fill_l2cap_sockaddr/,/^}/c\void fill_l2cap_sockaddr(sockaddr_l2 \&sockaddr, std::uint16_t psm, std::span<const std::uint8_t, 6> address);' src/platform/linux/vds_bt.cc && \
             cat /tmp/new_func.cc >> src/platform/linux/vds_bt.cc && \
