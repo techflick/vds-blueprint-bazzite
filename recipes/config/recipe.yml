@@ -92,7 +92,7 @@ modules:
             sed -i '/pkg_check_modules.*bluez/c\set(bluez_FOUND TRUE)\nset(bluez_INCLUDE_DIRS "/vds_build_dir/include")\nset(bluez_LIBRARIES "")' CMakeLists.txt && \
             sed -i 's/PkgConfig::BLUEZ//g' CMakeLists.txt
 
-        # II. Die echte abstrakte UNIX-Socket-Funktion (befüllt weiterhin die volle 14-Byte-Struktur)
+        # II. Die echte abstrakte UNIX-Socket-Funktion (bleibt vollkommen unberührt für die native Erstellung)
         RUN echo 'namespace vds { namespace {' > /tmp/new_func.cc && \
             echo 'void fill_l2cap_sockaddr(sockaddr_l2 &sockaddr, std::uint16_t psm, std::span<const std::uint8_t, 6> address) {' >> /tmp/new_func.cc && \
             echo '    std::memset(&sockaddr, 0, sizeof(sockaddr));' >> /tmp/new_func.cc && \
@@ -114,9 +114,9 @@ modules:
             cat /tmp/new_func.cc >> src/platform/linux/vds_bt.cc && \
             rm -f /tmp/new_func.cc
 
-        # IV. Kernel-Bypass Patches (OPTIMIERTE SYSCALL-GRÖSSE PASSEND ZUM PROXY)
+        # IV. Kernel-Bypass Patches (DAEMON NUTZT UND ERWARTET JETZT DIE EXAKTE REALE SOCK-GRÖSSE 14)
         RUN cd /vds_build_dir && \
-            sed -i 's/sizeof(peer)/11/g' src/platform/linux/vds_bt.cc && \
+            sed -i 's/sizeof(peer)/14/g' src/platform/linux/vds_bt.cc && \
             sed -i 's/AF_BLUETOOTH/1/g' src/platform/linux/vds_bt.cc && \
             sed -i 's/SOCK_SEQPACKET | SOCK_CLOEXEC/SOCK_SEQPACKET/g' src/platform/linux/vds_bt.cc && \
             sed -i 's/if (peer_size < sizeof(peer))/if (false)/g' src/platform/linux/vds_bt.cc
