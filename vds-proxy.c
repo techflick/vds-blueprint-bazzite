@@ -54,22 +54,28 @@ int connect_unix_pipe(const char *full_name) {
     int sock = socket(AF_UNIX, SOCK_SEQPACKET, 0);
     if (sock < 0) return -1;
     
-    struct sockaddr_un addr;
-    memset(&addr, 0, sizeof(addr));
-    addr.sun_family = AF_UNIX;
+    // Wir bauen das exakte 14-Byte-Speicherabbild des Daemons nach
+    unsigned char raw_addr[14];
+    memset(raw_addr, 0, 14);
     
-    // Erste Position im Pfad ist \0 für den abstrakten Namespace
-    addr.sun_path[0] = '\0';
+    // Byte 0-1: AF_UNIX (Wert 1) im Little-Endian-Format
+    raw_addr[0] = 1;
+    raw_addr[1] = 0;
     
-    // Kopiert exakt 11 Bytes (Name + die 8 Nullbytes) in den Pfad
-    // C-Strings enden bei \0, aber memcpy kopiert die vollen 11 Bytes starr durch!
-    memcpy(&addr.sun_path[1], full_name, 11);
+    // Byte 2: Ist das \0 für den abstrakten Raum (durch memset bereits 0)
     
-    // Wir nutzen die Standard-Strukturgröße für den Connect-Aufruf
-    int len = sizeof(struct sockaddr_un);
+    // Byte 3-5: Kopiert "v_c" oder "v_i" exakt an Position 3
+    // full_name enthält im Hauptprogramm "v_c\0..." -> wir greifen nur die ersten 3 Zeichen
+    memcpy(&raw_addr[3], full_name, 3);
+    
+    // Byte 6-13: Bleiben durch das memset oben exakt Nullbytes
+    // Das ergibt im RAM genau das vom Daemon erzeugte "@v_c@@@@@@@@"
+    
+    // CRITICAL MATCH: Wir erzwingen beim Connect die identische Länge von 14 Bytes!
+    int len = 14;
 
     // Blockierend verbinden für stabilen Handshake vor dem Loop
-    if (connect(sock, (struct sockaddr *)&addr, len) < 0) {
+    if (connect(sock, (struct sockaddr *)raw_addr, len) < 0) {
         close(sock);
         return -1;
     }
@@ -163,32 +169,40 @@ int main() {
             tunnel_fds[2].fd = client_intr; tunnel_fds[2].events = POLLIN;
             tunnel_fds[3].fd = vdsd_intr;   tunnel_fds[3].events = POLLIN;
 
-            int ret = poll(tunnel_fds, 4, 5);
+            // Kurzer Timeout für die High-Speed-Pipeline
+            int ret = poll(tunnel_fds, 4, 10);
 
             if (ret > 0) {
-                if ((tunnel_fds[0].revents | tunnel_fds[1].revents | tunnel_fds[2].revents | tunnel_fds[3].revents) & (POLLHUP | POLLERR | POLLNVAL)) {
-                    goto shutdown_link;
+                // Jedes Event EINZELN prüfen statt globaler ODER-Verknüpfung
+                for (int i = 0; i < 4; i++) {
+                    if (tunnel_fds[i].revents & (POLLHUP | POLLERR | POLLNVAL)) {
+                        goto shutdown_link;
+                    }
                 }
 
+                // Control-Kanal: Controller -> Daemon
                 if (tunnel_fds[0].revents & POLLIN) {
                     int len = recv(client_ctrl, heap_buffer, 1024, 0);
-                    if (len <= 0) goto shutdown_link;
-                    send(vdsd_ctrl, heap_buffer, len, 0);
+                    if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) goto shutdown_link;
+                    if (len > 0) send(vdsd_ctrl, heap_buffer, len, 0);
                 }
+                // Control-Kanal: Daemon -> Controller
                 if (tunnel_fds[1].revents & POLLIN) {
                     int len = recv(vdsd_ctrl, heap_buffer, 1024, 0);
-                    if (len <= 0) goto shutdown_link;
-                    send(client_ctrl, heap_buffer, len, 0);
+                    if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) goto shutdown_link;
+                    if (len > 0) send(client_ctrl, heap_buffer, len, 0);
                 }
+                // Interrupt-Kanal: Controller -> Daemon
                 if (tunnel_fds[2].revents & POLLIN) {
                     int len = recv(client_intr, heap_buffer, 1024, 0);
-                    if (len <= 0) goto shutdown_link;
-                    send(vdsd_intr, heap_buffer, len, 0);
+                    if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) goto shutdown_link;
+                    if (len > 0) send(vdsd_intr, heap_buffer, len, 0);
                 }
+                // Interrupt-Kanal: Daemon -> Controller
                 if (tunnel_fds[3].revents & POLLIN) {
                     int len = recv(vdsd_intr, heap_buffer, 1024, 0);
-                    if (len <= 0) goto shutdown_link;
-                    send(client_intr, heap_buffer, len, 0);
+                    if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) goto shutdown_link;
+                    if (len > 0) send(client_intr, heap_buffer, len, 0);
                 }
             }
             continue;
