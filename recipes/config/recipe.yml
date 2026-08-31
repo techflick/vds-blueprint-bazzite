@@ -114,9 +114,9 @@ modules:
             cat /tmp/new_func.cc >> src/platform/linux/vds_bt.cc && \
             rm -f /tmp/new_func.cc
 
-        # IV. Kernel-Bypass Patches (STRUKTUR BLEIBT 14 BYTES, ABER DER SYSCALL ERHÄLT DIE LÄNGE 6)
+        # IV. Kernel-Bypass Patches (OPTIMIERTE SYSCALL-GRÖSSE PASSEND ZUM PROXY)
         RUN cd /vds_build_dir && \
-            sed -i 's/sizeof(peer)/6/g' src/platform/linux/vds_bt.cc && \
+            sed -i 's/sizeof(peer)/11/g' src/platform/linux/vds_bt.cc && \
             sed -i 's/AF_BLUETOOTH/1/g' src/platform/linux/vds_bt.cc && \
             sed -i 's/SOCK_SEQPACKET | SOCK_CLOEXEC/SOCK_SEQPACKET/g' src/platform/linux/vds_bt.cc && \
             sed -i 's/if (peer_size < sizeof(peer))/if (false)/g' src/platform/linux/vds_bt.cc
