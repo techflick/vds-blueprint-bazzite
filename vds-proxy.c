@@ -31,6 +31,7 @@ int open_bt_server_link(uint16_t psm) {
         return -1;
     }
     
+    // Starre 16-Byte-Größe für echten Bluetooth-Kontext des Proxys erzwingen
     uint8_t addr_bytes[16];
     memset(addr_bytes, 0, 16);
     addr_bytes[0] = BT_AF_BLUETOOTH & 0xFF;
@@ -49,10 +50,6 @@ int open_bt_server_link(uint16_t psm) {
     return sock;
 }
 
-/*
- * DYNAMIK-BYPASS: Übernimmt den vollen Namen inklusive des Kernel-Paddings.
- * Kopiert starr 11 Bytes, damit der Name exakt mit der Daemon-Vorgabe übereinstimmt.
- */
 int connect_unix_pipe(const char *full_name) {
     int sock = socket(AF_UNIX, SOCK_SEQPACKET, 0);
     if (sock < 0) return -1;
@@ -61,22 +58,23 @@ int connect_unix_pipe(const char *full_name) {
     memset(&addr, 0, sizeof(addr));
     addr.sun_family = AF_UNIX;
     
-    // Index 0 ist \0 (Kennung für abstrakten Raum)
+    // Erste Position im Pfad ist \0 für den abstrakten Namespace
     addr.sun_path[0] = '\0';
     
-    // Kopiert exakt die 11 Bytes des Zielnamens (inklusive der Nullbytes im String)
+    // Kopiert exakt 11 Bytes (Name + die 8 Nullbytes) in den Pfad
+    // C-Strings enden bei \0, aber memcpy kopiert die vollen 11 Bytes starr durch!
     memcpy(&addr.sun_path[1], full_name, 11);
     
-    // Wir nutzen die Standard-Strukturgröße für den Syscall
+    // Wir nutzen die Standard-Strukturgröße für den Connect-Aufruf
     int len = sizeof(struct sockaddr_un);
 
-    // Synchron (blockierend) verbinden, um den Handshake abzusichern
+    // Blockierend verbinden für stabilen Handshake vor dem Loop
     if (connect(sock, (struct sockaddr *)&addr, len) < 0) {
         close(sock);
         return -1;
     }
     
-    // Nach erfolgreichem Connect für den High-Speed-Loop auf Non-Blocking schalten
+    // Danach erst auf Non-Blocking für die High-Speed-Pipeline schalten
     if (set_nonblocking_fd(sock) < 0) {
         close(sock);
         return -1;
@@ -107,6 +105,7 @@ int main() {
 
     while (1) {
         if (state == 0) {
+            // Explizite Indizierung der srv_fds zur Vermeidung von Deskriptor-Speicherfehlern
             struct pollfd srv_fds[2];
             memset(srv_fds, 0, sizeof(srv_fds));
             srv_fds[0].fd = srv_ctrl; srv_fds[0].events = POLLIN;
@@ -143,8 +142,8 @@ int main() {
             if (client_ctrl >= 0 && client_intr >= 0) {
                 printf("vDS-Proxy: Reiche Daten ueber RAM-Sockets an den Daemon weiter...\n");
                 
-                // Wir übergeben den Namen exakt so, wie er vom vdsd im RAM angelegt wird
-                // "v_c" bzw. "v_i" + 8-mal das Nullbyte '\0' (insgesamt 11 Byte Daten im Pfad)
+                // Wir übergeben den Namen exakt so, wie er vom vdsd im RAM angelegt wird:
+                // "v_c" bzw. "v_i" + 8-mal das Nullbyte '\0' (Gesamtlänge im abstrakten Raum = 11 Byte)
                 vdsd_ctrl = connect_unix_pipe("v_c\0\0\0\0\0\0\0\0");
                 vdsd_intr = connect_unix_pipe("v_i\0\0\0\0\0\0\0\0");
 
@@ -156,6 +155,7 @@ int main() {
                 goto shutdown_link;
             }
         } else {
+            // Alle 4 Deskriptoren gebündelt in einem gemeinsamen pollfd-Array
             struct pollfd tunnel_fds[4];
             memset(tunnel_fds, 0, sizeof(tunnel_fds));
             tunnel_fds[0].fd = client_ctrl; tunnel_fds[0].events = POLLIN;
