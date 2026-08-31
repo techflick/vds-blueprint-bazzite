@@ -31,6 +31,7 @@ int open_bt_server_link(uint16_t psm) {
         return -1;
     }
     
+    // Zwingend 16-Byte-Größe erzwingen (No-Go #7)
     uint8_t addr_bytes[16];
     memset(addr_bytes, 0, 16);
     addr_bytes[0] = BT_AF_BLUETOOTH & 0xFF;
@@ -61,7 +62,7 @@ int connect_unix_pipe(const char *name) {
     memset(&addr, 0, sizeof(addr));
     addr.sun_family = AF_UNIX;
     
-    // Index 0 ist \0 für abstrakten Namespace
+    // Index 0 ist \0 für abstrakten Namespace (No-Go #3)
     addr.sun_path[0] = '\0';
     // Name folgt ab Index 1
     strncpy(&addr.sun_path[1], name, sizeof(addr.sun_path) - 2);
@@ -135,8 +136,9 @@ int main() {
             if (client_ctrl >= 0 && client_intr >= 0) {
                 printf("vDS-Proxy: Reiche Daten ueber RAM-Sockets an den Daemon weiter...\n");
                 
-                vdsd_ctrl = connect_unix_pipe("vc");
-                vdsd_intr = connect_unix_pipe("vi");
+                // FIX: Namen an den Daemon-Container-Fix angepasst ("v_c" und "v_i")
+                vdsd_ctrl = connect_unix_pipe("v_c");
+                vdsd_intr = connect_unix_pipe("v_i");
 
                 if (vdsd_ctrl >= 0 && vdsd_intr >= 0) {
                     printf("vDS-Proxy: **Latenzfreie Speicher-Pipeline aktiv!**\n");
@@ -146,6 +148,7 @@ int main() {
                 goto shutdown_link;
             }
         } else {
+            // Ein kompaktes pollfd-Array verhindert Latenzketten (No-Go #4)
             struct pollfd tunnel_fds[4];
             memset(tunnel_fds, 0, sizeof(tunnel_fds));
             tunnel_fds[0].fd = client_ctrl; tunnel_fds[0].events = POLLIN;
