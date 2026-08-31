@@ -31,7 +31,6 @@ int open_bt_server_link(uint16_t psm) {
         return -1;
     }
     
-    // Zwingend 16-Byte-Größe erzwingen (No-Go #7)
     uint8_t addr_bytes[16];
     memset(addr_bytes, 0, 16);
     addr_bytes[0] = BT_AF_BLUETOOTH & 0xFF;
@@ -50,7 +49,11 @@ int open_bt_server_link(uint16_t psm) {
     return sock;
 }
 
-int connect_unix_pipe(const char *name) {
+/* 
+ * KORRIGIERTE FIX-FUNKTION:
+ * Bildet exakt das Kernel-Auffüllmuster nach, welches Ihr 'ss'-Befehl ausgegeben hat.
+ */
+int connect_unix_pipe(const char *short_name) {
     int sock = socket(AF_UNIX, SOCK_SEQPACKET, 0);
     if (sock < 0) return -1;
     if (set_nonblocking_fd(sock) < 0) {
@@ -62,12 +65,19 @@ int connect_unix_pipe(const char *name) {
     memset(&addr, 0, sizeof(addr));
     addr.sun_family = AF_UNIX;
     
-    // Index 0 ist \0 für abstrakten Namespace (No-Go #3)
+    // Index 0 ist \0 für abstrakten Namespace
     addr.sun_path[0] = '\0';
-    // Name folgt ab Index 1
-    strncpy(&addr.sun_path[1], name, sizeof(addr.sun_path) - 2);
     
-    int len = offsetof(struct sockaddr_un, sun_path) + 1 + strlen(name);
+    // Kopiert "v_c" oder "v_i" (3 Bytes inkl. Nullterminator des Strings)
+    memcpy(&addr.sun_path[1], short_name, 3);
+    
+    // Der Kernel füllt bei der 6-Byte-Kürzung die verbleibenden Bytes mit 0 auf.
+    // Ihr 'ss'-Output zeigt 8 '@' Zeichen nach dem Namen, das entspricht 8 weiteren Nullbytes.
+    // Gesamtlänge im abstrakten Raum: 1 Byte (\0) + 3 Bytes ("v_c\0") + 7 Bytes (\0) = 11 Bytes Daten.
+    memset(&addr.sun_path[4], 0, 7);
+    
+    // Die exakte Syscall-Länge für connect() passend zur Kernel-Schnittstelle
+    int len = offsetof(struct sockaddr_un, sun_path) + 11;
 
     int res = connect(sock, (struct sockaddr *)&addr, len);
     if (res < 0 && errno != EINPROGRESS) {
@@ -136,7 +146,7 @@ int main() {
             if (client_ctrl >= 0 && client_intr >= 0) {
                 printf("vDS-Proxy: Reiche Daten ueber RAM-Sockets an den Daemon weiter...\n");
                 
-                // FIX: Namen an den Daemon-Container-Fix angepasst ("v_c" und "v_i")
+                // Nutzt den internen Matcher für @v_c@@@@@@@@ und @v_i@@@@@@@@
                 vdsd_ctrl = connect_unix_pipe("v_c");
                 vdsd_intr = connect_unix_pipe("v_i");
 
@@ -148,7 +158,6 @@ int main() {
                 goto shutdown_link;
             }
         } else {
-            // Ein kompaktes pollfd-Array verhindert Latenzketten (No-Go #4)
             struct pollfd tunnel_fds[4];
             memset(tunnel_fds, 0, sizeof(tunnel_fds));
             tunnel_fds[0].fd = client_ctrl; tunnel_fds[0].events = POLLIN;
