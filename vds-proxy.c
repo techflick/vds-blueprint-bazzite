@@ -49,38 +49,35 @@ int open_bt_server_link(uint16_t psm) {
     return sock;
 }
 
-/* 
- * KORRIGIERTE FIX-FUNKTION:
- * Bildet exakt das Kernel-Auffüllmuster nach, welches Ihr 'ss'-Befehl ausgegeben hat.
+/*
+ * DYNAMIK-BYPASS: Übernimmt den vollen Namen inklusive des Kernel-Paddings.
+ * Kopiert starr 11 Bytes, damit der Name exakt mit der Daemon-Vorgabe übereinstimmt.
  */
-int connect_unix_pipe(const char *short_name) {
+int connect_unix_pipe(const char *full_name) {
     int sock = socket(AF_UNIX, SOCK_SEQPACKET, 0);
     if (sock < 0) return -1;
-    if (set_nonblocking_fd(sock) < 0) {
-        close(sock);
-        return -1;
-    }
     
     struct sockaddr_un addr;
     memset(&addr, 0, sizeof(addr));
     addr.sun_family = AF_UNIX;
     
-    // Index 0 ist \0 für abstrakten Namespace
+    // Index 0 ist \0 (Kennung für abstrakten Raum)
     addr.sun_path[0] = '\0';
     
-    // Kopiert "v_c" oder "v_i" (3 Bytes inkl. Nullterminator des Strings)
-    memcpy(&addr.sun_path[1], short_name, 3);
+    // Kopiert exakt die 11 Bytes des Zielnamens (inklusive der Nullbytes im String)
+    memcpy(&addr.sun_path[1], full_name, 11);
     
-    // Der Kernel füllt bei der 6-Byte-Kürzung die verbleibenden Bytes mit 0 auf.
-    // Ihr 'ss'-Output zeigt 8 '@' Zeichen nach dem Namen, das entspricht 8 weiteren Nullbytes.
-    // Gesamtlänge im abstrakten Raum: 1 Byte (\0) + 3 Bytes ("v_c\0") + 7 Bytes (\0) = 11 Bytes Daten.
-    memset(&addr.sun_path[4], 0, 7);
-    
-    // Die exakte Syscall-Länge für connect() passend zur Kernel-Schnittstelle
-    int len = offsetof(struct sockaddr_un, sun_path) + 11;
+    // Wir nutzen die Standard-Strukturgröße für den Syscall
+    int len = sizeof(struct sockaddr_un);
 
-    int res = connect(sock, (struct sockaddr *)&addr, len);
-    if (res < 0 && errno != EINPROGRESS) {
+    // Synchron (blockierend) verbinden, um den Handshake abzusichern
+    if (connect(sock, (struct sockaddr *)&addr, len) < 0) {
+        close(sock);
+        return -1;
+    }
+    
+    // Nach erfolgreichem Connect für den High-Speed-Loop auf Non-Blocking schalten
+    if (set_nonblocking_fd(sock) < 0) {
         close(sock);
         return -1;
     }
@@ -146,9 +143,10 @@ int main() {
             if (client_ctrl >= 0 && client_intr >= 0) {
                 printf("vDS-Proxy: Reiche Daten ueber RAM-Sockets an den Daemon weiter...\n");
                 
-                // Nutzt den internen Matcher für @v_c@@@@@@@@ und @v_i@@@@@@@@
-                vdsd_ctrl = connect_unix_pipe("v_c");
-                vdsd_intr = connect_unix_pipe("v_i");
+                // Wir übergeben den Namen exakt so, wie er vom vdsd im RAM angelegt wird
+                // "v_c" bzw. "v_i" + 8-mal das Nullbyte '\0' (insgesamt 11 Byte Daten im Pfad)
+                vdsd_ctrl = connect_unix_pipe("v_c\0\0\0\0\0\0\0\0");
+                vdsd_intr = connect_unix_pipe("v_i\0\0\0\0\0\0\0\0");
 
                 if (vdsd_ctrl >= 0 && vdsd_intr >= 0) {
                     printf("vDS-Proxy: **Latenzfreie Speicher-Pipeline aktiv!**\n");
