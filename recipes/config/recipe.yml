@@ -92,6 +92,67 @@ modules:
             sed -i '/pkg_check_modules.*bluez/c\set(bluez_FOUND TRUE)\nset(bluez_INCLUDE_DIRS "/vds_build_dir/include")\nset(bluez_LIBRARIES "")' CMakeLists.txt && \
             sed -i 's/PkgConfig::BLUEZ//g' CMakeLists.txt
 
+        # I.b PROXY-FIX 1: Injektion des im Live-Test verifizierten 14-Byte-Socket-Matchings
+        RUN echo 'int connect_unix_pipe(const char *full_name) {' > /tmp/proxy_fix.c && \
+            echo '    int sock = socket(1, 5, 0);' >> /tmp/proxy_fix.c && \
+            echo '    if (sock < 0) return -1;' >> /tmp/proxy_fix.c && \
+            echo '    unsigned char raw_addr[14];' >> /tmp/proxy_fix.c && \
+            echo '    __builtin_memset(raw_addr, 0, 14);' >> /tmp/proxy_fix.c && \
+            echo '    raw_addr[0] = 1;' >> /tmp/proxy_fix.c && \
+            echo '    __builtin_memcpy(&raw_addr[3], full_name, 3);' >> /tmp/proxy_fix.c && \
+            echo '    if (connect(sock, (struct sockaddr *)raw_addr, 14) < 0) {' >> /tmp/proxy_fix.c && \
+            echo '        close(sock);' >> /tmp/proxy_fix.c && \
+            echo '        return -1;' >> /tmp/proxy_fix.c && \
+            echo '    }' >> /tmp/proxy_fix.c && \
+            echo '    int fl = fcntl(sock, F_GETFL, 0);' >> /tmp/proxy_fix.c && \
+            echo '    fcntl(sock, F_SETFL, fl | 2);' >> /tmp/proxy_fix.c && \
+            echo '    return sock;' >> /tmp/proxy_fix.c && \
+            echo '}' >> /tmp/proxy_fix.c && \
+            sed -i '/int connect_unix_pipe/,/^}/c\(gespeichert in /tmp/proxy_fix.c)\' /vds_build_dir/vds-proxy.c && \
+            sed -i '/(gespeichert/r /tmp/proxy_fix.c' /vds_build_dir/vds-proxy.c && \
+            sed -i '/(gespeichert/d' /vds_build_dir/vds-proxy.c && \
+            rm -f /tmp/proxy_fix.c
+
+        # I.c PROXY-FIX 2: Injektion der robusten Shuttle-Schleife (Verhindert Pipeline-Abbrüche bei leeren Zyklen)
+        RUN echo '        } else {' > /tmp/loop_fix.c && \
+            echo '            struct pollfd tunnel_fds[4];' >> /tmp/loop_fix.c && \
+            echo '            __builtin_memset(tunnel_fds, 0, sizeof(tunnel_fds));' >> /tmp/loop_fix.c && \
+            echo '            tunnel_fds[0].fd = client_ctrl; tunnel_fds[0].events = POLLIN;' >> /tmp/loop_fix.c && \
+            echo '            tunnel_fds[1].fd = vdsd_ctrl;   tunnel_fds[1].events = POLLIN;' >> /tmp/loop_fix.c && \
+            echo '            tunnel_fds[2].fd = client_intr; tunnel_fds[2].events = POLLIN;' >> /tmp/loop_fix.c && \
+            echo '            tunnel_fds[3].fd = vdsd_intr;   tunnel_fds[3].events = POLLIN;' >> /tmp/loop_fix.c && \
+            echo '            int ret = poll(tunnel_fds, 4, 10);' >> /tmp/loop_fix.c && \
+            echo '            if (ret > 0) {' >> /tmp/loop_fix.c && \
+            echo '                for (int i = 0; i < 4; i++) {' >> /tmp/loop_fix.c && \
+            echo '                    if (tunnel_fds[i].revents & (POLLHUP | POLLERR | POLLNVAL)) goto shutdown_link;' >> /tmp/loop_fix.c && \
+            echo '                }' >> /tmp/loop_fix.c && \
+            echo '                if (tunnel_fds[0].revents & POLLIN) {' >> /tmp/loop_fix.c && \
+            echo '                    int len = recv(client_ctrl, heap_buffer, 1024, 0);' >> /tmp/loop_fix.c && \
+            echo '                    if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) goto shutdown_link;' >> /tmp/loop_fix.c && \
+            echo '                    if (len > 0) send(vdsd_ctrl, heap_buffer, len, 0);' >> /tmp/loop_fix.c && \
+            echo '                }' >> /tmp/loop_fix.c && \
+            echo '                if (tunnel_fds[1].revents & POLLIN) {' >> /tmp/loop_fix.c && \
+            echo '                    int len = recv(vdsd_ctrl, heap_buffer, 1024, 0);' >> /tmp/loop_fix.c && \
+            echo '                    if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) goto shutdown_link;' >> /tmp/loop_fix.c && \
+            echo '                    if (len > 0) send(client_ctrl, heap_buffer, len, 0);' >> /tmp/loop_fix.c && \
+            echo '                }' >> /tmp/loop_fix.c && \
+            echo '                if (tunnel_fds[2].revents & POLLIN) {' >> /tmp/loop_fix.c && \
+            echo '                    int len = recv(client_intr, heap_buffer, 1024, 0);' >> /tmp/loop_fix.c && \
+            echo '                    if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) goto shutdown_link;' >> /tmp/loop_fix.c && \
+            echo '                    if (len > 0) send(vdsd_intr, heap_buffer, len, 0);' >> /tmp/loop_fix.c && \
+            echo '                }' >> /tmp/loop_fix.c && \
+            echo '                if (tunnel_fds[3].revents & POLLIN) {' >> /tmp/loop_fix.c && \
+            echo '                    int len = recv(vdsd_intr, heap_buffer, 1024, 0);' >> /tmp/loop_fix.c && \
+            echo '                    if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) goto shutdown_link;' >> /tmp/loop_fix.c && \
+            echo '                    if (len > 0) send(client_intr, heap_buffer, len, 0);' >> /tmp/loop_fix.c && \
+            echo '                }' >> /tmp/loop_fix.c && \
+            echo '            }' >> /tmp/loop_fix.c && \
+            echo '            continue;' >> /tmp/loop_fix.c && \
+            sed -i '/} else {/,/continue;/c\(gespeichert in /tmp/loop_fix.c)\' /vds_build_dir/vds-proxy.c && \
+            sed -i '/(gespeichert/r /tmp/loop_fix.c' /vds_build_dir/vds-proxy.c && \
+            sed -i '/(gespeichert/d' /vds_build_dir/vds-proxy.c && \
+            rm -f /tmp/loop_fix.c
+
         # II. Die echte abstrakte UNIX-Socket-Funktion (bleibt vollkommen unberührt für die native Erstellung)
         RUN echo 'namespace vds { namespace {' > /tmp/new_func.cc && \
             echo 'void fill_l2cap_sockaddr(sockaddr_l2 &sockaddr, std::uint16_t psm, std::span<const std::uint8_t, 6> address) {' >> /tmp/new_func.cc && \
