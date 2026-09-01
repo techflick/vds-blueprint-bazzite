@@ -56,10 +56,19 @@ int connect_unix_pipe(const char *name_three_bytes) {
     unsigned char raw_addr [ 14 ];
     memset(raw_addr, 0, 14);
     
+    // AF_UNIX ist 1 (16-Bit Little Endian)
     raw_addr [ 0 ] = 1;
     raw_addr [ 1 ] = 0;
-    raw_addr [ 2 ] = 0;
     
+    // Abstraktes Socket-Layout: 
+    // Das erste Byte von sun_path (Index 2) MUSS \0 sein.
+    raw_addr [ 2 ] = '\0'; 
+    
+    // NO-GO FIX: Der eigentliche String "v_c" oder "v_i" muss direkt 
+    // an Index 3, 4, 5 kopiert werden, damit er exakt mit dem Daemon matcht.
+    // Aber Achtung: Ihr name_three_bytes enthält "v_c". 
+    // Der Daemon hat laut procfs @v_c, was im RAM \0v_c entspricht.
+    // Wir kopieren den String daher ab Index 3:
     memcpy(&raw_addr [ 3 ], name_three_bytes, 3);
     
     int len = 14;
