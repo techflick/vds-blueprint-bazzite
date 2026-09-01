@@ -118,8 +118,10 @@ modules:
             sed -i 's/if (peer.l2_family != 1)/if (false)/g' src/platform/linux/vds_bt.cc && \
             sed -i 's/if (peer_size < sizeof(sockaddr_l2))/if (false)/g' src/platform/linux/vds_bt.cc
             
-        # Block 5: Deploy system daemons mit korrigiertem Pfad /var/lib/vdsd & Systemd-Presets
+                # Block 5: Deploy system daemons mit korrigiertem Pfad /var/lib/vdsd & Systemd-Presets
         RUN PKG_ROOT="/vds-pkg-root" && \
+            mkdir -p "${PKG_ROOT}/usr/lib/systemd/system-preset" && \
+            mkdir -p "${PKG_ROOT}/usr/lib/systemd/system" && \
             printf "enable vdsd.service\nenable vds-proxy.service\nenable vds-chmod-sdp.path\n" > "${PKG_ROOT}/usr/lib/systemd/system-preset/99-vds.preset" && \
             ( \        
               echo '[Unit]'; \
