@@ -15,6 +15,12 @@
 #define BT_SOCK_SEQPACKET 5
 #define BT_BTPROTO_L2CAP  0
 
+// Definiere feste Indizes für die Tunnel-Struktur (Verhindert Memory Corruption nach No-Go #1)
+#define INDEX_CTRL_IN   0
+#define INDEX_DAEMON_C  1
+#define INDEX_INTR_IN   2
+#define INDEX_DAEMON_I  3
+
 int set_nonblocking_fd(int fd) {
     int fl = fcntl(fd, F_GETFL, 0);
     if (fl == -1) return -1;
@@ -31,6 +37,7 @@ int open_bt_server_link(uint16_t psm) {
         return -1;
     }
     
+    // 16-Byte-Erzwingung im echten BT-Kontext (No-Go #7)
     uint8_t addr_bytes [ 16 ];
     memset(addr_bytes, 0, 16);
     addr_bytes [ 0 ] = BT_AF_BLUETOOTH & 0xFF;
@@ -50,25 +57,21 @@ int open_bt_server_link(uint16_t psm) {
 }
 
 int connect_unix_pipe(const char *name_three_bytes) {
+    // SOCK_CLOEXEC schützt die FDs vor Leaks bei udev-Aufrufen
     int sock = socket(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0);
     if (sock < 0) return -1;
     
     unsigned char raw_addr [ 14 ];
     memset(raw_addr, 0, 14);
     
-    // AF_UNIX ist 1 (16-Bit Little Endian)
+    // AF_UNIX Familie (16-Bit Little Endian)
     raw_addr [ 0 ] = 1;
     raw_addr [ 1 ] = 0;
     
-    // Abstraktes Socket-Layout: 
-    // Das erste Byte von sun_path (Index 2) MUSS \0 sein.
+    // Abstraktes Socket-Layout: Erstes Byte von sun_path (Index 2) MUSS \0 sein
     raw_addr [ 2 ] = '\0'; 
     
-    // NO-GO FIX: Der eigentliche String "v_c" oder "v_i" muss direkt 
-    // an Index 3, 4, 5 kopiert werden, damit er exakt mit dem Daemon matcht.
-    // Aber Achtung: Ihr name_three_bytes enthält "v_c". 
-    // Der Daemon hat laut procfs @v_c, was im RAM \0v_c entspricht.
-    // Wir kopieren den String daher ab Index 3:
+    // Synchronisierter 1-Byte-Shift: Kopiert "v_c" oder "v_i" exakt an Index 3, 4, 5
     memcpy(&raw_addr [ 3 ], name_three_bytes, 3);
     
     int len = 14;
@@ -152,6 +155,7 @@ int main() {
                     state = 1;
                     continue;
                 }
+                
                 printf("vDS-Proxy: RAM-Socket-Verbindung fehlgeschlagen.\n");
                 if (client_ctrl >= 0) { close(client_ctrl); client_ctrl = -1; }
                 if (client_intr >= 0) { close(client_intr); client_intr = -1; }
@@ -159,57 +163,102 @@ int main() {
         } else {
             struct pollfd tunnel_fds [ 4 ];
             memset(tunnel_fds, 0, sizeof(tunnel_fds));
-            tunnel_fds [ 0 ].fd = client_ctrl; tunnel_fds [ 0 ].events = POLLIN;
-            tunnel_fds [ 1 ].fd = vdsd_ctrl;   tunnel_fds [ 1 ].events = POLLIN;
-            tunnel_fds [ 2 ].fd = client_intr; tunnel_fds [ 2 ].events = POLLIN;
-            tunnel_fds [ 3 ].fd = vdsd_intr;   tunnel_fds [ 3 ].events = POLLIN;
+            tunnel_fds [ INDEX_CTRL_IN ].fd = client_ctrl; tunnel_fds [ INDEX_CTRL_IN ].events = POLLIN;
+            tunnel_fds [ INDEX_DAEMON_C ].fd = vdsd_ctrl;   tunnel_fds [ INDEX_DAEMON_C ].events = POLLIN;
+            tunnel_fds [ INDEX_INTR_IN ].fd = client_intr; tunnel_fds [ INDEX_INTR_IN ].events = POLLIN;
+            tunnel_fds [ INDEX_DAEMON_I ].fd = vdsd_intr;   tunnel_fds [ INDEX_DAEMON_I ].events = POLLIN;
 
             int ret = poll(tunnel_fds, 4, 10);
 
             if (ret > 0) {
+                // NO-GO FIX #5: Strikt getrennte Einzelvalidierung der FDs gegen Fehlermasken
                 for (int i = 0; i < 4; i++) {
                     if (tunnel_fds [ i ].revents & (POLLHUP | POLLERR | POLLNVAL)) {
                         goto shutdown_link;
                     }
                 }
 
-                if (tunnel_fds [ 0 ].revents & POLLIN) {
+                // INDEX 0: Controller Control -> Daemon Control
+                if (tunnel_fds [ INDEX_CTRL_IN ].revents & POLLIN) {
                     int len = recv(client_ctrl, heap_buffer, 1024, 0);
-                    if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) goto shutdown_link;
-                    if (len == 0) goto shutdown_link;
-                    if (len > 0) send(vdsd_ctrl, heap_buffer, len, 0);
+                    if (len < 0) {
+                        if (errno != EAGAIN && errno != EWOULDBLOCK) goto shutdown_link; // No-Go #4 Fix
+                    } else if (len == 0) {
+                        printf("vDS-Proxy: Controller hat Control-Kanal geschlossen.\n");
+                        goto shutdown_link;
+                    } else {
+                        // Integrierter Hex-Logger zur Datenstrom-Verifikation
+                        printf("vDS-Proxy: [CTRL IN] %d Bytes -> Daemon: ", len);
+                        for(int i = 0; i < (len > 16 ? 16 : len); i++) {
+                            printf("%02X ", ((unsigned char*)heap_buffer) [ i ]);
+                        }
+                        if (len > 16) printf("...");
+                        printf("\n");
+
+                        send(vdsd_ctrl, heap_buffer, len, 0);
+                    }
                 }
-                if (tunnel_fds [ 1 ].revents & POLLIN) {
+                
+                // INDEX 1: Daemon Control -> Controller Control
+                if (tunnel_fds [ INDEX_DAEMON_C ].revents & POLLIN) {
                     int len = recv(vdsd_ctrl, heap_buffer, 1024, 0);
-                    if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) goto shutdown_link;
-                    if (len == 0) continue;
-                    if (len > 0) send(client_ctrl, heap_buffer, len, 0);
+                    if (len < 0) {
+                        if (errno != EAGAIN && errno != EWOULDBLOCK) goto shutdown_link;
+                    } else if (len == 0) {
+                        printf("vDS-Proxy: Daemon hat Control-Kanal geschlossen.\n");
+                        goto shutdown_link;
+                    } else {
+                        printf("vDS-Proxy: [CTRL OUT] %d Bytes -> Controller\n", len);
+                        send(client_ctrl, heap_buffer, len, 0);
+                    }
                 }
-                if (tunnel_fds [ 2 ].revents & POLLIN) {
+                
+                // INDEX 2: Controller Interrupt -> Daemon Interrupt
+                if (tunnel_fds [ INDEX_INTR_IN ].revents & POLLIN) {
                     int len = recv(client_intr, heap_buffer, 1024, 0);
-                    if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) goto shutdown_link;
-                    if (len == 0) goto shutdown_link;
-                    if (len > 0) send(vdsd_intr, heap_buffer, len, 0);
+                    if (len < 0) {
+                        if (errno != EAGAIN && errno != EWOULDBLOCK) goto shutdown_link;
+                    } else if (len == 0) {
+                        printf("vDS-Proxy: Controller hat Interrupt-Kanal geschlossen.\n");
+                        goto shutdown_link;
+                    } else {
+                        printf("vDS-Proxy: [INTR IN] %d Bytes -> Daemon\n", len);
+                        send(vdsd_intr, heap_buffer, len, 0);
+                    }
                 }
-                if (tunnel_fds [ 3 ].revents & POLLIN) {
+                
+                // INDEX 3: Daemon Interrupt -> Controller Interrupt
+                if (tunnel_fds [ INDEX_DAEMON_I ].revents & POLLIN) {
                     int len = recv(vdsd_intr, heap_buffer, 1024, 0);
-                    if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) goto shutdown_link;
-                    if (len == 0) continue;
-                    if (len > 0) send(client_intr, heap_buffer, len, 0);
+                    if (len < 0) {
+                        if (errno != EAGAIN && errno != EWOULDBLOCK) goto shutdown_link;
+                    } else if (len == 0) {
+                        printf("vDS-Proxy: Daemon hat Interrupt-Kanal geschlossen.\n");
+                        goto shutdown_link;
+                    } else {
+                        printf("vDS-Proxy: [INTR OUT] %d Bytes -> Controller\n", len);
+                        send(client_intr, heap_buffer, len, 0);
+                    }
                 }
             }
             continue;
-
+            
         shutdown_link:
             printf("vDS-Proxy: Pipeline-Verbindung getrennt. Setze Routing-Infrastruktur zurueck...\n");
+            
+            // FDs sicher schliessen, falls sie geoeffnet sind
             if (client_ctrl >= 0) close(client_ctrl);
             if (client_intr >= 0) close(client_intr);
             if (vdsd_ctrl >= 0) close(vdsd_ctrl);
             if (vdsd_intr >= 0) close(vdsd_intr);
+            
+            // Zustandsvariablen fuer den naechsten Handshake-Versuch zurücksetzen
             client_ctrl = client_intr = vdsd_ctrl = vdsd_intr = -1;
             state = 0;
         }
     }
+    
+    // Aufräumen vor dem Beenden (wird im endlosen Loop nie erreicht, gehoert zum sauberen C-Stil)
     free(heap_buffer);
     return 0;
 }
