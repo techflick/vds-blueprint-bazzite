@@ -84,15 +84,18 @@ modules:
         #endif
         EOF
 
-        # BLOCK 4: QUELLCODE-VORBEREITUNG & DAEMON-PATCHES
+        # BLOCK 4: QUELLCODE-VORBEREITUNG & DAEMON-PATCHES (RAM-IPC BYPASS)
+        # 1. Proxy-Quellcode in das Build-Verzeichnis kopieren
         COPY vds-proxy.c /vds_build_dir/vds-proxy.c
 
+        # 2. CMakeLists.txt patchen: BlueZ-Bibliothekszwang aushebeln
         RUN cd /vds_build_dir && \
             sed -i '/pkg_check_modules.*bluez/c\set(bluez_FOUND TRUE)\nset(bluez_INCLUDE_DIRS "/vds_build_dir/include")\nset(bluez_LIBRARIES "")' CMakeLists.txt && \
             sed -i 's/PkgConfig::BLUEZ//g' CMakeLists.txt
 
+        # 3. Hilfsdatei für die modifizierte Adressausrichtung im RAM erzeugen
         RUN echo 'namespace vds { namespace {' > /tmp/new_func.cc && \
-            echo 'void fill_l2cap_sockaddr(sockaddr_l2 &sockaddr, std::uint16_t psm, std::span<const std::uint8_t, 6> address) {' >> /tmp/new_func.cc && \
+           echo 'void fill_l2cap_sockaddr(sockaddr_l2 &sockaddr, std::uint16_t psm, std::span<const std::uint8_t, 6> address) {' >> /tmp/new_func.cc && \
             echo '    std::memset(&sockaddr, 0, sizeof(sockaddr));' >> /tmp/new_func.cc && \
             echo '    char *ptr = reinterpret_cast<char*>(&sockaddr);' >> /tmp/new_func.cc && \
             echo '    ptr [ 0 ] = 1;' >> /tmp/new_func.cc && \
@@ -106,17 +109,23 @@ modules:
             echo '}' >> /tmp/new_func.cc && \
             echo '}}' >> /tmp/new_func.cc
 
+        # 4. vds_bt.cc modifizieren (14-Byte-Alignment & AF_UNIX Socket-Erzeugung)
         RUN cd /vds_build_dir && \
             sed -i '/void fill_l2cap_sockaddr/,/^}/c\void fill_l2cap_sockaddr(sockaddr_l2 \&sockaddr, std::uint16_t psm, std::span<const std::uint8_t, 6> address);' src/platform/linux/vds_bt.cc && \
             cat /tmp/new_func.cc >> src/platform/linux/vds_bt.cc && \
-            rm -f /tmp/new_func.cc
-
-        RUN cd /vds_build_dir && \
+            rm -f /tmp/new_func.cc && \
+            sed -i 's/::socket( AF_BLUETOOTH/::socket( 1/g' src/platform/linux/vds_bt.cc && \
+            sed -i 's/::socket(AF_BLUETOOTH/::socket(1/g' src/platform/linux/vds_bt.cc && \
             sed -i 's/sizeof(peer)/14/g' src/platform/linux/vds_bt.cc && \
-            sed -i 's/AF_BLUETOOTH/1/g' src/platform/linux/vds_bt.cc && \
-            sed -i 's/if (peer_size < 14)/if (false)/g' src/platform/linux/vds_bt.cc && \
-            sed -i 's/if (peer.l2_family != 1)/if (false)/g' src/platform/linux/vds_bt.cc && \
-            sed -i 's/if (peer_size < sizeof(sockaddr_l2))/if (false)/g' src/platform/linux/vds_bt.cc
+            sed -i 's/peer_size < sizeof(peer)/false/g' src/platform/linux/vds_bt.cc
+
+        # 5. vds_bt.cc Absicherung: Verhindern, dass got == 0 die Pipeline zerreißt
+        RUN cd /vds_build_dir && \
+            sed -i 's/if (got == 0)/if (false)/g' src/platform/linux/vds_bt.cc
+
+        # 6. vdsd.cc patchen: Hardwareerkennung (BlueZ-Modalias) auf virtuell umleiten
+        RUN cd /vds_build_dir && \
+            sed -i '/std::uint32_t detect_bluetooth_profile/,/^}/c\std::uint32_t detect_bluetooth_profile(const std::string \&address) { return 1; }' src/platform/linux/vdsd.cc
             
         # BLOCK 5: SYSTEM-KONFIGURATIONEN (SYSTEMD, UDEV, ALSA)
         RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
