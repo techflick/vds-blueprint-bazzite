@@ -201,6 +201,7 @@ modules:
         
         # Block 7: Configure native WirePlumber quadraphonic audio - Saubere JSON-Syntax (KORRIGIERT)
         RUN PKG_ROOT="/vds-pkg-root" && \
+            mkdir -p "${PKG_ROOT}/etc/wireplumber/wireplumber.conf.d" && \
             ( \
               echo 'monitor.alsa.rules = ['; \
               echo '  {'; \
