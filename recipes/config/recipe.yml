@@ -84,7 +84,7 @@ modules:
         #endif
         EOF
 
-        # Block 4: Kopiere gesonderte Proxy-Datei und patch den Daemon (BYPASS-VERSION)
+        # BLOCK 4: QUELLCODE-VORBEREITUNG & DAEMON-PATCHES
         COPY vds-proxy.c /vds_build_dir/vds-proxy.c
 
         RUN cd /vds_build_dir && \
@@ -95,13 +95,13 @@ modules:
             echo 'void fill_l2cap_sockaddr(sockaddr_l2 &sockaddr, std::uint16_t psm, std::span<const std::uint8_t, 6> address) {' >> /tmp/new_func.cc && \
             echo '    std::memset(&sockaddr, 0, sizeof(sockaddr));' >> /tmp/new_func.cc && \
             echo '    char *ptr = reinterpret_cast<char*>(&sockaddr);' >> /tmp/new_func.cc && \
-            echo '    ptr = 1;' >> /tmp/new_func.cc && \
-            echo '    ptr = 0;' >> /tmp/new_func.cc && \
-            echo '    ptr = 0;' >> /tmp/new_func.cc && \
+            echo '    ptr [ 0 ] = 1;' >> /tmp/new_func.cc && \
+            echo '    ptr [ 1 ] = 0;' >> /tmp/new_func.cc && \
+            echo '    ptr [ 2 ] = 0;' >> /tmp/new_func.cc && \
             echo '    if(psm == 0x0011 || psm == 0x0021) {' >> /tmp/new_func.cc && \
-            echo '        std::memcpy(&ptr, "v_c", 3);' >> /tmp/new_func.cc && \
+            echo '        std::memcpy(&ptr [ 3 ], "v_c", 3);' >> /tmp/new_func.cc && \
             echo '    } else {' >> /tmp/new_func.cc && \
-            echo '        std::memcpy(&ptr, "v_i", 3);' >> /tmp/new_func.cc && \
+            echo '        std::memcpy(&ptr [ 3 ], "v_i", 3);' >> /tmp/new_func.cc && \
             echo '    }' >> /tmp/new_func.cc && \
             echo '}' >> /tmp/new_func.cc && \
             echo '}}' >> /tmp/new_func.cc
