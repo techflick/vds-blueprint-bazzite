@@ -31,12 +31,12 @@ int open_bt_server_link(uint16_t psm) {
         return -1;
     }
     
-    uint8_t addr_bytes[16];
+    uint8_t addr_bytes [ 16 ];
     memset(addr_bytes, 0, 16);
-    addr_bytes[0] = BT_AF_BLUETOOTH & 0xFF;
-    addr_bytes[1] = (BT_AF_BLUETOOTH >> 8) & 0xFF;
-    addr_bytes[2] = psm & 0xFF;
-    addr_bytes[3] = (psm >> 8) & 0xFF;
+    addr_bytes [ 0 ] = BT_AF_BLUETOOTH & 0xFF;
+    addr_bytes [ 1 ] = (BT_AF_BLUETOOTH >> 8) & 0xFF;
+    addr_bytes [ 2 ] = psm & 0xFF;
+    addr_bytes [ 3 ] = (psm >> 8) & 0xFF;
 
     if (bind(sock, (struct sockaddr *)addr_bytes, 16) < 0) {
         close(sock);
@@ -53,14 +53,14 @@ int connect_unix_pipe(const char *name_three_bytes) {
     int sock = socket(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0);
     if (sock < 0) return -1;
     
-    unsigned char raw_addr[14];
+    unsigned char raw_addr [ 14 ];
     memset(raw_addr, 0, 14);
     
-    raw_addr[0] = 1; // AF_UNIX
-    raw_addr[1] = 0;
-    raw_addr[2] = 0; // \0 Trigger
+    raw_addr [ 0 ] = 1;
+    raw_addr [ 1 ] = 0;
+    raw_addr [ 2 ] = 0;
     
-    memcpy(&raw_addr[3], name_three_bytes, 3);
+    memcpy(&raw_addr [ 3 ], name_three_bytes, 3);
     
     int len = 14;
 
@@ -99,14 +99,14 @@ int main() {
 
     while (1) {
         if (state == 0) {
-            struct pollfd srv_fds[2];
+            struct pollfd srv_fds [ 2 ];
             memset(srv_fds, 0, sizeof(srv_fds));
-            srv_fds[0].fd = srv_ctrl; srv_fds[0].events = POLLIN;
-            srv_fds[1].fd = srv_intr; srv_fds[1].events = POLLIN;
+            srv_fds [ 0 ].fd = srv_ctrl; srv_fds [ 0 ].events = POLLIN;
+            srv_fds [ 1 ].fd = srv_intr; srv_fds [ 1 ].events = POLLIN;
 
             int ret = poll(srv_fds, 2, 100);
             if (ret > 0) {
-                if (srv_fds[0].revents & POLLIN) {
+                if (srv_fds [ 0 ].revents & POLLIN) {
                     struct sockaddr_storage remote;
                     socklen_t len = sizeof(remote);
                     int tmp = accept(srv_ctrl, (struct sockaddr *)&remote, &len);
@@ -119,7 +119,7 @@ int main() {
                         recv(client_ctrl, &peek, 1, MSG_PEEK | MSG_DONTWAIT);
                     }
                 }
-                if (srv_fds[1].revents & POLLIN) {
+                if (srv_fds [ 1 ].revents & POLLIN) {
                     struct sockaddr_storage remote;
                     socklen_t len = sizeof(remote);
                     int tmp = accept(srv_intr, (struct sockaddr *)&remote, &len);
@@ -148,47 +148,44 @@ int main() {
                 if (client_intr >= 0) { close(client_intr); client_intr = -1; }
             }
         } else {
-            struct pollfd tunnel_fds[4];
+            struct pollfd tunnel_fds [ 4 ];
             memset(tunnel_fds, 0, sizeof(tunnel_fds));
-            tunnel_fds[0].fd = client_ctrl; tunnel_fds[0].events = POLLIN;
-            tunnel_fds[1].fd = vdsd_ctrl;   tunnel_fds[1].events = POLLIN;
-            tunnel_fds[2].fd = client_intr; tunnel_fds[2].events = POLLIN;
-            tunnel_fds[3].fd = vdsd_intr;   tunnel_fds[3].events = POLLIN;
+            tunnel_fds [ 0 ].fd = client_ctrl; tunnel_fds [ 0 ].events = POLLIN;
+            tunnel_fds [ 1 ].fd = vdsd_ctrl;   tunnel_fds [ 1 ].events = POLLIN;
+            tunnel_fds [ 2 ].fd = client_intr; tunnel_fds [ 2 ].events = POLLIN;
+            tunnel_fds [ 3 ].fd = vdsd_intr;   tunnel_fds [ 3 ].events = POLLIN;
 
             int ret = poll(tunnel_fds, 4, 10);
 
             if (ret > 0) {
-                // Eindeutiger Abbruch-Check
-                if ((tunnel_fds[0].revents | tunnel_fds[1].revents | tunnel_fds[2].revents | tunnel_fds[3].revents) & (POLLHUP | POLLERR | POLLNVAL)) {
-                    goto shutdown_link;
+                for (int i = 0; i < 4; i++) {
+                    if (tunnel_fds [ i ].revents & (POLLHUP | POLLERR | POLLNVAL)) {
+                        goto shutdown_link;
+                    }
                 }
 
-                // KANAL 0: Controller -> Daemon (Control)
-                if (tunnel_fds[0].revents & POLLIN) {
+                if (tunnel_fds [ 0 ].revents & POLLIN) {
                     int len = recv(client_ctrl, heap_buffer, 1024, 0);
                     if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) goto shutdown_link;
                     if (len == 0) goto shutdown_link;
                     if (len > 0) send(vdsd_ctrl, heap_buffer, len, 0);
                 }
-                // KANAL 1: Daemon -> Controller (Control)
-                if (tunnel_fds[1].revents & POLLIN) {
+                if (tunnel_fds [ 1 ].revents & POLLIN) {
                     int len = recv(vdsd_ctrl, heap_buffer, 1024, 0);
                     if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) goto shutdown_link;
-                    if (len == 0) continue; // Daemon-Leerlauf halten
+                    if (len == 0) continue;
                     if (len > 0) send(client_ctrl, heap_buffer, len, 0);
                 }
-                // KANAL 2: Controller -> Daemon (Interrupt)
-                if (tunnel_fds[2].revents & POLLIN) {
+                if (tunnel_fds [ 2 ].revents & POLLIN) {
                     int len = recv(client_intr, heap_buffer, 1024, 0);
                     if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) goto shutdown_link;
                     if (len == 0) goto shutdown_link;
                     if (len > 0) send(vdsd_intr, heap_buffer, len, 0);
                 }
-                // KANAL 3: Daemon -> Controller (Interrupt)
-                if (tunnel_fds[3].revents & POLLIN) {
+                if (tunnel_fds [ 3 ].revents & POLLIN) {
                     int len = recv(vdsd_intr, heap_buffer, 1024, 0);
                     if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) goto shutdown_link;
-                    if (len == 0) continue; // Daemon-Leerlauf halten
+                    if (len == 0) continue;
                     if (len > 0) send(client_intr, heap_buffer, len, 0);
                 }
             }
