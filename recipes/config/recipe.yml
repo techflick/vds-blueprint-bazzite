@@ -93,15 +93,15 @@ modules:
             sed -i '/pkg_check_modules.*bluez/c\set(bluez_FOUND TRUE)\nset(bluez_INCLUDE_DIRS "/vds_build_dir/include")\nset(bluez_LIBRARIES "")' CMakeLists.txt && \
             sed -i 's/PkgConfig::BLUEZ//g' CMakeLists.txt
 
-        # 3. Hilfsdatei für die modifizierte Adressausrichtung im RAM erzeugen
+        # 3. Erstellung der modifizierten fill_l2cap_sockaddr (Erzwingt das RAM-Layout im Daemon beim bind())
         RUN echo 'namespace vds { namespace {' > /tmp/new_func.cc && \
-           echo 'void fill_l2cap_sockaddr(sockaddr_l2 &sockaddr, std::uint16_t psm, std::span<const std::uint8_t, 6> address) {' >> /tmp/new_func.cc && \
+            echo 'void fill_l2cap_sockaddr(sockaddr_l2 &sockaddr, std::uint16_t psm, std::span<const std::uint8_t, 6> address) {' >> /tmp/new_func.cc && \
             echo '    std::memset(&sockaddr, 0, sizeof(sockaddr));' >> /tmp/new_func.cc && \
             echo '    char *ptr = reinterpret_cast<char*>(&sockaddr);' >> /tmp/new_func.cc && \
             echo '    ptr [ 0 ] = 1;' >> /tmp/new_func.cc && \
             echo '    ptr [ 1 ] = 0;' >> /tmp/new_func.cc && \
             echo '    ptr [ 2 ] = 0;' >> /tmp/new_func.cc && \
-            echo '    if (psm == 0x0011 || psm == 0x0021) {' >> /tmp/new_func.cc && \
+            echo '    if (psm == 0x0011) {' >> /tmp/new_func.cc && \
             echo '        std::memcpy(&ptr [ 3 ], "v_c", 3);' >> /tmp/new_func.cc && \
             echo '    } else {' >> /tmp/new_func.cc && \
             echo '        std::memcpy(&ptr [ 3 ], "v_i", 3);' >> /tmp/new_func.cc && \
@@ -109,23 +109,42 @@ modules:
             echo '}' >> /tmp/new_func.cc && \
             echo '}}' >> /tmp/new_func.cc
 
-        # 4. vds_bt.cc modifizieren (14-Byte-Alignment & AF_UNIX Socket-Erzeugung)
+        # 4. vds_bt.cc patchen (Injektion der fill-Funktion und Umstellung auf AF_UNIX)
         RUN cd /vds_build_dir && \
             sed -i '/void fill_l2cap_sockaddr/,/^}/c\void fill_l2cap_sockaddr(sockaddr_l2 \&sockaddr, std::uint16_t psm, std::span<const std::uint8_t, 6> address);' src/platform/linux/vds_bt.cc && \
             cat /tmp/new_func.cc >> src/platform/linux/vds_bt.cc && \
             rm -f /tmp/new_func.cc && \
             sed -i 's/::socket( AF_BLUETOOTH/::socket( 1/g' src/platform/linux/vds_bt.cc && \
-            sed -i 's/::socket(AF_BLUETOOTH/::socket(1/g' src/platform/linux/vds_bt.cc && \
-            sed -i 's/sizeof(peer)/14/g' src/platform/linux/vds_bt.cc && \
-            sed -i 's/peer_size < sizeof(peer)/false/g' src/platform/linux/vds_bt.cc
+            sed -i 's/::socket(AF_BLUETOOTH/::socket(1/g' src/platform/linux/vds_bt.cc
 
-        # 5. vds_bt.cc Absicherung: Verhindern, dass got == 0 die Pipeline zerreißt
+        # 5. FIX: accept_l2cap_psm absichern gegen Strukturgrößen-Konflikt & MAC-Absturz
+        RUN cd /vds_build_dir && \
+            echo 'std::optional<BtAcceptedChannel> accept_l2cap_psm(int listener_fd, std::uint16_t psm) {' > /tmp/new_accept.cc && \
+            echo '    char peer_buf [ 110 ];' >> /tmp/new_accept.cc && \
+            echo '    std::memset(peer_buf, 0, 110);' >> /tmp/new_accept.cc && \
+            echo '    socklen_t peer_size = 110;' >> /tmp/new_accept.cc && \
+            echo '    int fd_net = ::accept(listener_fd, reinterpret_cast<struct sockaddr*>(peer_buf), &peer_size);' >> /tmp/new_accept.cc && \
+            echo '    if (fd_net < 0) {' >> /tmp/new_accept.cc && \
+            echo '        int error = errno;' >> /tmp/new_accept.cc && \
+            echo '        if (error == EAGAIN || error == EWOULDBLOCK || error == EINTR) return {};' >> /tmp/new_accept.cc && \
+            echo '        throw std::runtime_error("Failed to accept");' >> /tmp/new_accept.cc && \
+            echo '    }' >> /tmp/new_accept.cc && \
+            echo '    if (::fcntl(fd_net, F_SETFD, FD_CLOEXEC) < 0) throw std::runtime_error("fcntl");' >> /tmp/new_accept.cc && \
+            echo '    set_nonblocking(fd_net, "socket");' >> /tmp/new_accept.cc && \
+            echo '    return BtAcceptedChannel{.address = "00:1b:dc:00:00:00", .fd = UniqueFd(fd_net)};' >> /tmp/new_accept.cc && \
+            echo '}' >> /tmp/new_accept.cc && \
+            sed -i '/std::optional<BtAcceptedChannel> accept_l2cap_psm/,/^}/c\std::optional<BtAcceptedChannel> accept_l2cap_psm(int listener_fd, std::uint16_t psm);' src/platform/linux/vds_bt.cc && \
+            cat /tmp/new_accept.cc >> src/platform/linux/vds_bt.cc && \
+            rm -f /tmp/new_accept.cc
+
+        # 6. vds_bt.cc Absicherung: Verhindern, dass got == 0 die Pipeline zerreißt
         RUN cd /vds_build_dir && \
             sed -i 's/if (got == 0)/if (false)/g' src/platform/linux/vds_bt.cc
 
-        # 6. vdsd.cc patchen: Hardwareerkennung (BlueZ-Modalias) auf virtuell umleiten
+        # 7. vdsd.cc patchen: Hardwareerkennung (BlueZ-Modalias) auf virtuell umleiten
         RUN cd /vds_build_dir && \
             sed -i '/std::uint32_t detect_bluetooth_profile/,/^}/c\std::uint32_t detect_bluetooth_profile(const std::string \&address) { return 1; }' src/platform/linux/vdsd.cc
+
             
         # BLOCK 5: SYSTEM-KONFIGURATIONEN (SYSTEMD, UDEV, ALSA)
         RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
