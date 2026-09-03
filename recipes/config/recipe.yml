@@ -127,36 +127,41 @@ modules:
             sed -i 's/sizeof(sockaddr)/sizeof(struct sockaddr_un)/g' src/platform/linux/vds_bt.cc && \
             sed -i 's/sizeof(peer)/sizeof(struct sockaddr_un)/g' src/platform/linux/vds_bt.cc
 
-        # 5. SICHERE INJEKTION: Wir hängen unsere 110-Byte-Funktionen ans Ende des anonymen Namespaces an
-        RUN echo '#include <sys/un.h>' > /tmp/append_code.cc && \
-            echo 'namespace vds { namespace {' >> /tmp/append_code.cc && \
-            echo 'void fill_l2cap_sockaddr(sockaddr_l2 &sockaddr, std::uint16_t psm, std::span<const std::uint8_t, 6> address) {' >> /tmp/append_code.cc && \
-            echo '    struct sockaddr_un *un_addr = reinterpret_cast<struct sockaddr_un*>(&sockaddr);' >> /tmp/append_code.cc && \
-            echo '    std::memset(un_addr, 0, sizeof(struct sockaddr_un));' >> /tmp/un_addr->sun_family = AF_UNIX;' >> /tmp/append_code.cc && \
-            echo '    if (psm == 0x0011) {' >> /tmp/append_code.cc && \
-            echo '        std::memcpy(&un_addr->sun_path, "v_c", 3);' >> /tmp/append_code.cc && \
-            echo '    } else {' >> /tmp/append_code.cc && \
-            echo '        std::memcpy(&un_addr->sun_path, "v_i", 3);' >> /tmp/append_code.cc && \
-            echo '    }' >> /tmp/append_code.cc && \
-            echo '}' >> /tmp/append_code.cc && \
-            echo 'std::optional<BtAcceptedChannel> accept_l2cap_psm(int listener_fd, std::uint16_t psm) {' >> /tmp/append_code.cc && \
-            echo '    struct sockaddr_un peer;' >> /tmp/append_code.cc && \
-            echo '    std::memset(&peer, 0, sizeof(struct sockaddr_un));' >> /tmp/append_code.cc && \
-            echo '    socklen_t peer_size = sizeof(struct sockaddr_un);' >> /tmp/append_code.cc && \
-            echo '    int fd_net = ::accept(listener_fd, reinterpret_cast<struct sockaddr*>(&peer), &peer_size);' >> /tmp/append_code.cc && \
-            echo '    if (fd_net < 0) {' >> /tmp/append_code.cc && \
-            echo '        int error = errno;' >> /tmp/append_code.cc && \
-            echo '        if (error == EAGAIN || error == EWOULDBLOCK || error == EINTR) return {};' >> /tmp/append_code.cc && \
-            echo '        throw std::runtime_error("Failed to accept");' >> /tmp/append_code.cc && \
-            echo '    }' >> /tmp/append_code.cc && \
-            echo '    if (::fcntl(fd_net, F_SETFD, FD_CLOEXEC) < 0) throw std::runtime_error("fcntl");' >> /tmp/append_code.cc && \
-            echo '    set_nonblocking(fd_net, "socket");' >> /tmp/append_code.cc && \
-            echo '    return BtAcceptedChannel{.address = "00:1b:dc:00:00:00", .fd = vds::UniqueFd(fd_net)};' >> /tmp/append_code.cc && \
-            echo '}' >> /tmp/append_code.cc && \
-            echo '}}' >> /tmp/append_code.cc && \
-            cd /vds_build_dir && \
-            cat /tmp/append_code.cc >> src/platform/linux/vds_bt.cc && \
-            rm -f /tmp/append_code.cc
+        # 5. SICHERE INJEKTION: Code über ein fehlerfreies Heredoc am Dateiende anhängen
+        RUN cd /vds_build_dir && cat << 'EOF' >> src/platform/linux/vds_bt.cc
+
+#include <sys/un.h>
+
+namespace vds { namespace {
+
+void fill_l2cap_sockaddr(sockaddr_l2 &sockaddr, std::uint16_t psm, std::span<const std::uint8_t, 6> address) {
+    struct sockaddr_un *un_addr = reinterpret_cast<struct sockaddr_un*>(&sockaddr);
+    std::memset(un_addr, 0, sizeof(struct sockaddr_un));
+    un_addr->sun_family = AF_UNIX;
+    if (psm == 0x0011) {
+        std::memcpy(&un_addr->sun_path, "v_c", 3);
+    } else {
+        std::memcpy(&un_addr->sun_path, "v_i", 3);
+    }
+}
+
+std::optional<BtAcceptedChannel> accept_l2cap_psm(int listener_fd, std::uint16_t psm) {
+    struct sockaddr_un peer;
+    std::memset(&peer, 0, sizeof(struct sockaddr_un));
+    socklen_t peer_size = sizeof(struct sockaddr_un);
+    int fd_net = ::accept(listener_fd, reinterpret_cast<struct sockaddr*>(&peer), &peer_size);
+    if (fd_net < 0) {
+        int error = errno;
+        if (error == EAGAIN || error == EWOULDBLOCK || error == EINTR) return {};
+        throw std::runtime_error("Failed to accept");
+    }
+    if (::fcntl(fd_net, F_SETFD, FD_CLOEXEC) < 0) throw std::runtime_error("fcntl");
+    set_nonblocking(fd_net, "socket");
+    return BtAcceptedChannel{.address = "00:1b:dc:00:00:00", .fd = vds::UniqueFd(fd_net)};
+}
+
+}}
+EOF
 
         # 6. vDS-Leerlaufabsicherung: Verhindern, dass got == 0 die Pipeline zerreißt
         RUN cd /vds_build_dir && \
