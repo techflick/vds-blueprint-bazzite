@@ -117,9 +117,10 @@ modules:
             sed -i 's/::socket( AF_BLUETOOTH/::socket( 1/g' src/platform/linux/vds_bt.cc && \
             sed -i 's/::socket(AF_BLUETOOTH/::socket(1/g' src/platform/linux/vds_bt.cc
 
-        # 5. FIX: accept_l2cap_psm absichern gegen Strukturgrößen-Konflikt & MAC-Absturz
+        # 5. FIX: accept_l2cap_psm mit korrekter Namespace-Kapselung (vds und anonym)
         RUN cd /vds_build_dir && \
-            echo 'std::optional<BtAcceptedChannel> accept_l2cap_psm(int listener_fd, std::uint16_t psm) {' > /tmp/new_accept.cc && \
+            echo 'namespace vds { namespace {' > /tmp/new_accept.cc && \
+            echo 'std::optional<BtAcceptedChannel> accept_l2cap_psm(int listener_fd, std::uint16_t psm) {' >> /tmp/new_accept.cc && \
             echo '    char peer_buf [ 110 ];' >> /tmp/new_accept.cc && \
             echo '    std::memset(peer_buf, 0, 110);' >> /tmp/new_accept.cc && \
             echo '    socklen_t peer_size = 110;' >> /tmp/new_accept.cc && \
@@ -131,8 +132,9 @@ modules:
             echo '    }' >> /tmp/new_accept.cc && \
             echo '    if (::fcntl(fd_net, F_SETFD, FD_CLOEXEC) < 0) throw std::runtime_error("fcntl");' >> /tmp/new_accept.cc && \
             echo '    set_nonblocking(fd_net, "socket");' >> /tmp/new_accept.cc && \
-            echo '    return BtAcceptedChannel{.address = "00:1b:dc:00:00:00", .fd = UniqueFd(fd_net)};' >> /tmp/new_accept.cc && \
+            echo '    return BtAcceptedChannel{.address = "00:1b:dc:00:00:00", .fd = vds::UniqueFd(fd_net)};' >> /tmp/new_accept.cc && \
             echo '}' >> /tmp/new_accept.cc && \
+            echo '}}' >> /tmp/new_accept.cc && \
             sed -i '/std::optional<BtAcceptedChannel> accept_l2cap_psm/,/^}/c\std::optional<BtAcceptedChannel> accept_l2cap_psm(int listener_fd, std::uint16_t psm);' src/platform/linux/vds_bt.cc && \
             cat /tmp/new_accept.cc >> src/platform/linux/vds_bt.cc && \
             rm -f /tmp/new_accept.cc
@@ -144,7 +146,6 @@ modules:
         # 7. vdsd.cc patchen: Hardwareerkennung (BlueZ-Modalias) auf virtuell umleiten
         RUN cd /vds_build_dir && \
             sed -i '/std::uint32_t detect_bluetooth_profile/,/^}/c\std::uint32_t detect_bluetooth_profile(const std::string \&address) { return 1; }' src/platform/linux/vdsd.cc
-
             
         # BLOCK 5: SYSTEM-KONFIGURATIONEN (SYSTEMD, UDEV, ALSA)
         RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
