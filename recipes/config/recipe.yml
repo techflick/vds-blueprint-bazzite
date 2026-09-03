@@ -84,7 +84,7 @@ modules:
         #endif
         EOF
 
-                # BLOCK 4: QUELLCODE-VORBEREITUNG & DAEMON-PATCHES (STANDARDISIERTES 110-BYTE UNIX-IPC)
+        # BLOCK 4: QUELLCODE-VORBEREITUNG & DAEMON-PATCHES (STANDARDISIERTES 110-BYTE UNIX-IPC)
         COPY vds-proxy.c /vds_build_dir/vds-proxy.c
 
         RUN cd /vds_build_dir && \
@@ -95,44 +95,38 @@ modules:
             sed -i 's/sizeof(sockaddr)/sizeof(struct sockaddr_un)/g' src/platform/linux/vds_bt.cc && \
             sed -i 's/sizeof(peer)/sizeof(struct sockaddr_un)/g' src/platform/linux/vds_bt.cc && \
             sed -i 's/if (got == 0)/if (false)/g' src/platform/linux/vds_bt.cc && \
-            sed -i 's/vds::bluez_device_modalias(address);/std::string("usb\x3av054Cp0CE6d0100");/g' src/platform/linux/vdsd.cc
+            sed -i "s|vds::bluez_device_modalias(address);|std::string(\"usb\x3av054Cp0CE6d0100\");|g" src/platform/linux/vdsd.cc
 
         # Injektion der synchronisierten 110-Byte RAM-IPC Funktionen ans Ende von vds_bt.cc via Heredoc
         RUN cd /vds_build_dir && cat << 'EOF' >> src/platform/linux/vds_bt.cc
-
-#include <sys/un.h>
-
-namespace vds { namespace {
-
-void fill_l2cap_sockaddr(sockaddr_l2 &sockaddr, std::uint16_t psm, std::span<const std::uint8_t, 6> address) {
-    struct sockaddr_un *un_addr = reinterpret_cast<struct sockaddr_un*>(&sockaddr);
-    std::memset(un_addr, 0, sizeof(struct sockaddr_un));
-    un_addr->sun_family = AF_UNIX;
-    if (psm == 0x0011) {
-        std::memcpy(&un_addr->sun_path, "v_c", 3);
-    } else {
-        std::memcpy(&un_addr->sun_path, "v_i", 3);
-    }
+        #include <sys/un.h>
+        namespace vds { namespace {
+        void fill_l2cap_sockaddr(sockaddr_l2 &sockaddr, std::uint16_t psm, std::span<const std::uint8_t, 6> address) {
+            struct sockaddr_un *un_addr = reinterpret_cast<struct sockaddr_un*>(&sockaddr);
+            std::memset(un_addr, 0, sizeof(struct sockaddr_un));
+            un_addr->sun_family = AF_UNIX;
+            if (psm == 0x0011) {
+                std::memcpy(&un_addr->sun_path, "v_c", 3);
+            } else {
+                std::memcpy(&un_addr->sun_path, "v_i", 3);
+            }
+        }
+        std::optional<BtAcceptedChannel> accept_l2cap_psm(int listener_fd, std::uint16_t psm) {
+            struct sockaddr_un peer;
+            std::memset(&peer, 0, sizeof(struct sockaddr_un));
+            socklen_t peer_size = sizeof(struct sockaddr_un);
+            int fd_net = ::accept(listener_fd, reinterpret_cast<struct sockaddr*>(&peer), &peer_size);
+            if (fd_net < 0) {
+                int error = errno;
+                if (error == EAGAIN || error == EWOULDBLOCK || error == EINTR) return {};
+                throw std::runtime_error("Failed to accept");
+            }
+            if (::fcntl(fd_net, F_SETFD, FD_CLOEXEC) < 0) throw std::runtime_error("fcntl");
+            set_nonblocking(fd_net, "socket");
+            return BtAcceptedChannel{.address = "00:1b:dc:00:00:00", .fd = vds::UniqueFd(fd_net)};
 }
-
-std::optional<BtAcceptedChannel> accept_l2cap_psm(int listener_fd, std::uint16_t psm) {
-    struct sockaddr_un peer;
-    std::memset(&peer, 0, sizeof(struct sockaddr_un));
-    socklen_t peer_size = sizeof(struct sockaddr_un);
-    int fd_net = ::accept(listener_fd, reinterpret_cast<struct sockaddr*>(&peer), &peer_size);
-    if (fd_net < 0) {
-        int error = errno;
-        if (error == EAGAIN || error == EWOULDBLOCK || error == EINTR) return {};
-        throw std::runtime_error("Failed to accept");
-    }
-    if (::fcntl(fd_net, F_SETFD, FD_CLOEXEC) < 0) throw std::runtime_error("fcntl");
-    set_nonblocking(fd_net, "socket");
-    return BtAcceptedChannel{.address = "00:1b:dc:00:00:00", .fd = vds::UniqueFd(fd_net)};
-}
-
-}}
-EOF
-
+        }}
+        EOF
             
         # BLOCK 5: SYSTEM-KONFIGURATIONEN (SYSTEMD, UDEV, ALSA)
         RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
