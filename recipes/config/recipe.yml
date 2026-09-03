@@ -84,7 +84,7 @@ modules:
         #endif
         EOF
 
-        # BLOCK 4: QUELLCODE-VORBEREITUNG & DAEMON-PATCHES (STANDARDISIERTES 110-BYTE UNIX-IPC)
+                # BLOCK 4: QUELLCODE-VORBEREITUNG & DAEMON-PATCHES (STANDARDISIERTES 110-BYTE UNIX-IPC)
         COPY vds-proxy.c /vds_build_dir/vds-proxy.c
 
         RUN cd /vds_build_dir && \
@@ -95,7 +95,7 @@ modules:
             sed -i 's/sizeof(sockaddr)/sizeof(struct sockaddr_un)/g' src/platform/linux/vds_bt.cc && \
             sed -i 's/sizeof(peer)/sizeof(struct sockaddr_un)/g' src/platform/linux/vds_bt.cc && \
             sed -i 's/if (got == 0)/if (false)/g' src/platform/linux/vds_bt.cc && \
-            sed -i 's/vds::bluez_device_modalias(address);/std::string("usb:v054Cp0CE6d0100");/g' src/platform/linux/vdsd.cc
+            sed -i 's/vds::bluez_device_modalias(address);/std::string("usb\x3av054Cp0CE6d0100");/g' src/platform/linux/vdsd.cc
 
         # Injektion der synchronisierten 110-Byte RAM-IPC Funktionen ans Ende von vds_bt.cc via Heredoc
         RUN cd /vds_build_dir && cat << 'EOF' >> src/platform/linux/vds_bt.cc
