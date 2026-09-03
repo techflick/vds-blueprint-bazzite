@@ -38,12 +38,12 @@ int open_bt_server_link(uint16_t psm) {
     }
     
     // 16-Byte-Erzwingung im echten BT-Kontext (No-Go #7)
-    uint8_t addr_bytes [ 16 ];
+    uint8_t addr_bytes[16];
     memset(addr_bytes, 0, 16);
-    addr_bytes [ 0 ] = BT_AF_BLUETOOTH & 0xFF;
-    addr_bytes [ 1 ] = (BT_AF_BLUETOOTH >> 8) & 0xFF;
-    addr_bytes [ 2 ] = psm & 0xFF;
-    addr_bytes [ 3 ] = (psm >> 8) & 0xFF;
+    addr_bytes[0] = BT_AF_BLUETOOTH & 0xFF;
+    addr_bytes[1] = (BT_AF_BLUETOOTH >> 8) & 0xFF;
+    addr_bytes[2] = psm & 0xFF;
+    addr_bytes[3] = (psm >> 8) & 0xFF;
 
     if (bind(sock, (struct sockaddr *)addr_bytes, 16) < 0) {
         close(sock);
@@ -57,26 +57,24 @@ int open_bt_server_link(uint16_t psm) {
 }
 
 int connect_unix_pipe(const char *name_three_bytes) {
-    // Zwingend SOCK_SEQPACKET nutzen, da der Daemon vds_bt.cc dies so initialisiert
+    // SOCK_SEQPACKET bleibt für die native vDS-Paketgrenzen-Erhaltung aktiv
     int sock = socket(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0);
     if (sock < 0) return -1;
     
-    unsigned char raw_addr [ 14 ];
-    memset(raw_addr, 0, 14);
+    // EINREISSEN DER 14-BYTE-GRENZE: Wir nutzen jetzt die offizielle 110-Byte-Struktur
+    struct sockaddr_un addr;
+    memset(&addr, 0, sizeof(struct sockaddr_un));
     
-    // AF_UNIX Familie (16-Bit Little Endian)
-    raw_addr [ 0 ] = 1;
-    raw_addr [ 1 ] = 0;
+    addr.sun_family = AF_UNIX;
     
-    // Abstraktes Socket-Layout: Erstes Byte von sun_path (Index 2) MUSS \0 sein
-    raw_addr [ 2 ] = '\0'; 
+    // Durch das vorherige memset ist das erste Byte von sun_path (Index 0) bereits '\0'
+    // Der 1-Byte-Shift schreibt die 3 Bytes ("v_c" / "v_i") direkt danach in den abstrakten Raum
+    memcpy(&addr.sun_path, name_three_bytes, 3);
     
-    // Synchronisierter 1-Byte-Shift: Kopiert "v_c" oder "v_i" exakt an Index 3, 4, 5
-    memcpy(&raw_addr [ 3 ], name_three_bytes, 3);
-    
-    int len = 14;
+    // Übergabe der vollen Strukturgröße an den Kernel, um Adresskonflikte zu verhindern
+    socklen_t len = sizeof(struct sockaddr_un);
 
-    if (connect(sock, (struct sockaddr *)raw_addr, len) < 0) {
+    if (connect(sock, (struct sockaddr *)&addr, len) < 0) {
         close(sock);
         return -1;
     }
@@ -111,15 +109,15 @@ int main() {
 
     while (1) {
         if (state == 0) {
-            struct pollfd srv_fds [ 2 ];
+            struct pollfd srv_fds[2];
             memset(srv_fds, 0, sizeof(srv_fds));
-            srv_fds [ 0 ].fd = srv_ctrl; srv_fds [ 0 ].events = POLLIN;
-            srv_fds [ 1 ].fd = srv_intr; srv_fds [ 1 ].events = POLLIN;
+            srv_fds[0].fd = srv_ctrl; srv_fds[0].events = POLLIN;
+            srv_fds[1].fd = srv_intr; srv_fds[1].events = POLLIN;
 
             int ret = poll(srv_fds, 2, 100);
             if (ret > 0) {
                 // ENTKOPPELTER CONTROL-KANAL HANDSHAKE
-                if (srv_fds [ 0 ].revents & POLLIN) {
+                if (srv_fds[0].revents & POLLIN) {
                     struct sockaddr_storage remote;
                     socklen_t len = sizeof(remote);
                     int tmp = accept(srv_ctrl, (struct sockaddr *)&remote, &len);
@@ -135,7 +133,7 @@ int main() {
                     }
                 }
                 // ENTKOPPELTER INTERRUPT-KANAL HANDSHAKE
-                if (srv_fds [ 1 ].revents & POLLIN) {
+                if (srv_fds[1].revents & POLLIN) {
                     struct sockaddr_storage remote;
                     socklen_t len = sizeof(remote);
                     int tmp = accept(srv_intr, (struct sockaddr *)&remote, &len);
@@ -159,27 +157,27 @@ int main() {
                 continue;
             }
         } else {
-            struct pollfd tunnel_fds [ 4 ];
+            struct pollfd tunnel_fds[4];
             memset(tunnel_fds, 0, sizeof(tunnel_fds));
-            tunnel_fds [ INDEX_CTRL_IN ].fd = client_ctrl; tunnel_fds [ INDEX_CTRL_IN ].events = POLLIN;
-            tunnel_fds [ INDEX_DAEMON_C ].fd = vdsd_ctrl;   tunnel_fds [ INDEX_DAEMON_C ].events = POLLIN;
-            tunnel_fds [ INDEX_INTR_IN ].fd = client_intr; tunnel_fds [ INDEX_INTR_IN ].events = POLLIN;
-            tunnel_fds [ INDEX_DAEMON_I ].fd = vdsd_intr;   tunnel_fds [ INDEX_DAEMON_I ].events = POLLIN;
+            tunnel_fds[INDEX_CTRL_IN].fd = client_ctrl; tunnel_fds[INDEX_CTRL_IN].events = POLLIN;
+            tunnel_fds[INDEX_DAEMON_C].fd = vdsd_ctrl;   tunnel_fds[INDEX_DAEMON_C].events = POLLIN;
+            tunnel_fds[INDEX_INTR_IN].fd = client_intr; tunnel_fds[INDEX_INTR_IN].events = POLLIN;
+            tunnel_fds[INDEX_DAEMON_I].fd = vdsd_intr;   tunnel_fds[INDEX_DAEMON_I].events = POLLIN;
 
             int ret = poll(tunnel_fds, 4, 10);
 
             if (ret > 0) {
                 // NO-GO FIX #5 & ERWEITERTES DEBUGGING
                 for (int i = 0; i < 4; i++) {
-                    if (tunnel_fds [ i ].revents & (POLLHUP | POLLERR | POLLNVAL)) {
+                    if (tunnel_fds[i].revents & (POLLHUP | POLLERR | POLLNVAL)) {
                         printf("vDS-Proxy: [DEBUG DROP] Abbruch durch Kernel-Signal (revents: %d) auf Tunnel-Index %d!\n", 
-                               tunnel_fds [ i ].revents, i);
+                               tunnel_fds[i].revents, i);
                         goto shutdown_link;
                     }
                 }
 
                 // INDEX 0: Controller Control -> Daemon Control
-                if (tunnel_fds [ INDEX_CTRL_IN ].revents & POLLIN) {
+                if (tunnel_fds[INDEX_CTRL_IN].revents & POLLIN) {
                     int len = recv(client_ctrl, heap_buffer, 1024, 0);
                     if (len < 0) {
                         if (errno != EAGAIN && errno != EWOULDBLOCK) goto shutdown_link;
@@ -189,7 +187,7 @@ int main() {
                     } else {
                         printf("vDS-Proxy: [CTRL IN] %d Bytes -> Daemon: ", len);
                         for(int i = 0; i < (len > 16 ? 16 : len); i++) {
-                            printf("%02X ", ((unsigned char*)heap_buffer) [ i ]);
+                            printf("%02X ", ((unsigned char*)heap_buffer)[i]);
                         }
                         if (len > 16) printf("...");
                         printf("\n");
@@ -199,7 +197,7 @@ int main() {
                 }
 
                 // INDEX 1: Daemon Control -> Controller Control
-                if (tunnel_fds [ INDEX_DAEMON_C ].revents & POLLIN) {
+                if (tunnel_fds[INDEX_DAEMON_C].revents & POLLIN) {
                     int len = recv(vdsd_ctrl, heap_buffer, 1024, 0);
                     if (len < 0) {
                         if (errno != EAGAIN && errno != EWOULDBLOCK) goto shutdown_link;
@@ -213,7 +211,7 @@ int main() {
                 }
                 
                 // INDEX 2: Controller Interrupt -> Daemon Interrupt
-                if (tunnel_fds [ INDEX_INTR_IN ].revents & POLLIN) {
+                if (tunnel_fds[INDEX_INTR_IN].revents & POLLIN) {
                     int len = recv(client_intr, heap_buffer, 1024, 0);
                     if (len < 0) {
                         if (errno != EAGAIN && errno != EWOULDBLOCK) goto shutdown_link;
@@ -227,7 +225,7 @@ int main() {
                 }
                 
                 // INDEX 3: Daemon Interrupt -> Controller Interrupt
-                if (tunnel_fds [ INDEX_DAEMON_I ].revents & POLLIN) {
+                if (tunnel_fds[INDEX_DAEMON_I].revents & POLLIN) {
                     int len = recv(vdsd_intr, heap_buffer, 1024, 0);
                     if (len < 0) {
                         if (errno != EAGAIN && errno != EWOULDBLOCK) goto shutdown_link;
@@ -244,14 +242,11 @@ int main() {
             
         shutdown_link:
             printf("vDS-Proxy: Pipeline-Verbindung getrennt. Setze Routing-Infrastruktur zurueck...\n");
-            
-            // FDs sicher schliessen, falls sie geoeffnet sind
             if (client_ctrl >= 0) close(client_ctrl);
             if (client_intr >= 0) close(client_intr);
             if (vdsd_ctrl >= 0) close(vdsd_ctrl);
             if (vdsd_intr >= 0) close(vdsd_intr);
             
-            // Zustandsvariablen fuer den naechsten Handshake-Versuch zuruecksetzen
             client_ctrl = -1;
             client_intr = -1;
             vdsd_ctrl = -1;
@@ -260,7 +255,6 @@ int main() {
         }
     }
     
-    // Aufraeumen vor dem Beenden (wird im endlosen Loop nie erreicht, gehoert zum sauberen C-Stil)
     free(heap_buffer);
     return 0;
 }
