@@ -85,49 +85,19 @@ modules:
         EOF
 
         # BLOCK 4: QUELLCODE-VORBEREITUNG & DAEMON-PATCHES (STANDARDISIERTES 110-BYTE UNIX-IPC)
-        # 1. Proxy-Quellcode in das Build-Verzeichnis kopieren
         COPY vds-proxy.c /vds_build_dir/vds-proxy.c
 
-        # 2. CMakeLists.txt patchen: BlueZ-Bibliothekszwang aushebeln
         RUN cd /vds_build_dir && \
             sed -i '/pkg_check_modules.*bluez/c\set(bluez_FOUND TRUE)\nset(bluez_INCLUDE_DIRS "/vds_build_dir/include")\nset(bluez_LIBRARIES "")' CMakeLists.txt && \
-            sed -i 's/PkgConfig::BLUEZ//g' CMakeLists.txt
-
-        # 3. Erstellung der modifizierten fill_l2cap_sockaddr (Nutzt echtes sockaddr_un Layout mit 110 Bytes)
-        RUN echo '#include <sys/un.h>' > /tmp/new_func.cc && \
-            echo 'namespace vds { namespace {' >> /tmp/new_func.cc && \
-            echo 'void fill_l2cap_sockaddr(sockaddr_l2 &sockaddr, std::uint16_t psm, std::span<const std::uint8_t, 6> address) {' >> /tmp/new_func.cc && \
-            echo '    struct sockaddr_un *un_addr = reinterpret_cast<struct sockaddr_un*>(&sockaddr);' >> /tmp/new_func.cc && \
-            echo '    std::memset(un_addr, 0, sizeof(struct sockaddr_un));' >> /tmp/new_func.cc && \
-            echo '    un_addr->sun_family = AF_UNIX;' >> /tmp/new_func.cc && \
-            echo '    if (psm == 0x0011) {' >> /tmp/new_func.cc && \
-            echo '        std::memcpy(&un_addr->sun_path[1], "v_c", 3);' >> /tmp/new_func.cc && \
-            echo '    } else {' >> /tmp/new_func.cc && \
-            echo '        std::memcpy(&un_addr->sun_path[1], "v_i", 3);' >> /tmp/new_func.cc && \
-            echo '    }' >> /tmp/new_func.cc && \
-            echo '}' >> /tmp/new_func.cc && \
-            echo '}}' >> /tmp/new_func.cc
-
-        # BLOCK 4: QUELLCODE-VORBEREITUNG & DAEMON-PATCHES (STANDARDISIERTES 110-BYTE UNIX-IPC)
-        # 1. Proxy-Quellcode in das Build-Verzeichnis kopieren
-        COPY vds-proxy.c /vds_build_dir/vds-proxy.c
-
-        # 2. CMakeLists.txt patchen: BlueZ-Bibliothekszwang aushebeln
-        RUN cd /vds_build_dir && \
-            sed -i '/pkg_check_modules.*bluez/c\set(bluez_FOUND TRUE)\nset(bluez_INCLUDE_DIRS "/vds_build_dir/include")\nset(bluez_LIBRARIES "")' CMakeLists.txt && \
-            sed -i 's/PkgConfig::BLUEZ//g' CMakeLists.txt
-
-        # 3. vds_bt.cc auf AF_UNIX umstellen (Zwingt socket() zu lokalen Sockets)
-        RUN cd /vds_build_dir && \
-            sed -i 's/AF_BLUETOOTH/AF_UNIX/g' src/platform/linux/vds_bt.cc
-
-        # 4. Alle harten Bluetooth-Größenstrukturen im Code auf die 110 Byte von sockaddr_un aufbohren
-        RUN cd /vds_build_dir && \
+            sed -i 's/PkgConfig::BLUEZ//g' CMakeLists.txt && \
+            sed -i 's/AF_BLUETOOTH/AF_UNIX/g' src/platform/linux/vds_bt.cc && \
             sed -i 's/sizeof(sockaddr_l2)/sizeof(struct sockaddr_un)/g' src/platform/linux/vds_bt.cc && \
             sed -i 's/sizeof(sockaddr)/sizeof(struct sockaddr_un)/g' src/platform/linux/vds_bt.cc && \
-            sed -i 's/sizeof(peer)/sizeof(struct sockaddr_un)/g' src/platform/linux/vds_bt.cc
+            sed -i 's/sizeof(peer)/sizeof(struct sockaddr_un)/g' src/platform/linux/vds_bt.cc && \
+            sed -i 's/if (got == 0)/if (false)/g' src/platform/linux/vds_bt.cc && \
+            sed -i 's/vds::bluez_device_modalias(address);/std::string("usb:v054Cp0CE6d0100");/g' src/platform/linux/vdsd.cc
 
-        # 5. SICHERE INJEKTION: Code über ein fehlerfreies Heredoc am Dateiende anhängen
+        # Injektion der synchronisierten 110-Byte RAM-IPC Funktionen ans Ende von vds_bt.cc via Heredoc
         RUN cd /vds_build_dir && cat << 'EOF' >> src/platform/linux/vds_bt.cc
 
 #include <sys/un.h>
@@ -163,13 +133,6 @@ std::optional<BtAcceptedChannel> accept_l2cap_psm(int listener_fd, std::uint16_t
 }}
 EOF
 
-        # 6. vDS-Leerlaufabsicherung: Verhindern, dass got == 0 die Pipeline zerreißt
-        RUN cd /vds_build_dir && \
-            sed -i 's/if (got == 0)/if (false)/g' src/platform/linux/vds_bt.cc
-
-        # 7. vdsd.cc patchen: Hardwareerkennung (BlueZ-Modalias) starr umleiten
-        RUN cd /vds_build_dir && \
-            sed -i 's/vds::bluez_device_modalias(address);/std::string("usb:v054Cp0CE6d0100");/g' src/platform/linux/vdsd.cc
             
         # BLOCK 5: SYSTEM-KONFIGURATIONEN (SYSTEMD, UDEV, ALSA)
         RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
@@ -234,7 +197,7 @@ EOF
               echo '    actions = { update-props = { device.disabled = true; node.disabled = true } }'; echo '  }'; echo ']'; \
             ) > "${PKG_ROOT}/etc/wireplumber/wireplumber.conf.d/99-vds-prioritisation.conf"
             
-        # BLOCK 6: BUILD & RPM-PAKETIERUNG
+                # BLOCK 6: BUILD & RPM-PAKETIERUNG
         RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
             PKG_ROOT="/vds-pkg-root" && \
             cp /vds_build_dir/module/vds_hcd.ko "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra/vds_hcd.ko" && \
@@ -242,7 +205,7 @@ EOF
             cd /vds_build_dir && mkdir -p build && cd build && \
             cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS="-isystem /vds_build_dir/include" -DCMAKE_CXX_FLAGS="-isystem /vds_build_dir/include" && \
             make -j$(nproc) && \
-            gcc -O3 -Wall /vds_build_dir/vds-proxy.c -o /vds_build_dir/build/vds-proxy && \
+            g++ -O3 -Wall /vds_build_dir/vds-proxy.c -o /vds_build_dir/build/vds-proxy && \
             cp /vds_build_dir/build/vdsd "${PKG_ROOT}/usr/bin/vdsd" && \
             cp /vds_build_dir/build/vdsctl "${PKG_ROOT}/usr/bin/vdsctl" && \
             cp /vds_build_dir/build/vds-proxy "${PKG_ROOT}/usr/bin/vds-proxy" && \
@@ -272,11 +235,11 @@ EOF
         RUN rpm2cpio /tmp/vds-rpm/kmod-vds-1.0.0-1.x86_64.rpm | cpio -idmv -D / && \
             KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
             depmod -a "${KERNEL_VERSION}" && \
-            mkdir -p /usr/lib/systemd/system/multi-user.target.wants && \
+            mkdir -p /etc/systemd/system/multi-user.target.wants && \
             ln -sf /usr/lib/systemd/system/vds-proxy.service \
-                   /usr/lib/systemd/system/multi-user.target.wants/vds-proxy.service && \
+                   /etc/systemd/system/multi-user.target.wants/vds-proxy.service && \
             ln -sf /usr/lib/systemd/system/vdsd.service \
-                   /usr/lib/systemd/system/multi-user.target.wants/vdsd.service && \
+                   /etc/systemd/system/multi-user.target.wants/vdsd.service && \
             ln -sf /usr/lib/systemd/system/vds-chmod-sdp.path \
-                   /usr/lib/systemd/system/multi-user.target.wants/vds-chmod-sdp.path && \
+                   /etc/systemd/system/multi-user.target.wants/vds-chmod-sdp.path && \
             rm -rf /vds_build_dir /vds-pkg-root /tmp/vds-rpm /root/rpmbuild
