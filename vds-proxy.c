@@ -118,6 +118,7 @@ int main() {
 
             int ret = poll(srv_fds, 2, 100);
             if (ret > 0) {
+                // ENTKOPPELTER CONTROL-KANAL HANDSHAKE
                 if (srv_fds [ 0 ].revents & POLLIN) {
                     struct sockaddr_storage remote;
                     socklen_t len = sizeof(remote);
@@ -127,10 +128,13 @@ int main() {
                         client_ctrl = tmp;
                         set_nonblocking_fd(client_ctrl);
                         printf("vDS-Proxy: Controller Control-Kanal aktiv abgefangen.\n");
-                        uint8_t peek = 0;
-                        recv(client_ctrl, &peek, 1, MSG_PEEK | MSG_DONTWAIT);
+                        
+                        // Sofort an den Daemon binden, um Timeouts zu verhindern
+                        if (vdsd_ctrl >= 0) close(vdsd_ctrl);
+                        vdsd_ctrl = connect_unix_pipe("v_c");
                     }
                 }
+                // ENTKOPPELTER INTERRUPT-KANAL HANDSHAKE
                 if (srv_fds [ 1 ].revents & POLLIN) {
                     struct sockaddr_storage remote;
                     socklen_t len = sizeof(remote);
@@ -140,25 +144,19 @@ int main() {
                         client_intr = tmp;
                         set_nonblocking_fd(client_intr);
                         printf("vDS-Proxy: Controller Interrupt-Kanal aktiv abgefangen.\n");
+                        
+                        // Sofort an den Daemon binden
+                        if (vdsd_intr >= 0) close(vdsd_intr);
+                        vdsd_intr = connect_unix_pipe("v_i");
                     }
                 }
             }
 
-            if (client_ctrl >= 0 && client_intr >= 0) {
-                printf("vDS-Proxy: Reiche Daten ueber RAM-Sockets an den Daemon weiter...\n");
-                
-                vdsd_ctrl = connect_unix_pipe("v_c");
-                vdsd_intr = connect_unix_pipe("v_i");
-
-                if (vdsd_ctrl >= 0 && vdsd_intr >= 0) {
-                    printf("vDS-Proxy: **Latenzfreie Speicher-Pipeline aktiv!**\n");
-                    state = 1;
-                    continue;
-                }
-                
-                printf("vDS-Proxy: RAM-Socket-Verbindung fehlgeschlagen.\n");
-                if (client_ctrl >= 0) { close(client_ctrl); client_ctrl = -1; }
-                if (client_intr >= 0) { close(client_intr); client_intr = -1; }
+            // Erst wenn alle 4 Endpunkte sauber im Speicher stehen, wird die Pipeline geschaltet
+            if (client_ctrl >= 0 && client_intr >= 0 && vdsd_ctrl >= 0 && vdsd_intr >= 0) {
+                printf("vDS-Proxy: **Latenzfreie Speicher-Pipeline aktiv!**\n");
+                state = 1;
+                continue;
             }
         } else {
             struct pollfd tunnel_fds [ 4 ];
@@ -171,9 +169,11 @@ int main() {
             int ret = poll(tunnel_fds, 4, 10);
 
             if (ret > 0) {
-                // NO-GO FIX #5: Strikt getrennte Einzelvalidierung der FDs gegen Fehlermasken
+                // NO-GO FIX #5 & ERWEITERTES DEBUGGING
                 for (int i = 0; i < 4; i++) {
                     if (tunnel_fds [ i ].revents & (POLLHUP | POLLERR | POLLNVAL)) {
+                        printf("vDS-Proxy: [DEBUG DROP] Abbruch durch Kernel-Signal (revents: %d) auf Tunnel-Index %d!\n", 
+                               tunnel_fds [ i ].revents, i);
                         goto shutdown_link;
                     }
                 }
@@ -182,12 +182,11 @@ int main() {
                 if (tunnel_fds [ INDEX_CTRL_IN ].revents & POLLIN) {
                     int len = recv(client_ctrl, heap_buffer, 1024, 0);
                     if (len < 0) {
-                        if (errno != EAGAIN && errno != EWOULDBLOCK) goto shutdown_link; // No-Go #4 Fix
+                        if (errno != EAGAIN && errno != EWOULDBLOCK) goto shutdown_link;
                     } else if (len == 0) {
                         printf("vDS-Proxy: Controller hat Control-Kanal geschlossen.\n");
                         goto shutdown_link;
                     } else {
-                        // Integrierter Hex-Logger zur Datenstrom-Verifikation
                         printf("vDS-Proxy: [CTRL IN] %d Bytes -> Daemon: ", len);
                         for(int i = 0; i < (len > 16 ? 16 : len); i++) {
                             printf("%02X ", ((unsigned char*)heap_buffer) [ i ]);
@@ -198,7 +197,7 @@ int main() {
                         send(vdsd_ctrl, heap_buffer, len, 0);
                     }
                 }
-                
+
                 // INDEX 1: Daemon Control -> Controller Control
                 if (tunnel_fds [ INDEX_DAEMON_C ].revents & POLLIN) {
                     int len = recv(vdsd_ctrl, heap_buffer, 1024, 0);
@@ -252,13 +251,16 @@ int main() {
             if (vdsd_ctrl >= 0) close(vdsd_ctrl);
             if (vdsd_intr >= 0) close(vdsd_intr);
             
-            // Zustandsvariablen fuer den naechsten Handshake-Versuch zurücksetzen
-            client_ctrl = client_intr = vdsd_ctrl = vdsd_intr = -1;
+            // Zustandsvariablen fuer den naechsten Handshake-Versuch zuruecksetzen
+            client_ctrl = -1;
+            client_intr = -1;
+            vdsd_ctrl = -1;
+            vdsd_intr = -1;
             state = 0;
         }
     }
     
-    // Aufräumen vor dem Beenden (wird im endlosen Loop nie erreicht, gehoert zum sauberen C-Stil)
+    // Aufraeumen vor dem Beenden (wird im endlosen Loop nie erreicht, gehoert zum sauberen C-Stil)
     free(heap_buffer);
     return 0;
 }
