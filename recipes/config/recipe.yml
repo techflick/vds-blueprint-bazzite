@@ -84,7 +84,7 @@ modules:
         #endif
         EOF
 
-        # BLOCK 4: QUELLCODE-VORBEREITUNG & DAEMON-PATCHES (RAM-IPC BYPASS)
+        # BLOCK 4: QUELLCODE-VORBEREITUNG & DAEMON-PATCHES (STANDARDISIERTES 110-BYTE UNIX-IPC)
         # 1. Proxy-Quellcode in das Build-Verzeichnis kopieren
         COPY vds-proxy.c /vds_build_dir/vds-proxy.c
 
@@ -93,38 +93,43 @@ modules:
             sed -i '/pkg_check_modules.*bluez/c\set(bluez_FOUND TRUE)\nset(bluez_INCLUDE_DIRS "/vds_build_dir/include")\nset(bluez_LIBRARIES "")' CMakeLists.txt && \
             sed -i 's/PkgConfig::BLUEZ//g' CMakeLists.txt
 
-        # 3. Erstellung der modifizierten fill_l2cap_sockaddr (Erzwingt das RAM-Layout im Daemon beim bind())
-        RUN echo 'namespace vds { namespace {' > /tmp/new_func.cc && \
+        # 3. Erstellung der modifizierten fill_l2cap_sockaddr (Nutzt echtes sockaddr_un Layout mit 110 Bytes)
+        RUN echo '#include <sys/un.h>' > /tmp/new_func.cc && \
+            echo 'namespace vds { namespace {' >> /tmp/new_func.cc && \
             echo 'void fill_l2cap_sockaddr(sockaddr_l2 &sockaddr, std::uint16_t psm, std::span<const std::uint8_t, 6> address) {' >> /tmp/new_func.cc && \
-            echo '    std::memset(&sockaddr, 0, sizeof(sockaddr));' >> /tmp/new_func.cc && \
-            echo '    char *ptr = reinterpret_cast<char*>(&sockaddr);' >> /tmp/new_func.cc && \
-            echo '    ptr [ 0 ] = 1;' >> /tmp/new_func.cc && \
-            echo '    ptr [ 1 ] = 0;' >> /tmp/new_func.cc && \
-            echo '    ptr [ 2 ] = 0;' >> /tmp/new_func.cc && \
+            echo '    struct sockaddr_un *un_addr = reinterpret_cast<struct sockaddr_un*>(&sockaddr);' >> /tmp/new_func.cc && \
+            echo '    std::memset(un_addr, 0, sizeof(struct sockaddr_un));' >> /tmp/new_func.cc && \
+            echo '    un_addr->sun_family = AF_UNIX;' >> /tmp/new_func.cc && \
             echo '    if (psm == 0x0011) {' >> /tmp/new_func.cc && \
-            echo '        std::memcpy(&ptr [ 3 ], "v_c", 3);' >> /tmp/new_func.cc && \
+            echo '        std::memcpy(&un_addr->sun_path[1], "v_c", 3);' >> /tmp/new_func.cc && \
             echo '    } else {' >> /tmp/new_func.cc && \
-            echo '        std::memcpy(&ptr [ 3 ], "v_i", 3);' >> /tmp/new_func.cc && \
+            echo '        std::memcpy(&un_addr->sun_path[1], "v_i", 3);' >> /tmp/new_func.cc && \
             echo '    }' >> /tmp/new_func.cc && \
             echo '}' >> /tmp/new_func.cc && \
             echo '}}' >> /tmp/new_func.cc
 
-        # 4. vds_bt.cc patchen (Injektion der fill-Funktion und Umstellung auf AF_UNIX)
+        # 4. vds_bt.cc patchen: Multi-Line-Löschung der alten Funktion & Injektion
         RUN cd /vds_build_dir && \
-            sed -i '/void fill_l2cap_sockaddr/,/^}/c\void fill_l2cap_sockaddr(sockaddr_l2 \&sockaddr, std::uint16_t psm, std::span<const std::uint8_t, 6> address);' src/platform/linux/vds_bt.cc && \
+            sed -i '/void fill_l2cap_sockaddr/,/std::uint16_t psm,/!b;N;/std::span<const std::uint8_t, 6> address)/,/^}/d' src/platform/linux/vds_bt.cc && \
             cat /tmp/new_func.cc >> src/platform/linux/vds_bt.cc && \
             rm -f /tmp/new_func.cc && \
-            sed -i 's/::socket( AF_BLUETOOTH/::socket( 1/g' src/platform/linux/vds_bt.cc && \
-            sed -i 's/::socket(AF_BLUETOOTH/::socket(1/g' src/platform/linux/vds_bt.cc
+            sed -i 's/::socket( AF_BLUETOOTH/::socket( AF_UNIX/g' src/platform/linux/vds_bt.cc && \
+            sed -i 's/::socket(AF_BLUETOOTH/::socket(AF_UNIX/g' src/platform/linux/vds_bt.cc
 
-        # 5. FIX: accept_l2cap_psm mit korrekter Namespace-Kapselung (vds und anonym)
+        # 5. Alle Strukturgrößen-Abfragen in vds_bt.cc auf die vollen 110 Bytes anheben
         RUN cd /vds_build_dir && \
-            echo 'namespace vds { namespace {' > /tmp/new_accept.cc && \
+            sed -i 's/sizeof(sockaddr_l2)/sizeof(struct sockaddr_un)/g' src/platform/linux/vds_bt.cc && \
+            sed -i 's/sizeof(sockaddr)/sizeof(struct sockaddr_un)/g' src/platform/linux/vds_bt.cc && \
+            sed -i 's/sizeof(peer)/sizeof(struct sockaddr_un)/g' src/platform/linux/vds_bt.cc
+
+        # 6. FIX: accept_l2cap_psm umschreiben auf sauberen, großen 110-Byte-Puffer
+        RUN echo '#include <sys/un.h>' > /tmp/new_accept.cc && \
+            echo 'namespace vds { namespace {' >> /tmp/new_accept.cc && \
             echo 'std::optional<BtAcceptedChannel> accept_l2cap_psm(int listener_fd, std::uint16_t psm) {' >> /tmp/new_accept.cc && \
-            echo '    char peer_buf [ 110 ];' >> /tmp/new_accept.cc && \
-            echo '    std::memset(peer_buf, 0, 110);' >> /tmp/new_accept.cc && \
-            echo '    socklen_t peer_size = 110;' >> /tmp/new_accept.cc && \
-            echo '    int fd_net = ::accept(listener_fd, reinterpret_cast<struct sockaddr*>(peer_buf), &peer_size);' >> /tmp/new_accept.cc && \
+            echo '    struct sockaddr_un peer;' >> /tmp/new_accept.cc && \
+            echo '    std::memset(&peer, 0, sizeof(struct sockaddr_un));' >> /tmp/new_accept.cc && \
+            echo '    socklen_t peer_size = sizeof(struct sockaddr_un);' >> /tmp/new_accept.cc && \
+            echo '    int fd_net = ::accept(listener_fd, reinterpret_cast<struct sockaddr*>(&peer), &peer_size);' >> /tmp/new_accept.cc && \
             echo '    if (fd_net < 0) {' >> /tmp/new_accept.cc && \
             echo '        int error = errno;' >> /tmp/new_accept.cc && \
             echo '        if (error == EAGAIN || error == EWOULDBLOCK || error == EINTR) return {};' >> /tmp/new_accept.cc && \
@@ -135,17 +140,19 @@ modules:
             echo '    return BtAcceptedChannel{.address = "00:1b:dc:00:00:00", .fd = vds::UniqueFd(fd_net)};' >> /tmp/new_accept.cc && \
             echo '}' >> /tmp/new_accept.cc && \
             echo '}}' >> /tmp/new_accept.cc && \
-            sed -i '/std::optional<BtAcceptedChannel> accept_l2cap_psm/,/^}/c\std::optional<BtAcceptedChannel> accept_l2cap_psm(int listener_fd, std::uint16_t psm);' src/platform/linux/vds_bt.cc && \
+            cd /vds_build_dir && \
+            sed -i '/std::optional<BtAcceptedChannel> accept_l2cap_psm/,/^}/d' src/platform/linux/vds_bt.cc && \
             cat /tmp/new_accept.cc >> src/platform/linux/vds_bt.cc && \
             rm -f /tmp/new_accept.cc
 
-        # 6. vds_bt.cc Absicherung: Verhindern, dass got == 0 die Pipeline zerreißt
+        # 7. vds_bt.cc Absicherung: Verhindern, dass Leerlauf im Lese-Kanal die Pipeline schließt
         RUN cd /vds_build_dir && \
             sed -i 's/if (got == 0)/if (false)/g' src/platform/linux/vds_bt.cc
 
-        # 7. vdsd.cc patchen: Hardwareerkennung (BlueZ-Modalias) auf virtuell umleiten
+        # 8. vdsd.cc patchen: Hardwareerkennung (BlueZ-Modalias) über Multi-Line sauber eliminieren
         RUN cd /vds_build_dir && \
-            sed -i '/std::uint32_t detect_bluetooth_profile/,/^}/c\std::uint32_t detect_bluetooth_profile(const std::string \&address) { return 1; }' src/platform/linux/vdsd.cc
+            sed -i '/std::uint32_t detect_bluetooth_profile/,/^}/d' src/platform/linux/vdsd.cc && \
+            echo 'namespace { std::uint32_t detect_bluetooth_profile(const std::string \&address) { return 1; } }' >> src/platform/linux/vdsd.cc
             
         # BLOCK 5: SYSTEM-KONFIGURATIONEN (SYSTEMD, UDEV, ALSA)
         RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
