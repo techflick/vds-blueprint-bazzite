@@ -84,7 +84,25 @@ modules:
         #endif
         EOF
 
-        # Injektion der funktionierenden 110-Byte RAM-IPC Funktionen ans Ende der Datei via geschützter Einzeiler
+        # BLOCK 4: QUELLCODE-VORBEREITUNG & DAEMON-PATCHES (STANDARDISIERTES 110-BYTE UNIX-IPC)
+        COPY vds-proxy.c /vds_build_dir/vds-proxy.c
+
+        RUN cd /vds_build_dir && \
+            sed -i '/pkg_check_modules.*bluez/c\set(bluez_FOUND TRUE)\nset(bluez_INCLUDE_DIRS "/vds_build_dir/include")\nset(bluez_LIBRARIES "")' CMakeLists.txt && \
+            sed -i 's/PkgConfig::BLUEZ//g' CMakeLists.txt && \
+            sed -i 's/AF_BLUETOOTH/AF_UNIX/g' src/platform/linux/vds_bt.cc && \
+            sed -i 's/sizeof(sockaddr_l2)/sizeof(struct sockaddr_un)/g' src/platform/linux/vds_bt.cc && \
+            sed -i 's/sizeof(sockaddr)/sizeof(struct sockaddr_un)/g' src/platform/linux/vds_bt.cc && \
+            sed -i 's/sizeof(peer)/sizeof(struct sockaddr_un)/g' src/platform/linux/vds_bt.cc && \
+            sed -i 's/if (got == 0)/if (false)/g' src/platform/linux/vds_bt.cc && \
+            sed -i "s|vds::bluez_device_modalias(address);|std::string(\"usb\x3av054Cp0CE6d0100\");|g" src/platform/linux/vdsd.cc
+
+        # FIX: Unfehlbare Umbenennung basierend auf den reinen Funktionsnamen (Hebelt Zeilenumbrüche aus)
+        RUN sed -i '1s|^|#include <sys/un.h>\n|' /vds_build_dir/src/platform/linux/vds_bt.cc && \
+            sed -i 's/fill_l2cap_sockaddr/_unused_fill_l2cap_sockaddr/g' /vds_build_dir/src/platform/linux/vds_bt.cc && \
+            sed -i 's/accept_l2cap_psm/_unused_accept_l2cap_psm/g' /vds_build_dir/src/platform/linux/vds_bt.cc
+
+                # Injektion der funktionierenden 110-Byte RAM-IPC Funktionen ans Ende der Datei via geschützter Einzeiler
         RUN echo 'namespace vds { namespace {' >> /vds_build_dir/src/platform/linux/vds_bt.cc && \
             echo 'void fill_l2cap_sockaddr(sockaddr_l2 &sockaddr, std::uint16_t psm, std::span<const std::uint8_t, 6> address) {' >> /vds_build_dir/src/platform/linux/vds_bt.cc && \
             echo '    struct sockaddr_un *un_addr = reinterpret_cast<struct sockaddr_un*>(&sockaddr);' >> /vds_build_dir/src/platform/linux/vds_bt.cc && \
