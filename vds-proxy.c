@@ -57,7 +57,7 @@ int open_bt_server_link(uint16_t psm) {
 }
 
 int connect_unix_pipe(const char *name_three_bytes) {
-    // SOCK_CLOEXEC schützt die FDs vor Leaks bei udev-Aufrufen
+    // Zwingend SOCK_SEQPACKET nutzen, da der Daemon vds_bt.cc dies so initialisiert
     int sock = socket(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0);
     if (sock < 0) return -1;
     
