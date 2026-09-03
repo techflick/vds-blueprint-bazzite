@@ -108,51 +108,63 @@ modules:
             echo '}' >> /tmp/new_func.cc && \
             echo '}}' >> /tmp/new_func.cc
 
-        # 4. vds_bt.cc patchen: Multi-Line-Löschung der alten Funktion & Injektion
-        RUN cd /vds_build_dir && \
-            sed -i '/void fill_l2cap_sockaddr/,/std::uint16_t psm,/!b;N;/std::span<const std::uint8_t, 6> address)/,/^}/d' src/platform/linux/vds_bt.cc && \
-            cat /tmp/new_func.cc >> src/platform/linux/vds_bt.cc && \
-            rm -f /tmp/new_func.cc && \
-            sed -i 's/::socket( AF_BLUETOOTH/::socket( AF_UNIX/g' src/platform/linux/vds_bt.cc && \
-            sed -i 's/::socket(AF_BLUETOOTH/::socket(AF_UNIX/g' src/platform/linux/vds_bt.cc
+        # BLOCK 4: QUELLCODE-VORBEREITUNG & DAEMON-PATCHES (STANDARDISIERTES 110-BYTE UNIX-IPC)
+        # 1. Proxy-Quellcode in das Build-Verzeichnis kopieren
+        COPY vds-proxy.c /vds_build_dir/vds-proxy.c
 
-        # 5. Alle Strukturgrößen-Abfragen in vds_bt.cc auf die vollen 110 Bytes anheben
+        # 2. CMakeLists.txt patchen: BlueZ-Bibliothekszwang aushebeln
+        RUN cd /vds_build_dir && \
+            sed -i '/pkg_check_modules.*bluez/c\set(bluez_FOUND TRUE)\nset(bluez_INCLUDE_DIRS "/vds_build_dir/include")\nset(bluez_LIBRARIES "")' CMakeLists.txt && \
+            sed -i 's/PkgConfig::BLUEZ//g' CMakeLists.txt
+
+        # 3. vds_bt.cc auf AF_UNIX umstellen (Zwingt socket() zu lokalen Sockets)
+        RUN cd /vds_build_dir && \
+            sed -i 's/AF_BLUETOOTH/AF_UNIX/g' src/platform/linux/vds_bt.cc
+
+        # 4. Alle harten Bluetooth-Größenstrukturen im Code auf die 110 Byte von sockaddr_un aufbohren
         RUN cd /vds_build_dir && \
             sed -i 's/sizeof(sockaddr_l2)/sizeof(struct sockaddr_un)/g' src/platform/linux/vds_bt.cc && \
             sed -i 's/sizeof(sockaddr)/sizeof(struct sockaddr_un)/g' src/platform/linux/vds_bt.cc && \
             sed -i 's/sizeof(peer)/sizeof(struct sockaddr_un)/g' src/platform/linux/vds_bt.cc
 
-        # 6. FIX: accept_l2cap_psm umschreiben auf sauberen, großen 110-Byte-Puffer
-        RUN echo '#include <sys/un.h>' > /tmp/new_accept.cc && \
-            echo 'namespace vds { namespace {' >> /tmp/new_accept.cc && \
-            echo 'std::optional<BtAcceptedChannel> accept_l2cap_psm(int listener_fd, std::uint16_t psm) {' >> /tmp/new_accept.cc && \
-            echo '    struct sockaddr_un peer;' >> /tmp/new_accept.cc && \
-            echo '    std::memset(&peer, 0, sizeof(struct sockaddr_un));' >> /tmp/new_accept.cc && \
-            echo '    socklen_t peer_size = sizeof(struct sockaddr_un);' >> /tmp/new_accept.cc && \
-            echo '    int fd_net = ::accept(listener_fd, reinterpret_cast<struct sockaddr*>(&peer), &peer_size);' >> /tmp/new_accept.cc && \
-            echo '    if (fd_net < 0) {' >> /tmp/new_accept.cc && \
-            echo '        int error = errno;' >> /tmp/new_accept.cc && \
-            echo '        if (error == EAGAIN || error == EWOULDBLOCK || error == EINTR) return {};' >> /tmp/new_accept.cc && \
-            echo '        throw std::runtime_error("Failed to accept");' >> /tmp/new_accept.cc && \
-            echo '    }' >> /tmp/new_accept.cc && \
-            echo '    if (::fcntl(fd_net, F_SETFD, FD_CLOEXEC) < 0) throw std::runtime_error("fcntl");' >> /tmp/new_accept.cc && \
-            echo '    set_nonblocking(fd_net, "socket");' >> /tmp/new_accept.cc && \
-            echo '    return BtAcceptedChannel{.address = "00:1b:dc:00:00:00", .fd = vds::UniqueFd(fd_net)};' >> /tmp/new_accept.cc && \
-            echo '}' >> /tmp/new_accept.cc && \
-            echo '}}' >> /tmp/new_accept.cc && \
+        # 5. SICHERE INJEKTION: Wir hängen unsere 110-Byte-Funktionen ans Ende des anonymen Namespaces an
+        RUN echo '#include <sys/un.h>' > /tmp/append_code.cc && \
+            echo 'namespace vds { namespace {' >> /tmp/append_code.cc && \
+            echo 'void fill_l2cap_sockaddr(sockaddr_l2 &sockaddr, std::uint16_t psm, std::span<const std::uint8_t, 6> address) {' >> /tmp/append_code.cc && \
+            echo '    struct sockaddr_un *un_addr = reinterpret_cast<struct sockaddr_un*>(&sockaddr);' >> /tmp/append_code.cc && \
+            echo '    std::memset(un_addr, 0, sizeof(struct sockaddr_un));' >> /tmp/un_addr->sun_family = AF_UNIX;' >> /tmp/append_code.cc && \
+            echo '    if (psm == 0x0011) {' >> /tmp/append_code.cc && \
+            echo '        std::memcpy(&un_addr->sun_path, "v_c", 3);' >> /tmp/append_code.cc && \
+            echo '    } else {' >> /tmp/append_code.cc && \
+            echo '        std::memcpy(&un_addr->sun_path, "v_i", 3);' >> /tmp/append_code.cc && \
+            echo '    }' >> /tmp/append_code.cc && \
+            echo '}' >> /tmp/append_code.cc && \
+            echo 'std::optional<BtAcceptedChannel> accept_l2cap_psm(int listener_fd, std::uint16_t psm) {' >> /tmp/append_code.cc && \
+            echo '    struct sockaddr_un peer;' >> /tmp/append_code.cc && \
+            echo '    std::memset(&peer, 0, sizeof(struct sockaddr_un));' >> /tmp/append_code.cc && \
+            echo '    socklen_t peer_size = sizeof(struct sockaddr_un);' >> /tmp/append_code.cc && \
+            echo '    int fd_net = ::accept(listener_fd, reinterpret_cast<struct sockaddr*>(&peer), &peer_size);' >> /tmp/append_code.cc && \
+            echo '    if (fd_net < 0) {' >> /tmp/append_code.cc && \
+            echo '        int error = errno;' >> /tmp/append_code.cc && \
+            echo '        if (error == EAGAIN || error == EWOULDBLOCK || error == EINTR) return {};' >> /tmp/append_code.cc && \
+            echo '        throw std::runtime_error("Failed to accept");' >> /tmp/append_code.cc && \
+            echo '    }' >> /tmp/append_code.cc && \
+            echo '    if (::fcntl(fd_net, F_SETFD, FD_CLOEXEC) < 0) throw std::runtime_error("fcntl");' >> /tmp/append_code.cc && \
+            echo '    set_nonblocking(fd_net, "socket");' >> /tmp/append_code.cc && \
+            echo '    return BtAcceptedChannel{.address = "00:1b:dc:00:00:00", .fd = vds::UniqueFd(fd_net)};' >> /tmp/append_code.cc && \
+            echo '}' >> /tmp/append_code.cc && \
+            echo '}}' >> /tmp/append_code.cc && \
             cd /vds_build_dir && \
-            sed -i '/std::optional<BtAcceptedChannel> accept_l2cap_psm/,/^}/d' src/platform/linux/vds_bt.cc && \
-            cat /tmp/new_accept.cc >> src/platform/linux/vds_bt.cc && \
-            rm -f /tmp/new_accept.cc
+            cat /tmp/append_code.cc >> src/platform/linux/vds_bt.cc && \
+            rm -f /tmp/append_code.cc
 
-        # 7. vds_bt.cc Absicherung: Verhindern, dass Leerlauf im Lese-Kanal die Pipeline schließt
+        # 6. vDS-Leerlaufabsicherung: Verhindern, dass got == 0 die Pipeline zerreißt
         RUN cd /vds_build_dir && \
             sed -i 's/if (got == 0)/if (false)/g' src/platform/linux/vds_bt.cc
 
-        # 8. vdsd.cc patchen: Hardwareerkennung (BlueZ-Modalias) über Multi-Line sauber eliminieren
+        # 7. vdsd.cc patchen: Hardwareerkennung (BlueZ-Modalias) starr umleiten
         RUN cd /vds_build_dir && \
-            sed -i '/std::uint32_t detect_bluetooth_profile/,/^}/d' src/platform/linux/vdsd.cc && \
-            echo 'namespace { std::uint32_t detect_bluetooth_profile(const std::string \&address) { return 1; } }' >> src/platform/linux/vdsd.cc
+            sed -i 's/vds::bluez_device_modalias(address);/std::string("usb:v054Cp0CE6d0100");/g' src/platform/linux/vdsd.cc
             
         # BLOCK 5: SYSTEM-KONFIGURATIONEN (SYSTEMD, UDEV, ALSA)
         RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
