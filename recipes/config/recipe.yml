@@ -97,9 +97,13 @@ modules:
             sed -i 's/if (got == 0)/if (false)/g' src/platform/linux/vds_bt.cc && \
             sed -i "s|vds::bluez_device_modalias(address);|std::string(\"usb\x3av054Cp0CE6d0100\");|g" src/platform/linux/vdsd.cc
 
-        # Erstellung der C++ Injektion über absolut sichere, flach maskierte Einzelzeilen
-        RUN echo '#include <sys/un.h>' >> /vds_build_dir/src/platform/linux/vds_bt.cc && \
-            echo 'namespace vds { namespace {' >> /vds_build_dir/src/platform/linux/vds_bt.cc && \
+        # FIX: Header ganz oben einfügen und die alten Funktionen umbenennen, um Redefinitionen zu verhindern
+        RUN sed -i '1s|^|#include <sys/un.h>\n|' /vds_build_dir/src/platform/linux/vds_bt.cc && \
+            sed -i 's/void fill_l2cap_sockaddr/void _unused_fill_l2cap_sockaddr/g' /vds_build_dir/src/platform/linux/vds_bt.cc && \
+            sed -i 's/std::optional<BtAcceptedChannel> accept_l2cap_psm/std::optional<BtAcceptedChannel> _unused_accept_l2cap_psm/g' /vds_build_dir/src/platform/linux/vds_bt.cc
+
+        # Injektion der funktionierenden 110-Byte RAM-IPC Funktionen ans Ende der Datei
+        RUN echo 'namespace vds { namespace {' >> /vds_build_dir/src/platform/linux/vds_bt.cc && \
             echo 'void fill_l2cap_sockaddr(sockaddr_l2 &sockaddr, std::uint16_t psm, std::span<const std::uint8_t, 6> address) {' >> /vds_build_dir/src/platform/linux/vds_bt.cc && \
             echo '    struct sockaddr_un *un_addr = reinterpret_cast<struct sockaddr_un*>(&sockaddr);' >> /vds_build_dir/src/platform/linux/vds_bt.cc && \
             echo '    std::memset(un_addr, 0, sizeof(struct sockaddr_un));' >> /vds_build_dir/src/platform/linux/vds_bt.cc && \
