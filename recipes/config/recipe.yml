@@ -102,33 +102,33 @@ modules:
             sed -i 's/fill_l2cap_sockaddr/_unused_fill_l2cap_sockaddr/g' /vds_build_dir/src/platform/linux/vds_bt.cc && \
             sed -i 's/accept_l2cap_psm/_unused_accept_l2cap_psm/g' /vds_build_dir/src/platform/linux/vds_bt.cc
 
-        # Injektion der funktionierenden 110-Byte RAM-IPC Funktionen via lesbarem und sauber maskiertem echo-Block
-        RUN echo 'namespace vds \{ namespace \{' >> /vds_build_dir/src/platform/linux/vds_bt.cc && \
-            echo 'void fill_l2cap_sockaddr(sockaddr_l2 \&sockaddr, std::uint16_t psm, std::span<const std::uint8_t, 6> address) \{' >> /vds_build_dir/src/platform/linux/vds_bt.cc && \
-            echo '    struct sockaddr_un *un_addr = reinterpret_cast<struct sockaddr_un*>(\&sockaddr);' >> /vds_build_dir/src/platform/linux/vds_bt.cc && \
-            echo '    std::memset(un_addr, 0, sizeof(struct sockaddr_un));' >> /vds_build_dir/src/platform/linux/vds_bt.cc && \
-            echo '    un_addr->sun_family = AF_UNIX;' >> /vds_build_dir/src/platform/linux/vds_bt.cc && \
-            echo '    if (psm == 0x0011) \{' >> /vds_build_dir/src/platform/linux/vds_bt.cc && \
-            echo '        std::memcpy(\&un_addr->sun_path, "v_c", 3);' >> /vds_build_dir/src/platform/linux/vds_bt.cc && \
-            echo '    \} else \{' >> /vds_build_dir/src/platform/linux/vds_bt.cc && \
-            echo '        std::memcpy(\&un_addr->sun_path, "v_i", 3);' >> /vds_build_dir/src/platform/linux/vds_bt.cc && \
-            echo '    \}' >> /vds_build_dir/src/platform/linux/vds_bt.cc && \
-            echo '\}' >> /vds_build_dir/src/platform/linux/vds_bt.cc && \
-            echo 'std::optional<BtAcceptedChannel> accept_l2cap_psm(int listener_fd, std::uint16_t psm) \{' >> /vds_build_dir/src/platform/linux/vds_bt.cc && \
-            echo '    struct sockaddr_un peer;' >> /vds_build_dir/src/platform/linux/vds_bt.cc && \
-            echo '    std::memset(\&peer, 0, sizeof(struct sockaddr_un));' >> /vds_build_dir/src/platform/linux/vds_bt.cc && \
-            socklen_t peer_size = sizeof(struct sockaddr_un);' >> /vds_build_dir/src/platform/linux/vds_bt.cc && \
-            echo '    int fd_net = ::accept(listener_fd, reinterpret_cast<struct sockaddr*>(\&peer), \&peer_size);' >> /vds_build_dir/src/platform/linux/vds_bt.cc && \
-            echo '    if (fd_net < 0) \{' >> /vds_build_dir/src/platform/linux/vds_bt.cc && \
-            echo '        int error = errno;' >> /vds_build_dir/src/platform/linux/vds_bt.cc && \
-            echo '        if (error == EAGAIN || error == EWOULDBLOCK || error == EINTR) return \{\};' >> /vds_build_dir/src/platform/linux/vds_bt.cc && \
-            echo '        throw std::runtime_error("Failed to accept");' >> /vds_build_dir/src/platform/linux/vds_bt.cc && \
-            echo '    \}' >> /vds_build_dir/src/platform/linux/vds_bt.cc && \
-            echo '    if (::fcntl(fd_net, F_SETFD, FD_CLOEXEC) < 0) throw std::runtime_error("fcntl");' >> /vds_build_dir/src/platform/linux/vds_bt.cc && \
-            echo '    set_nonblocking(fd_net, "socket");' >> /vds_build_dir/src/platform/linux/vds_bt.cc && \
-            echo '    return BtAcceptedChannel\{.address = "00:1b:dc:00:00:00", .fd = vds::UniqueFd(fd_net)\};' >> /vds_build_dir/src/platform/linux/vds_bt.cc && \
-            echo '\}' >> /vds_build_dir/src/platform/linux/vds_bt.cc && \
-            echo '\}\}' >> /vds_build_dir/src/platform/linux/vds_bt.cc
+        # Injektion der funktionierenden 110-Byte RAM-IPC Funktionen (Absolut lesbar und printf-sicher)
+        RUN printf 'namespace vds { namespace {\n' >> /vds_build_dir/src/platform/linux/vds_bt.cc
+        RUN printf 'void fill_l2cap_sockaddr(sockaddr_l2 &sockaddr, std::uint16_t psm, std::span<const std::uint8_t, 6> address) {\n' >> /vds_build_dir/src/platform/linux/vds_bt.cc
+        RUN printf '    struct sockaddr_un *un_addr = reinterpret_cast<struct sockaddr_un*>(&sockaddr);\n' >> /vds_build_dir/src/platform/linux/vds_bt.cc
+        RUN printf '    std::memset(un_addr, 0, sizeof(struct sockaddr_un));\n' >> /vds_build_dir/src/platform/linux/vds_bt.cc
+        RUN printf '    un_addr->sun_family = AF_UNIX;\n' >> /vds_build_dir/src/platform/linux/vds_bt.cc
+        RUN printf '    if (psm == 0x0011) {\n' >> /vds_build_dir/src/platform/linux/vds_bt.cc
+        RUN printf '        std::memcpy(&un_addr->sun_path, "v_c", 3);\n' >> /vds_build_dir/src/platform/linux/vds_bt.cc
+        RUN printf '    } else {\n' >> /vds_build_dir/src/platform/linux/vds_bt.cc
+        RUN printf '        std::memcpy(&un_addr->sun_path, "v_i", 3);\n' >> /vds_build_dir/src/platform/linux/vds_bt.cc
+        RUN printf '    }\n' >> /vds_build_dir/src/platform/linux/vds_bt.cc
+        RUN printf '}\n' >> /vds_build_dir/src/platform/linux/vds_bt.cc
+        RUN printf 'std::optional<BtAcceptedChannel> accept_l2cap_psm(int listener_fd, std::uint16_t psm) {\n' >> /vds_build_dir/src/platform/linux/vds_bt.cc
+        RUN printf '    struct sockaddr_un peer;\n' >> /vds_build_dir/src/platform/linux/vds_bt.cc
+        RUN printf '    std::memset(&peer, 0, sizeof(struct sockaddr_un));\n' >> /vds_build_dir/src/platform/linux/vds_bt.cc
+        RUN printf '    socklen_t peer_size = sizeof(struct sockaddr_un);\n' >> /vds_build_dir/src/platform/linux/vds_bt.cc
+        RUN printf '    int fd_net = ::accept(listener_fd, reinterpret_cast<struct sockaddr*>(&peer), &peer_size);\n' >> /vds_build_dir/src/platform/linux/vds_bt.cc
+        RUN printf '    if (fd_net < 0) {\n' >> /vds_build_dir/src/platform/linux/vds_bt.cc
+        RUN printf '        int error = errno;\n' >> /vds_build_dir/src/platform/linux/vds_bt.cc
+        RUN printf '        if (error == EAGAIN || error == EWOULDBLOCK || error == EINTR) return {};\n' >> /vds_build_dir/src/platform/linux/vds_bt.cc
+        RUN printf '        throw std::runtime_error("Failed to accept");\n' >> /vds_build_dir/src/platform/linux/vds_bt.cc
+        RUN printf '    }\n' >> /vds_build_dir/src/platform/linux/vds_bt.cc
+        RUN printf '    if (::fcntl(fd_net, F_SETFD, FD_CLOEXEC) < 0) throw std::runtime_error("fcntl");\n' >> /vds_build_dir/src/platform/linux/vds_bt.cc
+        RUN printf '    set_nonblocking(fd_net, "socket");\n' >> /vds_build_dir/src/platform/linux/vds_bt.cc
+        RUN printf '    return BtAcceptedChannel{.address = "00:1b:dc:00:00:00", .fd = vds::UniqueFd(fd_net)};\n' >> /vds_build_dir/src/platform/linux/vds_bt.cc
+        RUN printf '}\n' >> /vds_build_dir/src/platform/linux/vds_bt.cc
+        RUN printf '}}\n' >> /vds_build_dir/src/platform/linux/vds_bt.cc
         
         # BLOCK 5: SYSTEM-KONFIGURATIONEN (SYSTEMD, UDEV, ALSA)
         RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
