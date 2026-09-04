@@ -56,18 +56,16 @@ int open_bt_server_link(uint16_t psm) {
     return sock;
 }
 
-int connect_unix_pipe(const char *name_three_bytes) {
+int connect_unix_pipe(const char *name_four_bytes) {
     int sock = socket(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0);
     if (sock < 0) return -1;
     
     struct sockaddr_un addr;
-    // 1. Die gesamte 110-Byte-Struktur exakt nullen (Index 0 von sun_path wird dadurch \0)
     memset(&addr, 0, sizeof(struct sockaddr_un));
     addr.sun_family = AF_UNIX;
     
-    // 2. Den Namen "v_c" oder "v_i" exakt ab Index 1 in das Array kopieren
-    // Das verhütet Padding-Verschiebungen und sichert die 110-Byte-Symmetrie zum Daemon!
-    memcpy(addr.sun_path + 1, name_three_bytes, 3);
+    // KORREKTUR: Erhöhe von 3 auf 4 Bytes, um die Symmetrie zum Daemon ("v_c\0") herzustellen
+    memcpy(addr.sun_path + 1, name_four_bytes, 4); 
     
     socklen_t len = sizeof(struct sockaddr_un);
 
