@@ -57,23 +57,18 @@ int open_bt_server_link(uint16_t psm) {
 }
 
 int connect_unix_pipe(const char *name_three_bytes) {
-    // SOCK_SEQPACKET bleibt für die native vDS-Paketgrenzen-Erhaltung aktiv
-    // SOCK_CLOEXEC blockiert Dateideskriptor-Leaks bei udev-Aktionen
     int sock = socket(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0);
     if (sock < 0) return -1;
     
-    // EINREISSEN DER 14-BYTE-GRENZE: Volle 110-Byte-Struktur für Kernel-Symmetrie
     struct sockaddr_un addr;
+    // 1. Die gesamte 110-Byte-Struktur exakt nullen (Index 0 von sun_path wird dadurch \0)
     memset(&addr, 0, sizeof(struct sockaddr_un));
-    
     addr.sun_family = AF_UNIX;
     
-    // DER 1-BYTE-SHIFT FÜR DEN ABSTRAKTEN RAUM:
-    // Da addr komplett genullt wurde, ist addr.sun_path[0] bereits '\0'.
-    // Wir kopieren den Namen ("v_c" / "v_i") exakt ab Index 1 (addr.sun_path + 1).
+    // 2. Den Namen "v_c" oder "v_i" exakt ab Index 1 in das Array kopieren
+    // Das verhütet Padding-Verschiebungen und sichert die 110-Byte-Symmetrie zum Daemon!
     memcpy(addr.sun_path + 1, name_three_bytes, 3);
     
-    // Übergabe der vollen Strukturgröße (110 Byte) an den Kernel
     socklen_t len = sizeof(struct sockaddr_un);
 
     if (connect(sock, (struct sockaddr *)&addr, len) < 0) {
