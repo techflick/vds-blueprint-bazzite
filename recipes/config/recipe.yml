@@ -84,16 +84,19 @@ modules:
         #endif
         EOF
 
-        # BLOCK 4: DEFINITIVE IPC-UMSTELLUNG (KORREKTUR DER INTERNEN IMPLEMENTIERUNG)
+        # BLOCK 4: DEFINITIVE IPC-UMSTELLUNG (KORREKTUR)
+        # Kopiert die fehlerfreien C/C++ Dateien direkt in das Dateisystem des Containers
         COPY vds-proxy.c /vds_build_dir/vds-proxy.c
+        COPY vds_bt.cc /vds_build_dir/vds_bt.cc
 
         RUN cd /vds_build_dir && \
+            # Ersetzt die originale vds_bt.cc radikal vor dem CMake-Aufruf
+            cp /vds_build_dir/vds_bt.cc /vds_build_dir/src/platform/linux/vds_bt.cc && \
+            # Deaktiviert BlueZ-Abhängigkeiten im Build-System
             sed -i '/pkg_check_modules.*bluez/c\set(bluez_FOUND TRUE)\nset(bluez_INCLUDE_DIRS "/vds_build_dir/include")\nset(bluez_LIBRARIES "")' CMakeLists.txt && \
             sed -i 's/PkgConfig::BLUEZ//g' CMakeLists.txt && \
+            # Starr typisierte Hardware-Fälschung maskiert patchen (\x3a verhindert YAML-Parser-Kollaps)
             sed -i "s|vds::bluez_device_modalias(address);|std::optional<std::string>(\"usb\x3av054Cp0CE6d0100\");|g" src/platform/linux/vdsd.cc
-
-        # Radikale Entkernung und vollständige Neuerstellung der vds_bt.cc (INKLUSIVE MOVE-OPERATOREN)
-        RUN cd /vds_build_dir && echo -e '#include "vds_bt.hh"\n#include <sys/socket.h>\n#include <sys/un.h>\n#include <unistd.h>\n#include <fcntl.h>\n#include <cstring>\n#include <stdexcept>\n\nnamespace vds {\n\nstatic void setup_abstract_un(struct sockaddr_un &un_addr, const char *name) {\n    std::memset(&un_addr, 0, sizeof(struct sockaddr_un));\n    un_addr.sun_family = AF_UNIX;\n    std::memcpy(un_addr.sun_path + 1, name, 3);\n}\n\nstatic UniqueFd create_ipc_listener(const char *name) {\n    int fd = ::socket(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0);\n    if (fd < 0) throw std::runtime_error("IPC Socket Creation Failed");\n    int reuse = 1;\n    ::setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));\n    struct sockaddr_un un_addr;\n    setup_abstract_un(un_addr, name);\n    if (::bind(fd, reinterpret_cast<const struct sockaddr*>(&un_addr), sizeof(struct sockaddr_un)) < 0) {\n        throw std::runtime_error("IPC Bind Failed");\n    }\n    if (::listen(fd, 1) < 0) throw std::runtime_error("IPC Listen Failed");\n    return UniqueFd(fd);\n}\n\nBtL2capAcceptor::BtL2capAcceptor() \n    : control_listener_fd_(create_ipc_listener("v_c")), \n      interrupt_listener_fd_(create_ipc_listener("v_i")) {}\n\nstd::optional<BtAcceptedChannel> BtL2capAcceptor::accept_control() {\n    struct sockaddr_un peer;\n    socklen_t len = sizeof(peer);\n    int fd = ::accept(control_listener_fd_.get(), reinterpret_cast<struct sockaddr*>(&peer), &len);\n    if (fd < 0) return std::nullopt;\n    ::fcntl(fd, F_SETFD, FD_CLOEXEC);\n    ::fcntl(fd, F_SETFL, ::fcntl(fd, F_GETFL) | O_NONBLOCK);\n    return BtAcceptedChannel{.address = "00:1b:dc:00:00:00", .fd = UniqueFd(fd)};\n}\n\nstd::optional<BtAcceptedChannel> BtL2capAcceptor::accept_interrupt() {\n    struct sockaddr_un peer;\n    socklen_t len = sizeof(peer);\n    int fd = ::accept(interrupt_listener_fd_.get(), reinterpret_cast<struct sockaddr*>(&peer), &len);\n    if (fd < 0) return std::nullopt;\n    ::fcntl(fd, F_SETFD, FD_CLOEXEC);\n    ::fcntl(fd, F_SETFL, ::fcntl(fd, F_GETFL) | O_NONBLOCK);\n    return BtAcceptedChannel{.address = "00:1b:dc:00:00:00", .fd = UniqueFd(fd)};\n}\n\n// Backend Implementierung & Move-Operatoren gegen Linker-Fehler\nBtL2capBackend::BtL2capBackend(std::string addr, UniqueFd c, UniqueFd i) : address_(addr), control_fd_(c.release()), interrupt_fd_(i.release()) {}\n\nBtL2capBackend::~BtL2capBackend() { if(control_fd_ >= 0) ::close(control_fd_); if(interrupt_fd_ >= 0) ::close(interrupt_fd_); }\n\nBtL2capBackend::BtL2capBackend(BtL2capBackend &&other) noexcept \n    : address_(std::move(other.address_)), control_fd_(other.control_fd_), interrupt_fd_(other.interrupt_fd_) {\n    other.control_fd_ = -1;\n    other.interrupt_fd_ = -1;\n}\n\nBtL2capBackend &BtL2capBackend::operator=(BtL2capBackend &&other) noexcept {\n    if (this != &other) {\n        if(control_fd_ >= 0) ::close(control_fd_);\n        if(interrupt_fd_ >= 0) ::close(interrupt_fd_);\n        address_ = std::move(other.address_);\n        control_fd_ = other.control_fd_;\n        interrupt_fd_ = other.interrupt_fd_;\n        other.control_fd_ = -1;\n        other.interrupt_fd_ = -1;\n    }\n    return *this;\n}\n\nvoid BtL2capBackend::send_output_report(std::span<const std::uint8_t> r) { ::write(interrupt_fd_, r.data(), r.size()); }\nbool BtL2capBackend::try_send_output_report(std::span<const std::uint8_t> r) { return ::write(interrupt_fd_, r.data(), r.size()) > 0; }\nvoid BtL2capBackend::send_feature_get(std::uint8_t id) {}\nvoid BtL2capBackend::send_feature_set(std::span<const std::uint8_t> r) {}\nstd::optional<std::vector<std::uint8_t>> BtL2capBackend::read_feature_report() { return std::nullopt; }\nstd::optional<std::vector<std::uint8_t>> BtL2capBackend::read_interrupt_packet() {\n    std::vector<std::uint8_t> buf(110);\n    int n = ::read(interrupt_fd_, buf.data(), buf.size());\n    if(n <= 0) return std::nullopt;\n    buf.resize(n);\n    return buf;\n}\n\n}' > src/platform/linux/vds_bt.cc
         
         # BLOCK 5: SYSTEM-KONFIGURATIONEN (SYSTEMD, UDEV, ALSA)
         RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
@@ -158,24 +161,28 @@ modules:
               echo '    actions = { update-props = { device.disabled = true; node.disabled = true } }'; echo '  }'; echo ']'; \
             ) > "${PKG_ROOT}/etc/wireplumber/wireplumber.conf.d/99-vds-prioritisation.conf"
             
-                # BLOCK 6: BUILD & RPM-PAKETIERUNG
+        # BLOCK 6: BUILD & RPM-PAKETIERUNG (SYNCHRONISIERT)
         RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
             PKG_ROOT="/vds-pkg-root" && \
             cp /vds_build_dir/module/vds_hcd.ko "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra/vds_hcd.ko" && \
             chmod 644 "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra/vds_hcd.ko" && \
+            # Native C-Kompilierung des Proxys mit gesetzten Optimierungen
+            g++ -O3 -Wall /vds_build_dir/vds-proxy.c -o /vds_build_dir/vds-proxy-bin && \
+            # CMake generiert das Build-Verzeichnis unter Verwendung der überschriebenen vds_bt.cc
             cd /vds_build_dir && mkdir -p build && cd build && \
             cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS="-isystem /vds_build_dir/include" -DCMAKE_CXX_FLAGS="-isystem /vds_build_dir/include" && \
             make -j$(nproc) && \
-            g++ -O3 -Wall /vds_build_dir/vds-proxy.c -o /vds_build_dir/build/vds-proxy && \
+            # Integration der Binaries in die Paket-Struktur
             cp /vds_build_dir/build/vdsd "${PKG_ROOT}/usr/bin/vdsd" && \
             cp /vds_build_dir/build/vdsctl "${PKG_ROOT}/usr/bin/vdsctl" && \
-            cp /vds_build_dir/build/vds-proxy "${PKG_ROOT}/usr/bin/vds-proxy" && \
+            cp /vds_build_dir/vds-proxy-bin "${PKG_ROOT}/usr/bin/vds-proxy" && \
             chmod 755 "${PKG_ROOT}/usr/bin/vdsd" "${PKG_ROOT}/usr/bin/vdsctl" "${PKG_ROOT}/usr/bin/vds-proxy" && \
+            # Erstellung der RPM-Struktur
             mkdir -p /root/rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS} && \
             ( \
               echo 'Name: kmod-vds'; echo 'Version: 1.0.0'; echo 'Release: 1'; \
               echo 'Summary: Virtual DualSense Driver'; echo 'License: MIT'; echo ''; \
-              echo '%description'; echo 'Virtual DualSense Driver und Daemon.'; echo ''; \
+              echo '%description'; echo 'Virtual DualSense Driver und Daemon mit bitgenauer RAM-Symmetrie.'; echo ''; \
               echo '%files'; \
               echo '/usr/lib/modules/'"${KERNEL_VERSION}"'/extra/vds_hcd.ko'; \
               echo '/usr/lib/modules-load.d/vds.conf'; \
@@ -196,6 +203,7 @@ modules:
         RUN rpm2cpio /tmp/vds-rpm/kmod-vds-1.0.0-1.x86_64.rpm | cpio -idmv -D / && \
             KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
             depmod -a "${KERNEL_VERSION}" && \
+            # Atomare Multi-User-Target-Verlinkungen für schreibgeschützte Dateisysteme (Bazzite)
             mkdir -p /etc/systemd/system/multi-user.target.wants && \
             ln -sf /usr/lib/systemd/system/vds-proxy.service \
                    /etc/systemd/system/multi-user.target.wants/vds-proxy.service && \
@@ -203,4 +211,5 @@ modules:
                    /etc/systemd/system/multi-user.target.wants/vdsd.service && \
             ln -sf /usr/lib/systemd/system/vds-chmod-sdp.path \
                    /etc/systemd/system/multi-user.target.wants/vds-chmod-sdp.path && \
-            rm -rf /vds_build_dir /vds-pkg-root /tmp/vds-rpm /root/rpmbuild
+            # Sauberes Entfernen der Build-Überreste
+            rm -rf /vds_build_dir /vds_bt.cc /vds-proxy.c /vds-pkg-root /tmp/vds-rpm /root/rpmbuild
