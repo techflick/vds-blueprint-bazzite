@@ -87,57 +87,19 @@ modules:
         # BLOCK 4: QUELLCODE-VORBEREITUNG & DAEMON-PATCHES (STANDARDISIERTES 110-BYTE UNIX-IPC)
         COPY vds-proxy.c /vds_build_dir/vds-proxy.c
 
-        cd /vds_build_dir && \
-        sed -i '/pkg_check_modules.*bluez/c\set(bluez_FOUND TRUE)\nset(bluez_INCLUDE_DIRS "/vds_build_dir/include")\nset(bluez_LIBRARIES "")' CMakeLists.txt && \
-        sed -i 's/PkgConfig::BLUEZ//g' CMakeLists.txt && \
-        sed -i "s|vds::bluez_device_modalias(address);|std::optional<std::string>(\"usb\x3av054Cp0CE6d0100\");|g" src/platform/linux/vdsd.cc && \
-        sed -i '1s|^|#include <sys/un.h>\n|' src/platform/linux/vds_bt.cc && \
-        sed -i 's/fill_l2cap_sockaddr/_unused_fill_l2cap_sockaddr/g' src/platform/linux/vds_bt.cc && \
-        sed -i 's/listen_l2cap_psm/_unused_listen_l2cap_psm/g' src/platform/linux/vds_bt.cc && \
-        sed -i 's/accept_l2cap_psm/_unused_accept_l2cap_psm/g' src/platform/linux/vds_bt.cc
+        RUN cd /vds_build_dir && \
+            sed -i '/pkg_check_modules.*bluez/c\set(bluez_FOUND TRUE)\nset(bluez_INCLUDE_DIRS "/vds_build_dir/include")\nset(bluez_LIBRARIES "")' CMakeLists.txt && \
+            sed -i 's/PkgConfig::BLUEZ//g' CMakeLists.txt && \
+            sed -i "s|vds::bluez_device_modalias(address);|std::optional<std::string>(\"usb\x3av054Cp0CE6d0100\");|g" src/platform/linux/vdsd.cc && \
+            sed -i '1s|^|#include <sys/un.h>\n|' src/platform/linux/vds_bt.cc && \
+            sed -i 's/fill_l2cap_sockaddr/_unused_fill_l2cap_sockaddr/g' src/platform/linux/vds_bt.cc && \
+            sed -i 's/listen_l2cap_psm/_unused_listen_l2cap_psm/g' src/platform/linux/vds_bt.cc && \
+            sed -i 's/accept_l2cap_psm/_unused_accept_l2cap_psm/g' src/platform/linux/vds_bt.cc
 
-        CODE_INJECTION="namespace vds { namespace {\n\n\
-        void setup_abstract_un(struct sockaddr_un &un_addr, const char *name) {\n\
-            std::memset(\&un_addr, 0, sizeof(struct sockaddr_un));\n\
-            un_addr.sun_family = AF_UNIX;\n\
-            std::memcpy(un_addr.sun_path + 1, name, 3);\n\
-        }\n\n\
-        void fill_l2cap_sockaddr(sockaddr_l2 \&sockaddr, std::uint16_t psm, std::span<const std::uint8_t, 6> address) {\n\
-            struct sockaddr_un *un_addr = reinterpret_cast<struct sockaddr_un*>(\&sockaddr);\n\
-            setup_abstract_un(*un_addr, (psm == 0x0011) ? \"v_c\" : \"v_i\");\n\
-        }\n\n\
-        UniqueFd listen_l2cap_psm(std::uint16_t psm) {\n\
-            int fd = ::socket(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0);\n\
-            if (fd < 0) throw std::runtime_error(\"Failed to create IPC socket\");\n\
-            UniqueFd unique_fd(fd);\n\
-            set_nonblocking(unique_fd.get(), \"socket\");\n\
-            int reuse = 1;\n\
-            ::setsockopt(unique_fd.get(), SOL_SOCKET, SO_REUSEADDR, \&reuse, sizeof(reuse));\n\
-            struct sockaddr_un un_addr;\n\
-            setup_abstract_un(un_addr, (psm == 0x0011) ? \"v_c\" : \"v_i\");\n\
-            if (::bind(unique_fd.get(), reinterpret_cast<const struct sockaddr*>(\&un_addr), sizeof(struct sockaddr_un)) < 0) {\n\
-                throw std::runtime_error(\"Failed to bind abstract socket\");\n\
-            }\n\
-            if (::listen(unique_fd.get(), 1) < 0) throw std::runtime_error(\"Failed to listen\");\n\
-            return unique_fd;\n\
-        }\n\n\
-        std::optional<BtAcceptedChannel> accept_l2cap_psm(int listener_fd, std::uint16_t psm) {\n\
-            struct sockaddr_un peer;\n\
-            std::memset(\&peer, 0, sizeof(struct sockaddr_un));\n\
-            socklen_t peer_size = sizeof(struct sockaddr_un);\n\
-            int fd_net = ::accept(listener_fd, reinterpret_cast<struct sockaddr*>(\&peer), \&peer_size);\n\
-            if (fd_net < 0) {\n\
-                int error = errno;\n\
-                if (error == EAGAIN || error == EWOULDBLOCK || error == EINTR) return {};\n\
-                return {};\n\
-            }\n\
-            if (::fcntl(fd_net, F_SETFD, FD_CLOEXEC) < 0) throw std::runtime_error(\"fcntl\");\n\
-            set_nonblocking(fd_net, \"socket\");\n\
-            return BtAcceptedChannel{.address = \"00:1b:dc:00:00:00\", .fd = vds::UniqueFd(fd_net)};\n\
-        }\n\n\
-        }}"
-
-        echo -e "$CODE_INJECTION" >> src/platform/linux/vds_bt.cc
+        # Injektion via robuster Shell-Zuweisung mit hex-maskierten Anführungszeichen (\x22) für den YAML-Schutz
+        RUN cd /vds_build_dir && \
+            CODE_INJECTION="namespace vds { namespace {\n\nvoid setup_abstract_un(struct sockaddr_un \&un_addr, const char *name) {\n    std::memset(\&un_addr, 0, sizeof(struct sockaddr_un));\n    un_addr.sun_family = AF_UNIX;\n    std::memcpy(un_addr.sun_path + 1, name, 3);\n}\n\nvoid fill_l2cap_sockaddr(sockaddr_l2 \&sockaddr, std::uint16_t psm, std::span<const std::uint8_t, 6> address) {\n    struct sockaddr_un *un_addr = reinterpret_cast<struct sockaddr_un*>(\&sockaddr);\n    setup_abstract_un(*un_addr, (psm == 0x0011) ? \x22v_c\x22 : \x22v_i\x22);\n}\n\nUniqueFd listen_l2cap_psm(std::uint16_t psm) {\n    int fd = ::socket(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0);\n    if (fd < 0) throw std::runtime_error(\x22Failed to create IPC socket\x22);\n    UniqueFd unique_fd(fd);\n    set_nonblocking(unique_fd.get(), \x22socket\x22);\n    int reuse = 1;\n    ::setsockopt(unique_fd.get(), SOL_SOCKET, SO_REUSEADDR, \&reuse, sizeof(reuse));\n    struct sockaddr_un un_addr;\n    setup_abstract_un(un_addr, (psm == 0x0011) ? \x22v_c\x22 : \x22v_i\x22);\n    if (::bind(unique_fd.get(), reinterpret_cast<const struct sockaddr*>(\&un_addr), sizeof(struct sockaddr_un)) < 0) {\n        throw std::runtime_error(\x22Failed to bind abstract socket\x22);\n    }\n    if (::listen(unique_fd.get(), 1) < 0) throw std::runtime_error(\x22Failed to listen\x22);\n    return unique_fd;\n}\n\nstd::optional<BtAcceptedChannel> accept_l2cap_psm(int listener_fd, std::uint16_t psm) {\n    struct sockaddr_un peer;\n    std::memset(\&peer, 0, sizeof(struct sockaddr_un));\n    socklen_t peer_size = sizeof(struct sockaddr_un);\n    int fd_net = ::accept(listener_fd, reinterpret_cast<struct sockaddr*>(\&peer), \&peer_size);\n    if (fd_net < 0) {\n        int error = errno;\n        if (error == EAGAIN || error == EWOULDBLOCK || error == EINTR) return {};\n        return {};\n    }\n    if (::fcntl(fd_net, F_SETFD, FD_CLOEXEC) < 0) throw std::runtime_error(\x22fcntl\x22);\n    set_nonblocking(fd_net, \x22socket\x22);\n    return BtAcceptedChannel{.address = \x2200:1b:dc:00:00:00\x22, .fd = vds::UniqueFd(fd_net)};\n}\n\n}}" && \
+            echo -e "$CODE_INJECTION" >> src/platform/linux/vds_bt.cc
         
         # BLOCK 5: SYSTEM-KONFIGURATIONEN (SYSTEMD, UDEV, ALSA)
         RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
