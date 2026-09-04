@@ -102,8 +102,33 @@ modules:
             sed -i 's/fill_l2cap_sockaddr/_unused_fill_l2cap_sockaddr/g' /vds_build_dir/src/platform/linux/vds_bt.cc && \
             sed -i 's/accept_l2cap_psm/_unused_accept_l2cap_psm/g' /vds_build_dir/src/platform/linux/vds_bt.cc
 
-        # Injektion der funktionierenden 110-Byte RAM-IPC Funktionen (Bitgenau und typensicher)
-        RUN echo 'bmFtZXNwYWNlIHZkcyB7IG5hbWVzcGFjZSB7Cgp2b2lkIGZpbGxfbDJjYXBfc29ja2FkZHIoc29ja2FkZHJfbDIgJnNvY2thZGRyLCBzdGQ6OnVpbnQxNl90IHBzbSwgc3RkOjpzcGFuPGNvbnN0IHN0ZDo6dWludDhfdCwgNj4gYWRkcmVzcykgewogICAgc3RydWN0IHNvY2thZGRyX3VuICp1bl9hZGRyID0gcmVpbnRlcnByZXRfY2FzdDxzdHJ1Y3Qgc29ja2FkZHJfdW4qPigmc29ja2FkZHIpOwogICAgc3RkOjptZW1zZXQodW5fYWRkciwgMCwgc2l6ZW9mKHN0cnVjdCBzb2NrYWRkcl91bikpOwogICAgdW5fYWRkci0+c3VuX2ZhbWlseSA9IEFGX1VOSVg7CiAgICBpZiAocHNtID09IDB4MDAxMSkgewogICAgICAgIHN0ZDo6bWVtY3B5KCZ1bl9hZGRyLT5zdW5fcGF0aFsxXSwgInZfYyIsIDMpOwogICAgfSBlbHNlIHsKICAgICAgICBzdGQ6Om1lbWNweSgmdW5fYWRkci0+c3VuX3BhdGhbMV0sICJ2X2kiLCAzKTsKICAgIH0KfQoKc3RkOjpvcHRpb25hbDxCdEFjY2VwdGVkQ2hhbm5lbD4gYWNjZXB0X2wyY2FwX3BzbShpbnQgbGlzdGVuZXJfZmQsIHN0ZDo6dWludDE2X3QgcHNtKSB7CiAgICBzdHJ1Y3Qgc29ja2FkZHJfdW4gcGVlcjsKICAgIHN0ZDo6bWVtc2V0KCZwZWVyLCAwLCBzaXplb2Yoc3RydWN0IHNvY2thZGRyX3VuKSk7CiAgICBzb2NrbGVuX3QgcGVlcl9zaXplID0gc2l6ZW9mKHN0cnVjdCBzb2NrYWRkcl91bik7CiAgICBpbnQgZmRfbmV0ID0gOjphY2NlcHQobGlzdGVuZXJfZmQsIHJlaW50ZXJwcmV0X2Nhc3Q8c3RydWN0IHNvY2thZGRyKj4oJnBlZXIpLCAmcGVlcl9zaXplKTsKICAgIGlmIChmZF9uZXQgPCAwKSB7CiAgICAgICAgaW50IGVycm9yID0gZXJybm87CiAgICAgICAgaWYgKGVycm9yID09IEVBR0FJTiB8fCBlcnJvciA9PSBFV09VTERCTE9DSyB8fCBlcnJvciA9PSBFSU5UUikgcmV0dXJuIHt9OwogICAgICAgIHRocm93IHN0ZDo6cnVudGltZV9lcnJvcigiRmFpbGVkIHRvIGFjY2VwdCIpOwogICAgfQogICAgaWYgKDo6ZmNudGwoZmRfbmV0LCBGX1NFVEZELCBGRF9DTE9FWEVDKSA8IDApIHRocm93IHN0ZDo6cnVudGltZV9lcnJvcigiZmFpbGVkIHRvIGFjY2VwdCIpOwogICAgc2V0X25vbmJsb2NraW5nKGZkX25ldCwgInNvY2tldCIpOwogICAgcmV0dXJuIEJ0QWNjZXB0ZWRDaGFubmVsey5hZGRyZXNzID0gIjAwOjFiOmRjOjAwOjAwOjAwIiwgLmZkID0gdmRzOjpVbmlxdWVGZChmZF9uZXQpfTsKfQoKfX0=' | base64 -d >> /vds_build_dir/src/platform/linux/vds_bt.cc
+        # Injektion der funktionierenden 110-Byte RAM-IPC Funktionen via lesbarem und sauber maskiertem echo-Block
+        RUN echo 'namespace vds \{ namespace \{' >> /vds_build_dir/src/platform/linux/vds_bt.cc && \
+            echo 'void fill_l2cap_sockaddr(sockaddr_l2 \&sockaddr, std::uint16_t psm, std::span<const std::uint8_t, 6> address) \{' >> /vds_build_dir/src/platform/linux/vds_bt.cc && \
+            echo '    struct sockaddr_un *un_addr = reinterpret_cast<struct sockaddr_un*>(\&sockaddr);' >> /vds_build_dir/src/platform/linux/vds_bt.cc && \
+            echo '    std::memset(un_addr, 0, sizeof(struct sockaddr_un));' >> /vds_build_dir/src/platform/linux/vds_bt.cc && \
+            echo '    un_addr->sun_family = AF_UNIX;' >> /vds_build_dir/src/platform/linux/vds_bt.cc && \
+            echo '    if (psm == 0x0011) \{' >> /vds_build_dir/src/platform/linux/vds_bt.cc && \
+            echo '        std::memcpy(\&un_addr->sun_path, "v_c", 3);' >> /vds_build_dir/src/platform/linux/vds_bt.cc && \
+            echo '    \} else \{' >> /vds_build_dir/src/platform/linux/vds_bt.cc && \
+            echo '        std::memcpy(\&un_addr->sun_path, "v_i", 3);' >> /vds_build_dir/src/platform/linux/vds_bt.cc && \
+            echo '    \}' >> /vds_build_dir/src/platform/linux/vds_bt.cc && \
+            echo '\}' >> /vds_build_dir/src/platform/linux/vds_bt.cc && \
+            echo 'std::optional<BtAcceptedChannel> accept_l2cap_psm(int listener_fd, std::uint16_t psm) \{' >> /vds_build_dir/src/platform/linux/vds_bt.cc && \
+            echo '    struct sockaddr_un peer;' >> /vds_build_dir/src/platform/linux/vds_bt.cc && \
+            echo '    std::memset(\&peer, 0, sizeof(struct sockaddr_un));' >> /vds_build_dir/src/platform/linux/vds_bt.cc && \
+            socklen_t peer_size = sizeof(struct sockaddr_un);' >> /vds_build_dir/src/platform/linux/vds_bt.cc && \
+            echo '    int fd_net = ::accept(listener_fd, reinterpret_cast<struct sockaddr*>(\&peer), \&peer_size);' >> /vds_build_dir/src/platform/linux/vds_bt.cc && \
+            echo '    if (fd_net < 0) \{' >> /vds_build_dir/src/platform/linux/vds_bt.cc && \
+            echo '        int error = errno;' >> /vds_build_dir/src/platform/linux/vds_bt.cc && \
+            echo '        if (error == EAGAIN || error == EWOULDBLOCK || error == EINTR) return \{\};' >> /vds_build_dir/src/platform/linux/vds_bt.cc && \
+            echo '        throw std::runtime_error("Failed to accept");' >> /vds_build_dir/src/platform/linux/vds_bt.cc && \
+            echo '    \}' >> /vds_build_dir/src/platform/linux/vds_bt.cc && \
+            echo '    if (::fcntl(fd_net, F_SETFD, FD_CLOEXEC) < 0) throw std::runtime_error("fcntl");' >> /vds_build_dir/src/platform/linux/vds_bt.cc && \
+            echo '    set_nonblocking(fd_net, "socket");' >> /vds_build_dir/src/platform/linux/vds_bt.cc && \
+            echo '    return BtAcceptedChannel\{.address = "00:1b:dc:00:00:00", .fd = vds::UniqueFd(fd_net)\};' >> /vds_build_dir/src/platform/linux/vds_bt.cc && \
+            echo '\}' >> /vds_build_dir/src/platform/linux/vds_bt.cc && \
+            echo '\}\}' >> /vds_build_dir/src/platform/linux/vds_bt.cc
         
         # BLOCK 5: SYSTEM-KONFIGURATIONEN (SYSTEMD, UDEV, ALSA)
         RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
