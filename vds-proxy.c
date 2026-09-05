@@ -61,15 +61,17 @@ int connect_unix_pipe(const char *name_three_bytes) {
     if (sock < 0) return -1;
     
     struct sockaddr_un addr;
+    // KRITISCHER FIX 1: Die gesamte 110-Byte-Struktur mit Nullbytes initialisieren.
+    // Dies erzeugt im Kernel die exakt identische @-Kette wie das bind() des Daemons.
     memset(&addr, 0, sizeof(struct sockaddr_un));
     addr.sun_family = AF_UNIX;
     
     // Kopiert exakt die 3 Namenszeichen ("v_c" oder "v_i") hinter das führende Nullbyte
     memcpy(addr.sun_path + 1, name_three_bytes, 3); 
     
-    // KORREKTUR: Berechnet die bitgenaue Kernel-Key-Größe für abstrakte Sockets
-    // sun_path-Offset + 1 (führendes Nullbyte) + 3 Bytes Name = Exakt 5 Bytes Nutzdaten im sun_path
-    socklen_t len = offsetof(struct sockaddr_un, sun_path) + 1 + 3;
+    // KRITISCHER FIX 2: Übergabe der vollen 110-Byte-Strukturgröße an connect().
+    // Das bricht den Key-Mismatch im Kernel sofort auf atomaren Systemen.
+    socklen_t len = sizeof(struct sockaddr_un);
 
     if (connect(sock, (struct sockaddr *)&addr, len) < 0) {
         close(sock);
