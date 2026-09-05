@@ -59,25 +59,29 @@ int open_bt_server_link(uint16_t psm) {
 }
 
 int connect_unix_pipe(const char *name_three_bytes) {
-    int sock = socket(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0);
+    // Direkt mit SOCK_NONBLOCK öffnen, um hängende Sockets zu vermeiden
+    int sock = socket(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC | SOCK_NONBLOCK, 0);
     if (sock < 0) return -1;
     
     struct sockaddr_un addr;
     memset(&addr, 0, sizeof(struct sockaddr_un));
     addr.sun_family = AF_UNIX;
     
-    // KORREKTUR: Auch hier 4 Bytes kopieren
-    memcpy(&addr.sun_path, name_three_bytes, 4); 
+    // REPARATUR: Das erste Byte von sun_path MUSS \0 bleiben (Abstrakter Namespace)
+    // Wir kopieren die 4 Bytes (z.B. "v_c\0") genau wie im Daemon an Position sun_path + 1
+    memcpy(addr.sun_path + 1, name_three_bytes, 4); 
     
     socklen_t len = sizeof(struct sockaddr_un);
     if (connect(sock, (struct sockaddr *)&addr, len) < 0) {
-        close(sock);
-        return -1;
+        // Bei Non-Blocking Sockets ist EINPROGRESS normal
+        if (errno != EINPROGRESS) {
+            fprintf(stderr, "vDS-Proxy: IPC-Verbindung zu '%s' fehlgeschlagen: %s\n", 
+                    name_three_bytes, strerror(errno));
+            close(sock);
+            return -1;
+        }
     }
-    if (set_nonblocking_fd(sock) < 0) {
-        close(sock);
-        return -1;
-    }
+    
     return sock;
 }
 
