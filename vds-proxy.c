@@ -65,9 +65,10 @@ int connect_unix_pipe(const char *name_three_bytes) {
     memset(&addr, 0, sizeof(struct sockaddr_un));
     addr.sun_family = AF_UNIX;
     
-    // SYNCHRONISATION: Exakt wie im Daemon ab Position +1 kopieren!
-    memcpy(addr.sun_path + 1, name_three_bytes, 4); 
+    // KORREKTUR: Nur exakt 3 Bytes kopieren! Kein '\0' mitten in den Key injizieren.
+    memcpy(addr.sun_path + 1, name_three_bytes, 3); 
     
+    // Explizit die volle Strukturgröße übergeben
     socklen_t len = sizeof(struct sockaddr_un);
     if (connect(sock, (struct sockaddr *)&addr, len) < 0) {
         close(sock);
