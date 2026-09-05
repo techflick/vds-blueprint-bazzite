@@ -10,6 +10,7 @@
 
 namespace vds {
 
+// Bitgenaue, saubere Nullierung und Längen-Definition für den Kernel-Namespace
 static void setup_abstract_un(struct sockaddr_un &un_addr, const char *name) {
     std::memset(&un_addr, 0, sizeof(struct sockaddr_un));
     un_addr.sun_family = AF_UNIX;
@@ -17,7 +18,7 @@ static void setup_abstract_un(struct sockaddr_un &un_addr, const char *name) {
 }
 
 static UniqueFd create_ipc_listener(const char *name) {
-    // ERZWINGE SOCK_NONBLOCK direkt bei der Erstellung des Server-Sockets!
+    // ERZWINGE SOCK_NONBLOCK direkt bei der Erstellung des Server-Sockets
     int fd = ::socket(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC | SOCK_NONBLOCK, 0);
     if (fd < 0) throw std::runtime_error("IPC Socket Creation Failed");
     
@@ -49,9 +50,7 @@ std::optional<BtAcceptedChannel> BtL2capAcceptor::accept_control() {
     std::memset(&peer, 0, sizeof(struct sockaddr_un));
 
     int fd = ::accept(control_listener_fd_.get(), reinterpret_cast<struct sockaddr*>(&peer), &len);
-    if (fd < 0) {
-        return std::nullopt; // Schlaegt dank SOCK_NONBLOCK sofort fehl, statt den Epoll-Thread zu lahmen
-    }
+    if (fd < 0) return std::nullopt;
     
     ::fcntl(fd, F_SETFD, FD_CLOEXEC);
     ::fcntl(fd, F_SETFL, ::fcntl(fd, F_GETFL, 0) | O_NONBLOCK);
@@ -64,16 +63,14 @@ std::optional<BtAcceptedChannel> BtL2capAcceptor::accept_interrupt() {
     std::memset(&peer, 0, sizeof(struct sockaddr_un));
 
     int fd = ::accept(interrupt_listener_fd_.get(), reinterpret_cast<struct sockaddr*>(&peer), &len);
-    if (fd < 0) {
-        return std::nullopt;
-    }
+    if (fd < 0) return std::nullopt;
     
     ::fcntl(fd, F_SETFD, FD_CLOEXEC);
     ::fcntl(fd, F_SETFL, ::fcntl(fd, F_GETFL, 0) | O_NONBLOCK);
     return BtAcceptedChannel{.address = "00:1b:dc:00:00:00", .fd = UniqueFd(fd)};
 }
 
-// --- Backend-Implementierung bleibt fuer die ABI-Integritaet unangetastet ---
+// --- Backend-Implementierung und Linker-Absicherung ---
 BtL2capBackend::BtL2capBackend(std::string addr, UniqueFd c, UniqueFd i) 
     : address_(addr), control_fd_(c.release()), interrupt_fd_(i.release()) {}
 
@@ -92,7 +89,8 @@ BtL2capBackend &BtL2capBackend::operator=(BtL2capBackend &&other) noexcept {
     if (this != &other) {
         if(control_fd_ >= 0) ::close(control_fd_);
         if(interrupt_fd_ >= 0) ::close(interrupt_fd_);
-        address = std::move(other.address_);
+        // KORREKTUR: Unterstrich hinzugefügt, um auf das richtige Klassenmitglied zuzugreifen
+        address_ = std::move(other.address_);
         control_fd_ = other.control_fd_;
         interrupt_fd_ = other.interrupt_fd_;
         other.control_fd_ = -1;
