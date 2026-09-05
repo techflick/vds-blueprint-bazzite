@@ -98,7 +98,7 @@ modules:
             # Starr typisierte Hardware-Fälschung maskiert patchen (\x3a verhindert YAML-Parser-Kollaps)
             sed -i "s|vds::bluez_device_modalias(address);|std::optional<std::string>(\"usb\x3av054Cp0CE6d0100\");|g" src/platform/linux/vdsd.cc
         
-        # BLOCK 5: SYSTEM-KONFIGURATIONEN (SYSTEMD, UDEV, ALSA)
+        # BLOCK 5: SYSTEM-KONFIGURATIONEN (SYSTEMD, UDEV, ALSA) - MIT KERNEL-BOOT-SCHUTZ
         RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
             PKG_ROOT="/vds-pkg-root" && \
             mkdir -p "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra" && \
@@ -116,20 +116,23 @@ modules:
             ( \        
               echo '[Unit]'; echo 'Description=vDS Dynamic Bluetooth Socket Router'; \
               echo 'After=bluetooth.service systemd-udevd.service'; echo 'Requires=bluetooth.service'; echo ''; \
-              echo '[Service]'; echo 'Type=idle'; echo 'ExecStartPre=/usr/bin/sleep 5'; \
+              echo '[Service]'; echo 'Type=simple'; \
+              echo 'ExecStartPre=/usr/bin/sleep 5'; \
               echo 'ExecStart=/usr/bin/vds-proxy'; echo 'Restart=always'; echo 'RestartSec=5'; echo 'User=root'; \
               echo 'CapabilityBoundingSet=CAP_NET_RAW CAP_SYS_ADMIN CAP_NET_ADMIN CAP_NET_BIND_SERVICE'; \
               echo 'AmbientCapabilities=CAP_NET_RAW CAP_SYS_ADMIN CAP_NET_ADMIN CAP_NET_BIND_SERVICE'; echo 'Nice=-10'; echo ''; \
               echo '[Install]'; echo 'WantedBy=multi-user.target'; \
             ) > "${PKG_ROOT}/usr/lib/systemd/system/vds-proxy.service" && \
             ( \
-              echo '[Unit]'; echo 'Description=Virtual DualSense Userspace Daemon'; \
-              echo 'After=bluetooth.service vds-proxy.service'; echo 'Requires=bluetooth.service vds-proxy.service'; echo ''; \
-              echo '[Service]'; echo 'Type=idle'; echo 'ExecStartPre=/usr/bin/mkdir -p /var/lib/vdsd'; \
-              echo 'ExecStartPre=/usr/bin/chmod 666 /dev/uhid'; echo 'ExecStartPre=/usr/bin/sleep 7'; \
-              echo 'ExecStart=/usr/bin/vdsd'; echo 'Restart=always'; echo 'RestartSec=5'; echo 'User=root'; \
+              echo '[Unit]'; echo 'Description=Virtual DualSense Userspace Daemon (v0.4.0 Native)'; \
+              echo 'After=bluetooth.service vds-proxy.service'; echo ''; \
+              echo '[Service]'; echo 'Type=simple'; echo 'ExecStartPre=/usr/bin/mkdir -p /var/lib/vdsd'; \
+              echo 'ExecStartPre=/usr/bin/chmod 666 /dev/uhid'; \
+              echo 'ExecStartPre=/usr/bin/sleep 7'; \
+              echo 'ExecStart=/usr/bin/vdsd'; echo 'Restart=always'; echo 'RestartSec=5'; echo 'User=root'; echo 'Group=root'; \
               echo 'ProtectSystem=false'; echo 'ProtectHome=false'; echo 'PrivateTmp=no'; echo 'PrivateDevices=no'; \
-              echo 'PrivateNetwork=no'; \
+              echo 'PrivateNetwork=no'; echo 'ReadWritePaths=/'; echo 'RestrictAddressFamilies='; \
+              echo 'RestrictNetworkInterfaces='; echo 'IPAddressDeny='; echo 'NoNewPrivileges=no'; \
               echo 'CapabilityBoundingSet=CAP_NET_RAW CAP_SYS_ADMIN CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_SYS_RAWIO'; \
               echo 'AmbientCapabilities=CAP_NET_RAW CAP_SYS_ADMIN CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_SYS_RAWIO'; \
               echo 'Nice=-10'; echo ''; echo '[Install]'; echo 'WantedBy=multi-user.target'; \
