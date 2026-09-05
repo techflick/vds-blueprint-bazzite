@@ -61,14 +61,15 @@ int connect_unix_pipe(const char *name_three_bytes) {
     if (sock < 0) return -1;
     
     struct sockaddr_un addr;
-    // DIE 110-BYTE-REGEL: Die gesamte Struktur strikt mit Nullbytes initialisieren.
+    // 1. Die gesamte Struktur strikt mit Nullbytes initialisieren (Auffüllen auf 110 Byte)
     memset(&addr, 0, sizeof(struct sockaddr_un));
     addr.sun_family = AF_UNIX;
     
-    // Kopiert exakt die 3 Namenszeichen ("v_c" oder "v_i") hinter das führende Nullbyte.
-    memcpy(addr.sun_path + 1, name_three_bytes, 3); 
+    // 2. KORREKTUR: Explizite Adressierung des zweiten Bytes im Array
+    // Kopiert "v_c" oder "v_i" exakt ab Position 1, ohne das fuehrende Nullbyte zu verschieben.
+    memcpy(&addr.sun_path[1], name_three_bytes, 3); 
     
-    // Übergabe der vollen 110-Byte-Strukturkettengröße an connect().
+    // 3. Uebergabe der vollen 110-Byte-Strukturkettengroeße an connect().
     socklen_t len = sizeof(struct sockaddr_un);
 
     if (connect(sock, (struct sockaddr *)&addr, len) < 0) {
