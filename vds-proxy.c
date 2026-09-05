@@ -15,7 +15,6 @@
 #define BT_SOCK_SEQPACKET 5
 #define BT_BTPROTO_L2CAP  0
 
-// Erweiterte Indizes für eine flache, unblockierte Hauptschleife
 #define IDX_SRV_CTRL   0
 #define IDX_SRV_INTR   1
 #define IDX_CLI_CTRL   2
@@ -59,29 +58,25 @@ int open_bt_server_link(uint16_t psm) {
 }
 
 int connect_unix_pipe(const char *name_three_bytes) {
-    // Direkt mit SOCK_NONBLOCK öffnen, um hängende Sockets zu vermeiden
-    int sock = socket(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC | SOCK_NONBLOCK, 0);
+    int sock = socket(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0);
     if (sock < 0) return -1;
     
     struct sockaddr_un addr;
     memset(&addr, 0, sizeof(struct sockaddr_un));
     addr.sun_family = AF_UNIX;
     
-    // REPARATUR: Das erste Byte von sun_path MUSS \0 bleiben (Abstrakter Namespace)
-    // Wir kopieren die 4 Bytes (z.B. "v_c\0") genau wie im Daemon an Position sun_path + 1
+    // SYNCHRONISATION: Exakt wie im Daemon ab Position +1 kopieren!
     memcpy(addr.sun_path + 1, name_three_bytes, 4); 
     
     socklen_t len = sizeof(struct sockaddr_un);
     if (connect(sock, (struct sockaddr *)&addr, len) < 0) {
-        // Bei Non-Blocking Sockets ist EINPROGRESS normal
-        if (errno != EINPROGRESS) {
-            fprintf(stderr, "vDS-Proxy: IPC-Verbindung zu '%s' fehlgeschlagen: %s\n", 
-                    name_three_bytes, strerror(errno));
-            close(sock);
-            return -1;
-        }
+        close(sock);
+        return -1;
     }
-    
+    if (set_nonblocking_fd(sock) < 0) {
+        close(sock);
+        return -1;
+    }
     return sock;
 }
 
@@ -111,14 +106,12 @@ int main(void) {
     while (1) {
         memset(fds, 0, sizeof(fds));
         
-        // Server immer abhören, wenn kein Client verbunden ist
         fds[IDX_SRV_CTRL].fd = (client_ctrl < 0) ? srv_ctrl : -1;
         fds[IDX_SRV_CTRL].events = POLLIN;
         
         fds[IDX_SRV_INTR].fd = (client_intr < 0) ? srv_intr : -1;
         fds[IDX_SRV_INTR].events = POLLIN;
 
-        // Aktive Datenkanäle dynamisch in den Poll-Array hängen
         fds[IDX_CLI_CTRL].fd  = client_ctrl;  fds[IDX_CLI_CTRL].events  = (client_ctrl >= 0) ? POLLIN : 0;
         fds[IDX_VDSD_CTRL].fd = vdsd_ctrl;    fds[IDX_VDSD_CTRL].events = (vdsd_ctrl >= 0) ? POLLIN : 0;
         fds[IDX_CLI_INTR].fd  = client_intr;  fds[IDX_CLI_INTR].events  = (client_intr >= 0) ? POLLIN : 0;
@@ -130,7 +123,6 @@ int main(void) {
             break;
         }
 
-        // --- ASYNCHRONER ABFANG-MECHANISMUS ---
         if (fds[IDX_SRV_CTRL].revents & POLLIN) {
             int tmp = accept(srv_ctrl, NULL, NULL);
             if (tmp >= 0) {
@@ -157,18 +149,14 @@ int main(void) {
             }
         }
 
-        // --- MODIFIZIERTE FEHLERPRÜFUNG (Ignoriert das Flackern beim Udev-Boot) ---
         if (client_ctrl >= 0 && (fds[IDX_CLI_CTRL].revents & (POLLERR | POLLNVAL))) goto shutdown_control;
         if (client_intr >= 0 && (fds[IDX_CLI_INTR].revents & (POLLERR | POLLNVAL))) goto shutdown_interrupt;
-
         if (vdsd_ctrl >= 0 && (fds[IDX_VDSD_CTRL].revents & (POLLERR | POLLNVAL))) goto shutdown_control;
         if (vdsd_intr >= 0 && (fds[IDX_VDSD_INTR].revents & (POLLERR | POLLNVAL))) goto shutdown_interrupt;
 
-        // Ein HUP trennt das System nur noch, wenn der Controller selbst aufgibt
         if (fds[IDX_CLI_CTRL].revents & POLLHUP) goto shutdown_control;
         if (fds[IDX_CLI_INTR].revents & POLLHUP) goto shutdown_interrupt;
 
-        // --- DATA STREAMING: CONTROL KANAL (Autonom & Unblockiert) ---
         if (client_ctrl >= 0 && vdsd_ctrl >= 0) {
             if (fds[IDX_CLI_CTRL].revents & POLLIN) {
                 ssize_t len = recv(client_ctrl, heap_buffer, 1024, 0);
@@ -184,7 +172,6 @@ int main(void) {
             }
         }
 
-        // --- DATA STREAMING: INTERRUPT KANAL (Autonom & Unblockiert) ---
         if (client_intr >= 0 && vdsd_intr >= 0) {
             if (fds[IDX_CLI_INTR].revents & POLLIN) {
                 ssize_t len = recv(client_intr, heap_buffer, 1024, 0);
