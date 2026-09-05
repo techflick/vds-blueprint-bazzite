@@ -10,12 +10,12 @@
 
 namespace vds {
 
-sstatic void setup_abstract_un(struct sockaddr_un &un_addr, const char *name) {
+// KORREKTUR: Tippfehler 'sstatic' zu 'static' behoben für saubere Kompilierung
+static void setup_abstract_un(struct sockaddr_un &un_addr, const char *name) {
     std::memset(&un_addr, 0, sizeof(struct sockaddr_un));
     un_addr.sun_family = AF_UNIX;
-    // Index 0 bleibt implizit \0 (durch memset). 
-    // Wir kopieren den 3-stelligen String direkt ab Index 1.
-    std::memcpy(un_addr.sun_path + 1, name, 3); 
+    // Kopiert exakt die 3 Zeichen ("v_c" oder "v_i") direkt hinter das führende Nullbyte
+    std::memcpy(un_addr.sun_path + 1, name, 3);
 }
 
 static UniqueFd create_ipc_listener(const char *name) {
@@ -28,7 +28,7 @@ static UniqueFd create_ipc_listener(const char *name) {
     struct sockaddr_un un_addr;
     setup_abstract_un(un_addr, name);
     
-    // Bind mit der vollen 110-Byte-Strukturgröße erzwingen
+    // Bind mit der vollen 110-Byte-Strukturgröße erzwingen (Die 110-Byte-Regel)
     if (::bind(fd, reinterpret_cast<const struct sockaddr*>(&un_addr), sizeof(struct sockaddr_un)) < 0) {
         throw std::runtime_error("IPC Bind Failed");
     }
