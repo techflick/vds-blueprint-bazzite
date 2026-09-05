@@ -10,11 +10,12 @@
 
 namespace vds {
 
-static void setup_abstract_un(struct sockaddr_un &un_addr, const char *name) {
+sstatic void setup_abstract_un(struct sockaddr_un &un_addr, const char *name) {
     std::memset(&un_addr, 0, sizeof(struct sockaddr_un));
     un_addr.sun_family = AF_UNIX;
-    // KORREKTUR: 4 Bytes statt 3 kopieren, um das '\0'-Byte für die Proxy-Symmetrie einzuschließen
-    std::memcpy(un_addr.sun_path + 1, name, 4);
+    // Index 0 bleibt implizit \0 (durch memset). 
+    // Wir kopieren den 3-stelligen String direkt ab Index 1.
+    std::memcpy(un_addr.sun_path + 1, name, 3); 
 }
 
 static UniqueFd create_ipc_listener(const char *name) {
