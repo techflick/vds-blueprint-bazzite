@@ -10,11 +10,14 @@
 
 namespace vds {
 
-// KORREKTUR: Tippfehler 'sstatic' zu 'static' behoben für saubere Kompilierung
+// KORREKTUR: Bitgenaue, saubere Nullierung und Längen-Definition
 static void setup_abstract_un(struct sockaddr_un &un_addr, const char *name) {
+    // 1. Die gesamte Struktur absolut mit Nullen fluten
     std::memset(&un_addr, 0, sizeof(struct sockaddr_un));
     un_addr.sun_family = AF_UNIX;
-    // Kopiert exakt die 3 Zeichen ("v_c" oder "v_i") direkt hinter das führende Nullbyte
+    
+    // 2. Kopiert exakt die 3 Zeichen ("v_c" oder "v_i") direkt ab sun_path + 1
+    // sun_path[0] BLEIBT '\0' für den abstrakten Namespace!
     std::memcpy(un_addr.sun_path + 1, name, 3);
 }
 
@@ -28,11 +31,17 @@ static UniqueFd create_ipc_listener(const char *name) {
     struct sockaddr_un un_addr;
     setup_abstract_un(un_addr, name);
     
-    // Bind mit der vollen 110-Byte-Strukturgröße erzwingen (Die 110-Byte-Regel)
+    // Die 110-Byte-Regel: Bind MUSS die volle Strukturgröße übergeben,
+    // damit der Kernel den Key über die gesamte Breite matcht.
     if (::bind(fd, reinterpret_cast<const struct sockaddr*>(&un_addr), sizeof(struct sockaddr_un)) < 0) {
+        ::close(fd);
         throw std::runtime_error("IPC Bind Failed");
     }
-    if (::listen(fd, 5) < 0) throw std::runtime_error("IPC Listen Failed");
+    
+    if (::listen(fd, 5) < 0) {
+        ::close(fd);
+        throw std::runtime_error("IPC Listen Failed");
+    }
     return UniqueFd(fd);
 }
 
@@ -42,7 +51,11 @@ BtL2capAcceptor::BtL2capAcceptor()
 
 std::optional<BtAcceptedChannel> BtL2capAcceptor::accept_control() {
     struct sockaddr_un peer;
-    socklen_t len = sizeof(peer);
+    // WICHTIG: socklen_t MUSS mit der vollen Strukturgröße initialisiert werden!
+    // Wenn len unvollständig ist, schneidet der Kernel beim accept() den Key ab.
+    socklen_t len = sizeof(struct sockaddr_un);
+    std::memset(&peer, 0, sizeof(struct sockaddr_un));
+
     int fd = ::accept(control_listener_fd_.get(), reinterpret_cast<struct sockaddr*>(&peer), &len);
     if (fd < 0) return std::nullopt;
     
@@ -53,7 +66,10 @@ std::optional<BtAcceptedChannel> BtL2capAcceptor::accept_control() {
 
 std::optional<BtAcceptedChannel> BtL2capAcceptor::accept_interrupt() {
     struct sockaddr_un peer;
-    socklen_t len = sizeof(peer);
+    // WICHTIG: Auch hier volle 110 Byte für den Kernel bereitstellen!
+    socklen_t len = sizeof(struct sockaddr_un);
+    std::memset(&peer, 0, sizeof(struct sockaddr_un));
+
     int fd = ::accept(interrupt_listener_fd_.get(), reinterpret_cast<struct sockaddr*>(&peer), &len);
     if (fd < 0) return std::nullopt;
     
@@ -62,7 +78,7 @@ std::optional<BtAcceptedChannel> BtL2capAcceptor::accept_interrupt() {
     return BtAcceptedChannel{.address = "00:1b:dc:00:00:00", .fd = UniqueFd(fd)};
 }
 
-// Backend-Implementierung und Linker-Absicherung
+// --- Unveränderte Backend-Methoden zur Absicherung der Linker-Vollständigkeit ---
 BtL2capBackend::BtL2capBackend(std::string addr, UniqueFd c, UniqueFd i) 
     : address_(addr), control_fd_(c.release()), interrupt_fd_(i.release()) {}
 
@@ -81,7 +97,7 @@ BtL2capBackend &BtL2capBackend::operator=(BtL2capBackend &&other) noexcept {
     if (this != &other) {
         if(control_fd_ >= 0) ::close(control_fd_);
         if(interrupt_fd_ >= 0) ::close(interrupt_fd_);
-        address_ = std::move(other.address_);
+        address = std::move(other.address_);
         control_fd_ = other.control_fd_;
         interrupt_fd_ = other.interrupt_fd_;
         other.control_fd_ = -1;
