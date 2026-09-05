@@ -12,12 +12,8 @@ namespace vds {
 
 // Bitgenaue, saubere Nullierung und Längen-Definition für den Kernel-Namespace
 static void setup_abstract_un(struct sockaddr_un &un_addr, const char *name) {
-    // 1. Die gesamte Struktur absolut mit Nullen fluten
     std::memset(&un_addr, 0, sizeof(struct sockaddr_un));
     un_addr.sun_family = AF_UNIX;
-    
-    // 2. Kopiert exakt die 3 Zeichen ("v_c" oder "v_i") direkt ab sun_path + 1
-    // sun_path[0] BLEIBT '\0' für den abstrakten Namespace!
     std::memcpy(un_addr.sun_path + 1, name, 3);
 }
 
@@ -31,8 +27,6 @@ static UniqueFd create_ipc_listener(const char *name) {
     struct sockaddr_un un_addr;
     setup_abstract_un(un_addr, name);
     
-    // Die 110-Byte-Regel: Bind MUSS die volle Strukturgröße übergeben,
-    // damit der Kernel den Key über die gesamte Breite matcht.
     if (::bind(fd, reinterpret_cast<const struct sockaddr*>(&un_addr), sizeof(struct sockaddr_un)) < 0) {
         ::close(fd);
         throw std::runtime_error("IPC Bind Failed");
@@ -51,7 +45,6 @@ BtL2capAcceptor::BtL2capAcceptor()
 
 std::optional<BtAcceptedChannel> BtL2capAcceptor::accept_control() {
     struct sockaddr_un peer;
-    // Strukturelle Korrektur: socklen_t MUSS zwingend mit 110 Byte vorinitialisiert werden!
     socklen_t len = sizeof(struct sockaddr_un);
     std::memset(&peer, 0, sizeof(struct sockaddr_un));
 
@@ -65,7 +58,6 @@ std::optional<BtAcceptedChannel> BtL2capAcceptor::accept_control() {
 
 std::optional<BtAcceptedChannel> BtL2capAcceptor::accept_interrupt() {
     struct sockaddr_un peer;
-    // Strukturelle Korrektur: socklen_t MUSS zwingend mit 110 Byte vorinitialisiert werden!
     socklen_t len = sizeof(struct sockaddr_un);
     std::memset(&peer, 0, sizeof(struct sockaddr_un));
 
@@ -96,7 +88,6 @@ BtL2capBackend &BtL2capBackend::operator=(BtL2capBackend &&other) noexcept {
     if (this != &other) {
         if(control_fd_ >= 0) ::close(control_fd_);
         if(interrupt_fd_ >= 0) ::close(interrupt_fd_);
-        // BEHOBEN: Unterstrich zu address_ hinzugefügt für korrekte Variablennutzung
         address_ = std::move(other.address_);
         control_fd_ = other.control_fd_;
         interrupt_fd_ = other.interrupt_fd_;
@@ -119,3 +110,5 @@ std::optional<std::vector<std::uint8_t>> BtL2capBackend::read_interrupt_packet()
     buf.resize(n);
     return buf;
 }
+
+} // namespace vds
