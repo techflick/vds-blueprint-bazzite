@@ -10,7 +10,7 @@
 
 namespace vds {
 
-// KORREKTUR: Bitgenaue, saubere Nullierung und Längen-Definition
+// Bitgenaue, saubere Nullierung und Längen-Definition für den Kernel-Namespace
 static void setup_abstract_un(struct sockaddr_un &un_addr, const char *name) {
     // 1. Die gesamte Struktur absolut mit Nullen fluten
     std::memset(&un_addr, 0, sizeof(struct sockaddr_un));
@@ -51,8 +51,7 @@ BtL2capAcceptor::BtL2capAcceptor()
 
 std::optional<BtAcceptedChannel> BtL2capAcceptor::accept_control() {
     struct sockaddr_un peer;
-    // WICHTIG: socklen_t MUSS mit der vollen Strukturgröße initialisiert werden!
-    // Wenn len unvollständig ist, schneidet der Kernel beim accept() den Key ab.
+    // Strukturelle Korrektur: socklen_t MUSS zwingend mit 110 Byte vorinitialisiert werden!
     socklen_t len = sizeof(struct sockaddr_un);
     std::memset(&peer, 0, sizeof(struct sockaddr_un));
 
@@ -66,7 +65,7 @@ std::optional<BtAcceptedChannel> BtL2capAcceptor::accept_control() {
 
 std::optional<BtAcceptedChannel> BtL2capAcceptor::accept_interrupt() {
     struct sockaddr_un peer;
-    // WICHTIG: Auch hier volle 110 Byte für den Kernel bereitstellen!
+    // Strukturelle Korrektur: socklen_t MUSS zwingend mit 110 Byte vorinitialisiert werden!
     socklen_t len = sizeof(struct sockaddr_un);
     std::memset(&peer, 0, sizeof(struct sockaddr_un));
 
@@ -78,7 +77,7 @@ std::optional<BtAcceptedChannel> BtL2capAcceptor::accept_interrupt() {
     return BtAcceptedChannel{.address = "00:1b:dc:00:00:00", .fd = UniqueFd(fd)};
 }
 
-// --- Unveränderte Backend-Methoden zur Absicherung der Linker-Vollständigkeit ---
+// --- Backend-Implementierung und Linker-Absicherung ---
 BtL2capBackend::BtL2capBackend(std::string addr, UniqueFd c, UniqueFd i) 
     : address_(addr), control_fd_(c.release()), interrupt_fd_(i.release()) {}
 
@@ -97,7 +96,8 @@ BtL2capBackend &BtL2capBackend::operator=(BtL2capBackend &&other) noexcept {
     if (this != &other) {
         if(control_fd_ >= 0) ::close(control_fd_);
         if(interrupt_fd_ >= 0) ::close(interrupt_fd_);
-        address = std::move(other.address_);
+        // BEHOBEN: Unterstrich zu address_ hinzugefügt für korrekte Variablennutzung
+        address_ = std::move(other.address_);
         control_fd_ = other.control_fd_;
         interrupt_fd_ = other.interrupt_fd_;
         other.control_fd_ = -1;
@@ -119,5 +119,3 @@ std::optional<std::vector<std::uint8_t>> BtL2capBackend::read_interrupt_packet()
     buf.resize(n);
     return buf;
 }
-
-} // namespace vds
