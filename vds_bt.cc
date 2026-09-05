@@ -7,6 +7,7 @@
 #include <stdexcept>
 #include <vector>
 #include <span>
+#include <cstddef> // Erforderlich für offsetof
 
 namespace vds {
 
@@ -14,7 +15,8 @@ static void setup_abstract_un(struct sockaddr_un &un_addr, const char *name) {
     std::memset(&un_addr, 0, sizeof(struct sockaddr_un));
     un_addr.sun_family = AF_UNIX;
     
-    // KORREKTUR: Nur 3 Bytes kopieren, um das Alignment im RAM-Namespace zu begradigen
+    // Das erste Byte (un_addr.sun_path[0]) bleibt \0 für den abstrakten Namespace.
+    // Kopiere exakt die 3 Zeichen ("v_c" oder "v_i") ab Position sun_path + 1.
     std::memcpy(un_addr.sun_path + 1, name, 3);
 }
 
@@ -28,7 +30,13 @@ static UniqueFd create_ipc_listener(const char *name) {
     struct sockaddr_un un_addr;
     setup_abstract_un(un_addr, name);
     
-    if (::bind(fd, reinterpret_cast<const struct sockaddr*>(&un_addr), sizeof(struct sockaddr_un)) < 0) {
+    // KORREKTUR: Berechne die exakte Bytegröße des deklarierten Namens im RAM.
+    // 2 Bytes (sun_family) + 1 Byte (\0) + 3 Bytes (Name) = Exakt 6 Bytes.
+    socklen_t actual_len = offsetof(struct sockaddr_un, sun_path) + 1 + 3;
+    
+    // Dem Kernel wird NUR die tatsächliche Länge übergeben.
+    // Das verhindert das Auffüllen des Schlüssels mit den restlichen 106 Nullbytes.
+    if (::bind(fd, reinterpret_cast<const struct sockaddr*>(&un_addr), actual_len) < 0) {
         ::close(fd);
         throw std::runtime_error("IPC Bind Failed");
     }
@@ -70,7 +78,7 @@ std::optional<BtAcceptedChannel> BtL2capAcceptor::accept_interrupt() {
     return BtAcceptedChannel{.address = "00:1b:dc:00:00:00", .fd = UniqueFd(fd)};
 }
 
-// Backend-Methoden (unverändert zur ABI-Sicherung)
+// Backend-Methoden zur Absicherung der ABI-Stabilität
 BtL2capBackend::BtL2capBackend(std::string addr, UniqueFd c, UniqueFd i) 
     : address_(addr), control_fd_(c.release()), interrupt_fd_(i.release()) {}
 
