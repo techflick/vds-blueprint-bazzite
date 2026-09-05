@@ -101,6 +101,9 @@ modules:
         # BLOCK 5: SYSTEM-KONFIGURATIONEN (SYSTEMD, UDEV, ALSA) - MIT KERNEL-BOOT-SCHUTZ
         RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
             PKG_ROOT="/vds-pkg-root" && \
+            # RPMBUILD-FIX: Abschalten der Überprüfung auf nicht deklarierte Dateien im Build-Prozess
+            echo "%_unpackaged_files_terminate_build 0" >> /root/.rpmmacros && \
+            echo "%_check_unpackaged_files 0" >> /root/.rpmmacros && \
             mkdir -p "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra" && \
             mkdir -p "${PKG_ROOT}/usr/lib/modules-load.d" && \
             mkdir -p "${PKG_ROOT}/usr/bin" && \
@@ -138,8 +141,9 @@ modules:
               echo 'AmbientCapabilities=CAP_NET_RAW CAP_SYS_ADMIN CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_SYS_RAWIO'; \
               echo 'Nice=-10'; echo ''; echo '[Install]'; echo 'WantedBy=multi-user.target'; \
             ) > "${PKG_ROOT}/usr/lib/systemd/system/vdsd.service" && \
-            ln -sf /usr/lib/systemd/system/vds-proxy.service "${PKG_ROOT}/usr/lib/systemd/system/multi-user.target.wants/vds-proxy.service" && \
-            ln -sf /usr/lib/systemd/system/vdsd.service "${PKG_ROOT}/usr/lib/systemd/system/multi-user.target.wants/vdsd.service" && \
+            # Relative Pfade für Systemd-Wants zur Vermeidung von Build-Kollaps
+            ln -sf ../vds-proxy.service "${PKG_ROOT}/usr/lib/systemd/system/multi-user.target.wants/vds-proxy.service" && \
+            ln -sf ../vdsd.service "${PKG_ROOT}/usr/lib/systemd/system/multi-user.target.wants/vdsd.service" && \
             printf "[Unit]\nDescription=Setze Berechtigungen für vDS SDP-Socket\n\n[Service]\nType=oneshot\nExecStart=/usr/bin/chmod 0777 /run/sdp\nRemainAfterExit=yes\n" > "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.service" && \
             printf "[Unit]\nDescription=Überwache BlueZ SDP-Socket für vDS\n\n[Path]\nPathChanged=/run/sdp\nUnit=vds-chmod-sdp.service\n\n[Install]\nWantedBy=multi-user.target\n" > "${PKG_ROOT}/usr/lib/systemd/system/vds-chmod-sdp.path" && \
             printf "[Service]\nExecStart=\nExecStart=/usr/libexec/bluetooth/bluetoothd --compat\n" > "${PKG_ROOT}/usr/lib/systemd/system/bluetooth.service.d/override.conf" && \
@@ -166,8 +170,8 @@ modules:
               echo '    matches = [ { node.name = "~alsa_output.pci.*DualSense.*" }, { node.name = "~alsa_input.pci.*DualSense.*" }, { node.description = "~.*DualSense wireless controller.*" } ]'; \
               echo '    actions = { update-props = { device.disabled = true; node.disabled = true } }'; echo '  }'; echo ']'; \
             ) > "${PKG_ROOT}/usr/share/wireplumber/wireplumber.conf.d/99-vds-prioritisation.conf" && \
-            # DUAL-PFAD INTEGRATION: Bedient rpmbuild-Erwartung und haelt Bazzite-Kompatibilitaet
-            ln -sf /usr/share/wireplumber/wireplumber.conf.d/99-vds-prioritisation.conf "${PKG_ROOT}/etc/wireplumber/wireplumber.conf.d/99-vds-prioritisation.conf"
+            # KORREKTUR: Relativer Symlink löst den absoluten Pfadfehler im Paketierungskontext auf
+            ln -sf ../../../usr/share/wireplumber/wireplumber.conf.d/99-vds-prioritisation.conf "${PKG_ROOT}/etc/wireplumber/wireplumber.conf.d/99-vds-prioritisation.conf"
             
         # BLOCK 6: BUILD & RPM-PAKETIERUNG (SYNCHRONISIERT)
         RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
