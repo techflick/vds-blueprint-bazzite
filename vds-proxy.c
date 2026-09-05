@@ -65,7 +65,9 @@ int connect_unix_pipe(const char *name_three_bytes) {
     struct sockaddr_un addr;
     memset(&addr, 0, sizeof(struct sockaddr_un));
     addr.sun_family = AF_UNIX;
-    memcpy(&addr.sun_path[1], name_three_bytes, 3); 
+    
+    // KORREKTUR: Auch hier 4 Bytes kopieren
+    memcpy(&addr.sun_path, name_three_bytes, 4); 
     
     socklen_t len = sizeof(struct sockaddr_un);
     if (connect(sock, (struct sockaddr *)&addr, len) < 0) {
