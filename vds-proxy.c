@@ -15,11 +15,14 @@
 #define BT_SOCK_SEQPACKET 5
 #define BT_BTPROTO_L2CAP  0
 
-// Definiere feste Indizes für die Tunnel-Struktur (Verhindert Memory Corruption)
-#define INDEX_CTRL_IN   0
-#define INDEX_DAEMON_C  1
-#define INDEX_INTR_IN   2
-#define INDEX_DAEMON_I  3
+// Erweiterte Indizes für eine flache, unblockierte Hauptschleife
+#define IDX_SRV_CTRL   0
+#define IDX_SRV_INTR   1
+#define IDX_CLI_CTRL   2
+#define IDX_VDSD_CTRL  3
+#define IDX_CLI_INTR   4
+#define IDX_VDSD_INTR  5
+#define TOTAL_FDS      6
 
 int set_nonblocking_fd(int fd) {
     int fl = fcntl(fd, F_GETFL, 0);
@@ -37,7 +40,6 @@ int open_bt_server_link(uint16_t psm) {
         return -1;
     }
     
-    // 16-Byte-Erzwingung im echten BT-Kontext
     uint8_t addr_bytes[16];
     memset(addr_bytes, 0, 16);
     addr_bytes[0] = BT_AF_BLUETOOTH & 0xFF;
@@ -61,22 +63,15 @@ int connect_unix_pipe(const char *name_three_bytes) {
     if (sock < 0) return -1;
     
     struct sockaddr_un addr;
-    // 1. Die gesamte Struktur strikt mit Nullbytes initialisieren (Auffüllen auf 110 Byte)
     memset(&addr, 0, sizeof(struct sockaddr_un));
     addr.sun_family = AF_UNIX;
-    
-    // 2. KORREKTUR: Explizite Adressierung des zweiten Bytes im Array
-    // Kopiert "v_c" oder "v_i" exakt ab Position 1, ohne das fuehrende Nullbyte zu verschieben.
     memcpy(&addr.sun_path[1], name_three_bytes, 3); 
     
-    // 3. Uebergabe der vollen 110-Byte-Strukturkettengroeße an connect().
     socklen_t len = sizeof(struct sockaddr_un);
-
     if (connect(sock, (struct sockaddr *)&addr, len) < 0) {
         close(sock);
         return -1;
     }
-    
     if (set_nonblocking_fd(sock) < 0) {
         close(sock);
         return -1;
@@ -97,153 +92,120 @@ int main(void) {
         return 1;
     }
 
-    int client_ctrl = -1, client_intr = -1;
-    int vdsd_ctrl = -1, vdsd_intr = -1;
-    int state = 0;
+    int client_ctrl = -1, vdsd_ctrl = -1;
+    int client_intr = -1, vdsd_intr = -1;
 
     void *heap_buffer = malloc(1024);
     if (!heap_buffer) return 1;
 
     printf("vDS-Proxy: Initialisierung erfolgreich. Warte auf DualSense-Controller...\n");
 
+    struct pollfd fds[TOTAL_FDS];
+
     while (1) {
-        if (state == 0) {
-            // FIX: Korrekt deklariertes Array für 2 Elemente
-            struct pollfd srv_fds[2];
-            memset(srv_fds, 0, sizeof(srv_fds));
-            srv_fds[0].fd = srv_ctrl; srv_fds[0].events = POLLIN;
-            srv_fds[1].fd = srv_intr; srv_fds[1].events = POLLIN;
+        memset(fds, 0, sizeof(fds));
+        
+        // Server immer abhören, wenn kein Client verbunden ist
+        fds[IDX_SRV_CTRL].fd = (client_ctrl < 0) ? srv_ctrl : -1;
+        fds[IDX_SRV_CTRL].events = POLLIN;
+        
+        fds[IDX_SRV_INTR].fd = (client_intr < 0) ? srv_intr : -1;
+        fds[IDX_SRV_INTR].events = POLLIN;
 
-            int ret = poll(srv_fds, 2, 100);
-            if (ret > 0) {
-                // ENTKOPPELTER CONTROL-KANAL HANDSHAKE
-                if ((srv_fds[0].revents & POLLIN) && client_ctrl < 0) {
-                    struct sockaddr_storage remote;
-                    socklen_t len = sizeof(remote);
-                    int tmp = accept(srv_ctrl, (struct sockaddr *)&remote, &len);
-                    if (tmp >= 0) {
-                        client_ctrl = tmp;
-                        set_nonblocking_fd(client_ctrl);
-                        printf("vDS-Proxy: Controller Control-Kanal aktiv abgefangen.\n");
-                        
-                        vdsd_ctrl = connect_unix_pipe("v_c");
-                    }
-                }
-                // ENTKOPPELTER INTERRUPT-KANAL HANDSHAKE
-                if ((srv_fds[1].revents & POLLIN) && client_intr < 0) {
-                    struct sockaddr_storage remote;
-                    socklen_t len = sizeof(remote);
-                    int tmp = accept(srv_intr, (struct sockaddr *)&remote, &len);
-                    if (tmp >= 0) {
-                        client_intr = tmp;
-                        set_nonblocking_fd(client_intr);
-                        printf("vDS-Proxy: Controller Interrupt-Kanal aktiv abgefangen.\n");
-                        
-                        vdsd_intr = connect_unix_pipe("v_i");
-                    }
-                }
-            }
+        // Aktive Datenkanäle dynamisch in den Poll-Array hängen
+        fds[IDX_CLI_CTRL].fd  = client_ctrl;  fds[IDX_CLI_CTRL].events  = (client_ctrl >= 0) ? POLLIN : 0;
+        fds[IDX_VDSD_CTRL].fd = vdsd_ctrl;    fds[IDX_VDSD_CTRL].events = (vdsd_ctrl >= 0) ? POLLIN : 0;
+        fds[IDX_CLI_INTR].fd  = client_intr;  fds[IDX_CLI_INTR].events  = (client_intr >= 0) ? POLLIN : 0;
+        fds[IDX_VDSD_INTR].fd = vdsd_intr;    fds[IDX_VDSD_INTR].events = (vdsd_intr >= 0) ? POLLIN : 0;
 
-            // Asynchroner Retry-Schutz, falls vdsd leicht verzögert reagiert
-            if (client_ctrl >= 0 && vdsd_ctrl < 0) vdsd_ctrl = connect_unix_pipe("v_c");
-            if (client_intr >= 0 && vdsd_intr < 0) vdsd_intr = connect_unix_pipe("v_i");
-
-            // Schalten der Pipeline bei Vollständigkeit
-            if (client_ctrl >= 0 && client_intr >= 0 && vdsd_ctrl >= 0 && vdsd_intr >= 0) {
-                printf("vDS-Proxy: **Latenzfreie Speicher-Pipeline aktiv!**\n");
-                state = 1;
-                continue;
-            }
-        } else {
-            struct pollfd tunnel_fds[4];
-            memset(tunnel_fds, 0, sizeof(tunnel_fds));
-            tunnel_fds[INDEX_CTRL_IN].fd = client_ctrl; tunnel_fds[INDEX_CTRL_IN].events = POLLIN;
-            tunnel_fds[INDEX_DAEMON_C].fd = vdsd_ctrl;   tunnel_fds[INDEX_DAEMON_C].events = POLLIN;
-            tunnel_fds[INDEX_INTR_IN].fd = client_intr; tunnel_fds[INDEX_INTR_IN].events = POLLIN;
-            tunnel_fds[INDEX_DAEMON_I].fd = vdsd_intr;   tunnel_fds[INDEX_DAEMON_I].events = POLLIN;
-
-            int ret = poll(tunnel_fds, 4, 10);
-
-            if (ret > 0) {
-                // FEHLERMASKEN (Klammerfreie Einzelprüfung)
-                for (int i = 0; i < 4; i++) {
-                    if (tunnel_fds[i].revents & (POLLHUP | POLLERR | POLLNVAL)) {
-                        printf("vDS-Proxy: [DEBUG DROP] Abbruch durch Kernel-Signal (revents: %d) auf Tunnel-Index %d!\n", 
-                               tunnel_fds[i].revents, i);
-                        goto shutdown_link;
-                    }
-                }
-
-                // INDEX 0: Controller Control -> Daemon Control
-                if (tunnel_fds[INDEX_CTRL_IN].revents & POLLIN) {
-                    ssize_t len = recv(client_ctrl, heap_buffer, 1024, 0);
-                    if (len < 0) {
-                        if (errno != EAGAIN && errno != EWOULDBLOCK) goto shutdown_link;
-                    } else if (len == 0) {
-                        printf("vDS-Proxy: Controller hat Control-Kanal geschlossen.\n");
-                        goto shutdown_link;
-                    } else {
-                        send(vdsd_ctrl, heap_buffer, len, 0);
-                    }
-                }
-
-                // INDEX 1: Daemon Control -> Controller Control
-                if (tunnel_fds[INDEX_DAEMON_C].revents & POLLIN) {
-                    ssize_t len = recv(vdsd_ctrl, heap_buffer, 1024, 0);
-                    if (len < 0) {
-                        if (errno != EAGAIN && errno != EWOULDBLOCK) goto shutdown_link;
-                    } else if (len == 0) {
-                        printf("vDS-Proxy: Daemon hat Control-Kanal geschlossen.\n");
-                        goto shutdown_link;
-                    } else {
-                        send(client_ctrl, heap_buffer, len, 0);
-                    }
-                }
-                
-                // INDEX 2: Controller Interrupt -> Daemon Interrupt
-                if (tunnel_fds[INDEX_INTR_IN].revents & POLLIN) {
-                    ssize_t len = recv(client_intr, heap_buffer, 1024, 0);
-                    if (len < 0) {
-                        if (errno != EAGAIN && errno != EWOULDBLOCK) goto shutdown_link;
-                    } else if (len == 0) {
-                        printf("vDS-Proxy: Controller hat Interrupt-Kanal geschlossen.\n");
-                        goto shutdown_link;
-                    } else {
-                        // KORREKTUR: Sendet an vdsd_intr statt der nicht existierenden Variable intr_ipc
-                        send(vdsd_intr, heap_buffer, len, 0); 
-                    }
-                }
-                
-                // INDEX 3: Daemon Interrupt -> Controller Interrupt
-                if (tunnel_fds[INDEX_DAEMON_I].revents & POLLIN) {
-                    ssize_t len = recv(vdsd_intr, heap_buffer, 1024, 0);
-                    if (len < 0) {
-                        if (errno != EAGAIN && errno != EWOULDBLOCK) goto shutdown_link;
-                    } else if (len == 0) {
-                        printf("vDS-Proxy: Daemon hat Interrupt-Kanal geschlossen.\n");
-                        goto shutdown_link;
-                    } else {
-                        send(client_intr, heap_buffer, len, 0);
-                    }
-                }
-            }
-            continue;
-            
-        shutdown_link:
-            printf("vDS-Proxy: Pipeline-Verbindung getrennt. Setze Routing-Infrastruktur zurueck...\n");
-            if (client_ctrl >= 0) close(client_ctrl);
-            if (client_intr >= 0) close(client_intr);
-            if (vdsd_ctrl >= 0) close(vdsd_ctrl);
-            if (vdsd_intr >= 0) close(vdsd_intr);
-            
-            client_ctrl = -1;
-            client_intr = -1;
-            vdsd_ctrl = -1;
-            vdsd_intr = -1;
-            state = 0;
+        int ret = poll(fds, TOTAL_FDS, -1);
+        if (ret < 0) {
+            if (errno == EINTR) continue;
+            break;
         }
+
+        // --- ASYNCHRONER ABFANG-MECHANISMUS ---
+        if (fds[IDX_SRV_CTRL].revents & POLLIN) {
+            int tmp = accept(srv_ctrl, NULL, NULL);
+            if (tmp >= 0) {
+                client_ctrl = tmp;
+                set_nonblocking_fd(client_ctrl);
+                printf("vDS-Proxy: Controller Control-Kanal aktiv abgefangen.\n");
+                vdsd_ctrl = connect_unix_pipe("v_c");
+                if (vdsd_ctrl >= 0) {
+                    printf("vDS-Proxy: Control-Speicher-Pipeline instanziiert.\n");
+                }
+            }
+        }
+
+        if (fds[IDX_SRV_INTR].revents & POLLIN) {
+            int tmp = accept(srv_intr, NULL, NULL);
+            if (tmp >= 0) {
+                client_intr = tmp;
+                set_nonblocking_fd(client_intr);
+                printf("vDS-Proxy: Controller Interrupt-Kanal aktiv abgefangen.\n");
+                vdsd_intr = connect_unix_pipe("v_i");
+                if (vdsd_intr >= 0) {
+                    printf("vDS-Proxy: Interrupt-Speicher-Pipeline instanziiert.\n");
+                }
+            }
+        }
+
+        // --- STRIKTE FEHLERPRÜFUNG (Klammerfrei via fixierte Indizes) ---
+        if (client_ctrl >= 0 && (fds[IDX_CLI_CTRL].revents & (POLLHUP | POLLERR | POLLNVAL))) goto shutdown_control;
+        if (vdsd_ctrl >= 0   && (fds[IDX_VDSD_CTRL].revents & (POLLHUP | POLLERR | POLLNVAL))) goto shutdown_control;
+        if (client_intr >= 0 && (fds[IDX_CLI_INTR].revents & (POLLHUP | POLLERR | POLLNVAL))) goto shutdown_interrupt;
+        if (vdsd_intr >= 0   && (fds[IDX_VDSD_INTR].revents & (POLLHUP | POLLERR | POLLNVAL))) goto shutdown_interrupt;
+
+        // --- DATA STREAMING: CONTROL KANAL (Autonom & Unblockiert) ---
+        if (client_ctrl >= 0 && vdsd_ctrl >= 0) {
+            if (fds[IDX_CLI_CTRL].revents & POLLIN) {
+                ssize_t len = recv(client_ctrl, heap_buffer, 1024, 0);
+                if (len > 0) send(vdsd_ctrl, heap_buffer, len, 0);
+                else if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) goto shutdown_control;
+                else if (len == 0) goto shutdown_control;
+            }
+            if (fds[IDX_VDSD_CTRL].revents & POLLIN) {
+                ssize_t len = recv(vdsd_ctrl, heap_buffer, 1024, 0);
+                if (len > 0) send(client_ctrl, heap_buffer, len, 0);
+                else if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) goto shutdown_control;
+                else if (len == 0) goto shutdown_control;
+            }
+        }
+
+        // --- DATA STREAMING: INTERRUPT KANAL (Autonom & Unblockiert) ---
+        if (client_intr >= 0 && vdsd_intr >= 0) {
+            if (fds[IDX_CLI_INTR].revents & POLLIN) {
+                ssize_t len = recv(client_intr, heap_buffer, 1024, 0);
+                if (len > 0) send(vdsd_intr, heap_buffer, len, 0);
+                else if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) goto shutdown_interrupt;
+                else if (len == 0) goto shutdown_interrupt;
+            }
+            if (fds[IDX_VDSD_INTR].revents & POLLIN) {
+                ssize_t len = recv(vdsd_intr, heap_buffer, 1024, 0);
+                if (len > 0) send(client_intr, heap_buffer, len, 0);
+                else if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) goto shutdown_interrupt;
+                else if (len == 0) goto shutdown_interrupt;
+            }
+        }
+        continue;
+
+    shutdown_control:
+        printf("vDS-Proxy: Control-Pipeline getrennt. Setze Kanal zurueck...\n");
+        if (client_ctrl >= 0) close(client_ctrl);
+        if (vdsd_ctrl >= 0) close(vdsd_ctrl);
+        client_ctrl = -1; vdsd_ctrl = -1;
+        continue;
+
+    shutdown_interrupt:
+        printf("vDS-Proxy: Interrupt-Pipeline getrennt. Setze Kanal zurueck...\n");
+        if (client_intr >= 0) close(client_intr);
+        if (vdsd_intr >= 0) close(vdsd_intr);
+        client_intr = -1; vdsd_intr = -1;
+        continue;
     }
-    
+
     free(heap_buffer);
+    close(srv_ctrl); close(srv_intr);
     return 0;
 }
