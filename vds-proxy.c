@@ -153,11 +153,16 @@ int main(void) {
             }
         }
 
-        // --- STRIKTE FEHLERPRÜFUNG (Klammerfrei via fixierte Indizes) ---
-        if (client_ctrl >= 0 && (fds[IDX_CLI_CTRL].revents & (POLLHUP | POLLERR | POLLNVAL))) goto shutdown_control;
-        if (vdsd_ctrl >= 0   && (fds[IDX_VDSD_CTRL].revents & (POLLHUP | POLLERR | POLLNVAL))) goto shutdown_control;
-        if (client_intr >= 0 && (fds[IDX_CLI_INTR].revents & (POLLHUP | POLLERR | POLLNVAL))) goto shutdown_interrupt;
-        if (vdsd_intr >= 0   && (fds[IDX_VDSD_INTR].revents & (POLLHUP | POLLERR | POLLNVAL))) goto shutdown_interrupt;
+        // --- MODIFIZIERTE FEHLERPRÜFUNG (Ignoriert das Flackern beim Udev-Boot) ---
+        if (client_ctrl >= 0 && (fds[IDX_CLI_CTRL].revents & (POLLERR | POLLNVAL))) goto shutdown_control;
+        if (client_intr >= 0 && (fds[IDX_CLI_INTR].revents & (POLLERR | POLLNVAL))) goto shutdown_interrupt;
+
+        if (vdsd_ctrl >= 0 && (fds[IDX_VDSD_CTRL].revents & (POLLERR | POLLNVAL))) goto shutdown_control;
+        if (vdsd_intr >= 0 && (fds[IDX_VDSD_INTR].revents & (POLLERR | POLLNVAL))) goto shutdown_interrupt;
+
+        // Ein HUP trennt das System nur noch, wenn der Controller selbst aufgibt
+        if (fds[IDX_CLI_CTRL].revents & POLLHUP) goto shutdown_control;
+        if (fds[IDX_CLI_INTR].revents & POLLHUP) goto shutdown_interrupt;
 
         // --- DATA STREAMING: CONTROL KANAL (Autonom & Unblockiert) ---
         if (client_ctrl >= 0 && vdsd_ctrl >= 0) {
