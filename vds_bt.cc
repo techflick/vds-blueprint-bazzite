@@ -10,16 +10,14 @@
 
 namespace vds {
 
-// Bitgenaue, saubere Nullierung und Längen-Definition für den Kernel-Namespace
 static void setup_abstract_un(struct sockaddr_un &un_addr, const char *name) {
     std::memset(&un_addr, 0, sizeof(struct sockaddr_un));
     un_addr.sun_family = AF_UNIX;
-    // KORREKTUR: 4 Bytes kopieren, um das Nullbyte mitzunehmen
+    // Exakt an Position +1 kopieren (Byte 0 bleibt \0 für den abstrakten RAM-Namespace)
     std::memcpy(un_addr.sun_path + 1, name, 4);
 }
 
 static UniqueFd create_ipc_listener(const char *name) {
-    // ERZWINGE SOCK_NONBLOCK direkt bei der Erstellung des Server-Sockets
     int fd = ::socket(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC | SOCK_NONBLOCK, 0);
     if (fd < 0) throw std::runtime_error("IPC Socket Creation Failed");
     
@@ -71,7 +69,7 @@ std::optional<BtAcceptedChannel> BtL2capAcceptor::accept_interrupt() {
     return BtAcceptedChannel{.address = "00:1b:dc:00:00:00", .fd = UniqueFd(fd)};
 }
 
-// --- Backend-Implementierung und Linker-Absicherung ---
+// Backend-Methoden (unverändert zur ABI-Sicherung)
 BtL2capBackend::BtL2capBackend(std::string addr, UniqueFd c, UniqueFd i) 
     : address_(addr), control_fd_(c.release()), interrupt_fd_(i.release()) {}
 
@@ -90,7 +88,6 @@ BtL2capBackend &BtL2capBackend::operator=(BtL2capBackend &&other) noexcept {
     if (this != &other) {
         if(control_fd_ >= 0) ::close(control_fd_);
         if(interrupt_fd_ >= 0) ::close(interrupt_fd_);
-        // KORREKTUR: Unterstrich hinzugefügt, um auf das richtige Klassenmitglied zuzugreifen
         address_ = std::move(other.address_);
         control_fd_ = other.control_fd_;
         interrupt_fd_ = other.interrupt_fd_;
