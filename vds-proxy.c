@@ -15,7 +15,7 @@
 #define BT_SOCK_SEQPACKET 5
 #define BT_BTPROTO_L2CAP  0
 
-// Definiere feste Indizes für die Tunnel-Struktur (Verhindert Memory Corruption nach No-Go #1)
+// Definiere feste Indizes für die Tunnel-Struktur (Verhindert Memory Corruption)
 #define INDEX_CTRL_IN   0
 #define INDEX_DAEMON_C  1
 #define INDEX_INTR_IN   2
@@ -37,7 +37,7 @@ int open_bt_server_link(uint16_t psm) {
         return -1;
     }
     
-    // 16-Byte-Erzwingung im echten BT-Kontext (No-Go #7)
+    // 16-Byte-Erzwingung im echten BT-Kontext
     uint8_t addr_bytes[16];
     memset(addr_bytes, 0, 16);
     addr_bytes[0] = BT_AF_BLUETOOTH & 0xFF;
@@ -56,7 +56,7 @@ int open_bt_server_link(uint16_t psm) {
     return sock;
 }
 
-int connect_unix_pipe(const char *name_four_bytes) {
+int connect_unix_pipe(const char *name_three_bytes) {
     int sock = socket(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0);
     if (sock < 0) return -1;
     
@@ -64,11 +64,11 @@ int connect_unix_pipe(const char *name_four_bytes) {
     memset(&addr, 0, sizeof(struct sockaddr_un));
     addr.sun_family = AF_UNIX;
     
-    // Kopiert exakt die 3 Zeichen ("v_c" oder "v_i") ab sun_path + 1
-    memcpy(addr.sun_path + 1, name_four_bytes, 3); 
+    // Kopiert exakt die 3 Namenszeichen ("v_c" oder "v_i") hinter das führende Nullbyte
+    memcpy(addr.sun_path + 1, name_three_bytes, 3); 
     
-    // KORREKTUR: Die exakte Länge für abstrakte Sockets berechnen!
-    // sun_path + 1 (Nullbyte) + 3 Bytes Name = sun_path + 4
+    // KORREKTUR: Berechnet die bitgenaue Kernel-Key-Größe für abstrakte Sockets
+    // sun_path-Offset + 1 (führendes Nullbyte) + 3 Bytes Name = Exakt 5 Bytes Nutzdaten im sun_path
     socklen_t len = offsetof(struct sockaddr_un, sun_path) + 1 + 3;
 
     if (connect(sock, (struct sockaddr *)&addr, len) < 0) {
@@ -124,7 +124,6 @@ int main() {
                         set_nonblocking_fd(client_ctrl);
                         printf("vDS-Proxy: Controller Control-Kanal aktiv abgefangen.\n");
                         
-                        // Sofort an den Daemon binden, um Timeouts zu verhindern
                         if (vdsd_ctrl >= 0) close(vdsd_ctrl);
                         vdsd_ctrl = connect_unix_pipe("v_c");
                     }
@@ -140,7 +139,6 @@ int main() {
                         set_nonblocking_fd(client_intr);
                         printf("vDS-Proxy: Controller Interrupt-Kanal aktiv abgefangen.\n");
                         
-                        // Sofort an den Daemon binden
                         if (vdsd_intr >= 0) close(vdsd_intr);
                         vdsd_intr = connect_unix_pipe("v_i");
                     }
@@ -164,7 +162,7 @@ int main() {
             int ret = poll(tunnel_fds, 4, 10);
 
             if (ret > 0) {
-                // NO-GO FIX #5 & ERWEITERTES DEBUGGING
+                // FEHLERMASKEN FIX (Klammerfreie Einzelprüfung)
                 for (int i = 0; i < 4; i++) {
                     if (tunnel_fds[i].revents & (POLLHUP | POLLERR | POLLNVAL)) {
                         printf("vDS-Proxy: [DEBUG DROP] Abbruch durch Kernel-Signal (revents: %d) auf Tunnel-Index %d!\n", 
@@ -182,13 +180,6 @@ int main() {
                         printf("vDS-Proxy: Controller hat Control-Kanal geschlossen.\n");
                         goto shutdown_link;
                     } else {
-                        printf("vDS-Proxy: [CTRL IN] %d Bytes -> Daemon: ", len);
-                        for(int i = 0; i < (len > 16 ? 16 : len); i++) {
-                            printf("%02X ", ((unsigned char*)heap_buffer)[i]);
-                        }
-                        if (len > 16) printf("...");
-                        printf("\n");
-
                         send(vdsd_ctrl, heap_buffer, len, 0);
                     }
                 }
@@ -202,7 +193,6 @@ int main() {
                         printf("vDS-Proxy: Daemon hat Control-Kanal geschlossen.\n");
                         goto shutdown_link;
                     } else {
-                        printf("vDS-Proxy: [CTRL OUT] %d Bytes -> Controller\n", len);
                         send(client_ctrl, heap_buffer, len, 0);
                     }
                 }
@@ -216,7 +206,6 @@ int main() {
                         printf("vDS-Proxy: Controller hat Interrupt-Kanal geschlossen.\n");
                         goto shutdown_link;
                     } else {
-                        printf("vDS-Proxy: [INTR IN] %d Bytes -> Daemon\n", len);
                         send(vdsd_intr, heap_buffer, len, 0);
                     }
                 }
@@ -230,7 +219,6 @@ int main() {
                         printf("vDS-Proxy: Daemon hat Interrupt-Kanal geschlossen.\n");
                         goto shutdown_link;
                     } else {
-                        printf("vDS-Proxy: [INTR OUT] %d Bytes -> Controller\n", len);
                         send(client_intr, heap_buffer, len, 0);
                     }
                 }
