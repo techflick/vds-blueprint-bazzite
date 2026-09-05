@@ -13,8 +13,9 @@ namespace vds {
 static void setup_abstract_un(struct sockaddr_un &un_addr, const char *name) {
     std::memset(&un_addr, 0, sizeof(struct sockaddr_un));
     un_addr.sun_family = AF_UNIX;
-    // Exakt an Position +1 kopieren (Byte 0 bleibt \0 für den abstrakten RAM-Namespace)
-    std::memcpy(un_addr.sun_path + 1, name, 4);
+    
+    // KORREKTUR: Nur 3 Bytes kopieren, um das Alignment im RAM-Namespace zu begradigen
+    std::memcpy(un_addr.sun_path + 1, name, 3);
 }
 
 static UniqueFd create_ipc_listener(const char *name) {
