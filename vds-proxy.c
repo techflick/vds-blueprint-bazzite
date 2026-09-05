@@ -64,10 +64,12 @@ int connect_unix_pipe(const char *name_four_bytes) {
     memset(&addr, 0, sizeof(struct sockaddr_un));
     addr.sun_family = AF_UNIX;
     
-    // KORREKTUR: Erhöhe von 3 auf 4 Bytes, um die Symmetrie zum Daemon ("v_c\0") herzustellen
-    memcpy(addr.sun_path + 1, name_four_bytes, 4); 
+    // Kopiert exakt die 3 Zeichen ("v_c" oder "v_i") ab sun_path + 1
+    memcpy(addr.sun_path + 1, name_four_bytes, 3); 
     
-    socklen_t len = sizeof(struct sockaddr_un);
+    // KORREKTUR: Die exakte Länge für abstrakte Sockets berechnen!
+    // sun_path + 1 (Nullbyte) + 3 Bytes Name = sun_path + 4
+    socklen_t len = offsetof(struct sockaddr_un, sun_path) + 1 + 3;
 
     if (connect(sock, (struct sockaddr *)&addr, len) < 0) {
         close(sock);
