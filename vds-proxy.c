@@ -10,6 +10,7 @@
 #include <sys/un.h>
 #include <sys/poll.h>
 #include <errno.h>
+#include <sched.h> // Erforderlich für sched_yield()
 
 #define BT_AF_BLUETOOTH   31
 #define BT_SOCK_SEQPACKET 5
@@ -124,6 +125,7 @@ int main(void) {
             break;
         }
 
+        // ==================== ABFANGEN DER CONTROLLER-VERBINDUNGEN ====================
         if (fds[IDX_SRV_CTRL].revents & POLLIN) {
             int tmp = accept(srv_ctrl, NULL, NULL);
             if (tmp >= 0) {
@@ -150,6 +152,7 @@ int main(void) {
             }
         }
 
+        // ==================== ASYNCHRONES HANDSHAKE BLINDING ====================
         if (client_ctrl >= 0 && (fds[IDX_CLI_CTRL].revents & (POLLERR | POLLNVAL | POLLHUP))) {
             if (!(fds[IDX_CLI_CTRL].revents & POLLIN)) goto shutdown_control;
         }
@@ -164,17 +167,25 @@ int main(void) {
             if (!(fds[IDX_VDSD_INTR].revents & POLLIN)) goto shutdown_interrupt;
         }
 
+        // ==================== DATEN-ROUTING: CONTROL-KANAL ====================
         if (client_ctrl >= 0 && vdsd_ctrl >= 0) {
+            // Vom Controller (Bluetooth) -> RAM-Tunnel -> Daemon
             if (fds[IDX_CLI_CTRL].revents & POLLIN) {
                 ssize_t len = recv(client_ctrl, heap_buffer, 1024, 0);
                 if (len > 0) {
                     send(vdsd_ctrl, heap_buffer, len, MSG_DONTWAIT);
                 } else if (len == 0) {
-                    if (fds[IDX_CLI_CTRL].revents & POLLHUP) goto shutdown_control;
+                    if (fds[IDX_CLI_CTRL].revents & POLLHUP) {
+                        goto shutdown_control;
+                    } else {
+                        sched_yield(); usleep(2000); // 2ms Ewigkeits-Puffer gegen Asynchronität
+                        continue;
+                    }
                 } else if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
                     goto shutdown_control;
                 }
             }
+            // Vom Daemon -> RAM-Tunnel -> Controller (Bluetooth)
             if (fds[IDX_VDSD_CTRL].revents & POLLIN) {
                 ssize_t len = recv(vdsd_ctrl, heap_buffer, 1024, 0);
                 if (len > 0) {
@@ -183,8 +194,8 @@ int main(void) {
                     if (fds[IDX_VDSD_CTRL].revents & POLLHUP) {
                         goto shutdown_control;
                     } else {
-                        fflush(stderr);
-                        usleep(500);
+                        sched_yield(); usleep(2000); // 2ms Ewigkeits-Puffer gegen Asynchronität
+                        continue;
                     }
                 } else if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
                     goto shutdown_control;
@@ -192,17 +203,25 @@ int main(void) {
             }
         }
 
+        // ==================== DATEN-ROUTING: INTERRUPT-KANAL ====================
         if (client_intr >= 0 && vdsd_intr >= 0) {
+            // Vom Controller (Bluetooth) -> RAM-Tunnel -> Daemon
             if (fds[IDX_CLI_INTR].revents & POLLIN) {
                 ssize_t len = recv(client_intr, heap_buffer, 1024, 0);
                 if (len > 0) {
                     send(vdsd_intr, heap_buffer, len, MSG_DONTWAIT);
                 } else if (len == 0) {
-                    if (fds[IDX_CLI_INTR].revents & POLLHUP) goto shutdown_interrupt;
+                    if (fds[IDX_CLI_INTR].revents & POLLHUP) {
+                        goto shutdown_interrupt;
+                    } else {
+                        sched_yield(); usleep(2000); // 2ms Ewigkeits-Puffer gegen Asynchronität
+                        continue;
+                    }
                 } else if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
                     goto shutdown_interrupt;
                 }
             }
+            // Vom Daemon -> RAM-Tunnel -> Controller (Bluetooth)
             if (fds[IDX_VDSD_INTR].revents & POLLIN) {
                 ssize_t len = recv(vdsd_intr, heap_buffer, 1024, 0);
                 if (len > 0) {
@@ -211,8 +230,8 @@ int main(void) {
                     if (fds[IDX_VDSD_INTR].revents & POLLHUP) {
                         goto shutdown_interrupt;
                     } else {
-                        fflush(stderr);
-                        usleep(500);
+                        sched_yield(); usleep(2000); // 2ms Ewigkeits-Puffer gegen Asynchronität
+                        continue;
                     }
                 } else if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
                     goto shutdown_interrupt;
@@ -221,6 +240,7 @@ int main(void) {
         }
         continue;
 
+    // ==================== CLEANUP & RESET-PIPELINES ====================
     shutdown_control:
         printf("vDS-Proxy: Control-Pipeline getrennt (System-Errno: %d - %s).\n", errno, strerror(errno));
         if (client_ctrl >= 0) close(client_ctrl);
