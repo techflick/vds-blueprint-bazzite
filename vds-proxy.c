@@ -155,9 +155,7 @@ int main(void) {
             }
         }
 
-        // --- KORRIGIERTE FEHLER- UND ABBRUCHPRÜFUNG ---
-        // FDs werden NUR ausgewertet, wenn sie aktiv (>= 0) registriert sind.
-        // Das verhindert Fehlauslösungen durch POLLNVAL bei inaktiven (-1) Kanälen.
+        // --- ASYNCHRONER FEHLER- UND ABBRUCHSCHUTZ ---
         if (client_ctrl >= 0 && (fds[IDX_CLI_CTRL].revents & (POLLERR | POLLNVAL | POLLHUP))) goto shutdown_control;
         if (vdsd_ctrl >= 0   && (fds[IDX_VDSD_CTRL].revents & (POLLERR | POLLNVAL | POLLHUP))) goto shutdown_control;
         
@@ -168,15 +166,23 @@ int main(void) {
         if (client_ctrl >= 0 && vdsd_ctrl >= 0) {
             if (fds[IDX_CLI_CTRL].revents & POLLIN) {
                 ssize_t len = recv(client_ctrl, heap_buffer, 1024, 0);
-                if (len > 0) send(vdsd_ctrl, heap_buffer, len, 0);
-                else if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) goto shutdown_control;
-                else if (len == 0) goto shutdown_control;
+                if (len > 0) {
+                    send(vdsd_ctrl, heap_buffer, len, 0);
+                } else if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
+                    goto shutdown_control;
+                } else if (len == 0) {
+                    goto shutdown_control;
+                }
             }
             if (fds[IDX_VDSD_CTRL].revents & POLLIN) {
                 ssize_t len = recv(vdsd_ctrl, heap_buffer, 1024, 0);
-                if (len > 0) send(client_ctrl, heap_buffer, len, 0);
-                else if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) goto shutdown_control;
-                else if (len == 0) goto shutdown_control;
+                if (len > 0) {
+                    send(client_ctrl, heap_buffer, len, 0);
+                } else if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
+                    goto shutdown_control;
+                } else if (len == 0) {
+                    goto shutdown_control;
+                }
             }
         }
 
@@ -184,15 +190,23 @@ int main(void) {
         if (client_intr >= 0 && vdsd_intr >= 0) {
             if (fds[IDX_CLI_INTR].revents & POLLIN) {
                 ssize_t len = recv(client_intr, heap_buffer, 1024, 0);
-                if (len > 0) send(vdsd_intr, heap_buffer, len, 0);
-                else if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) goto shutdown_interrupt;
-                else if (len == 0) goto shutdown_interrupt;
+                if (len > 0) {
+                    send(vdsd_intr, heap_buffer, len, 0);
+                } else if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
+                    goto shutdown_interrupt;
+                } else if (len == 0) {
+                    goto shutdown_interrupt;
+                }
             }
             if (fds[IDX_VDSD_INTR].revents & POLLIN) {
                 ssize_t len = recv(vdsd_intr, heap_buffer, 1024, 0);
-                if (len > 0) send(client_intr, heap_buffer, len, 0);
-                else if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) goto shutdown_interrupt;
-                else if (len == 0) goto shutdown_interrupt;
+                if (len > 0) {
+                    send(client_intr, heap_buffer, len, 0);
+                } else if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
+                    goto shutdown_interrupt;
+                } else if (len == 0) {
+                    goto shutdown_interrupt;
+                }
             }
         }
         continue;
