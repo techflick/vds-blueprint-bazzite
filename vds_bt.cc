@@ -7,26 +7,19 @@
 #include <stdexcept>
 #include <vector>
 #include <span>
-#include <cstddef> // Erforderlich für offsetof
-#include <stdio.h> // Erforderlich für fprintf / fflush
+#include <cstddef> 
+#include <stdio.h> 
 
 namespace vds {
 
 static void setup_abstract_un(struct sockaddr_un &un_addr, const char *name) {
     std::memset(&un_addr, 0, sizeof(struct sockaddr_un));
     un_addr.sun_family = AF_UNIX;
-    
-    // Das erste Byte (un_addr.sun_path) bleibt \0 für den abstrakten Namespace.
-    // Kopiere exakt die 3 Zeichen ("v_c" oder "v_i") ab Position sun_path + 1.
     std::memcpy(un_addr.sun_path + 1, name, 3);
 }
 
 static UniqueFd create_ipc_listener(const char *name) {
-    // 1. DEFINITIVER IPC-INDIKATOR (Wird für jeden erstellten RAM-Kanal ins Journal geschrieben)
-    fprintf(stderr, "\n==================================================\n");
-    fprintf(stderr, "vDS-CORE: UNTERSTUETZUNG FUER ABSTRAKTE UNIX-SOCKETS AKTIV!\n");
-    fprintf(stderr, "vDS-CORE: Erstelle RAM-Pipeline: @%s\n", name);
-    fprintf(stderr, "==================================================\n\n");
+    fprintf(stderr, "vDS-CORE: UNTERSTUETZUNG FUER ABSTRAKTE UNIX-SOCKETS AKTIV! Erstelle Pipeline: @%s\n", name);
     fflush(stderr);
 
     int fd = ::socket(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC | SOCK_NONBLOCK, 0);
@@ -38,12 +31,11 @@ static UniqueFd create_ipc_listener(const char *name) {
     struct sockaddr_un un_addr;
     setup_abstract_un(un_addr, name);
     
-    // KORREKTUR: Berechne die exakte Bytegröße des deklarierten Namens im RAM.
-    // 2 Bytes (sun_family) + 1 Byte (\0) + 3 Bytes (Name) = Exakt 6 Bytes.
     socklen_t actual_len = offsetof(struct sockaddr_un, sun_path) + 1 + 3;
     
-    // Dem Kernel wird NUR die tatsächliche Länge übergeben.
     if (::bind(fd, reinterpret_cast<const struct sockaddr*>(&un_addr), actual_len) < 0) {
+        fprintf(stderr, "vDS-CORE: FATAL - Bind fuer @%s fehlgeschlagen: %s\n", name, std::strerror(errno));
+        fflush(stderr);
         ::close(fd);
         throw std::runtime_error("IPC Bind Failed");
     }
@@ -85,7 +77,6 @@ std::optional<BtAcceptedChannel> BtL2capAcceptor::accept_interrupt() {
     return BtAcceptedChannel{.address = "00:1b:dc:00:00:00", .fd = UniqueFd(fd)};
 }
 
-// Backend-Methoden zur Absicherung der ABI-Stabilität
 BtL2capBackend::BtL2capBackend(std::string addr, UniqueFd c, UniqueFd i) 
     : address_(addr), control_fd_(c.release()), interrupt_fd_(i.release()) {}
 
@@ -104,8 +95,7 @@ BtL2capBackend &BtL2capBackend::operator=(BtL2capBackend &&other) noexcept {
     if (this != &other) {
         if(control_fd_ >= 0) ::close(control_fd_);
         if(interrupt_fd_ >= 0) ::close(interrupt_fd_);
-        address_ = std::move(other.address_);
-        // KORREKTUR: Unterstriche hinzugefügt (control_fd_ und interrupt_fd_)
+        address = std::move(other.address_);
         control_fd_ = other.control_fd_;
         interrupt_fd_ = other.interrupt_fd_;
         other.control_fd_ = -1;
