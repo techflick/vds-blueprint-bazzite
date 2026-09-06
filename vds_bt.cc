@@ -23,7 +23,9 @@ static UniqueFd create_ipc_listener(const char *name) {
     fprintf(stderr, "vDS-CORE: UNTERSTUETZUNG FUER ABSTRAKTE UNIX-SOCKETS AKTIV! Erstelle Pipeline: @%s\n", name);
     fflush(stderr);
 
-    int fd = ::socket(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC | SOCK_NONBLOCK, 0);
+    // KORREKTUR: SOCK_NONBLOCK hier entfernt. Der Server-Listener muss blockierend sein,
+    // damit der Kernel die Backlog-Queue für anklopfende Clients (Proxy/socat) sauber verwaltet.
+    int fd = ::socket(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0);
     if (fd < 0) throw std::runtime_error("IPC Socket Creation Failed");
     
     int reuse = 1;
@@ -120,7 +122,6 @@ BtL2capBackend &BtL2capBackend::operator=(BtL2capBackend &&other) noexcept {
     if (this != &other) {
         if(control_fd_ >= 0) ::close(control_fd_);
         if(interrupt_fd_ >= 0) ::close(interrupt_fd_);
-        // KORREKTUR: Fehlenden Unterstrich bei address_ hinzugefuegt
         address_ = std::move(other.address_);
         control_fd_ = other.control_fd_;
         interrupt_fd_ = other.interrupt_fd_;
