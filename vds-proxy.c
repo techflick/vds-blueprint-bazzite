@@ -58,7 +58,6 @@ int open_bt_server_link(uint16_t psm) {
 }
 
 int connect_unix_pipe(const char *name_three_bytes) {
-    // FD-Leak-Schutz direkt beim Erstellen
     int sock = socket(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0);
     if (sock < 0) return -1;
     
@@ -125,7 +124,6 @@ int main(void) {
             break;
         }
 
-        // --- VERBINDUNGSANNAHME CONTROL-KANAL ---
         if (fds[IDX_SRV_CTRL].revents & POLLIN) {
             int tmp = accept(srv_ctrl, NULL, NULL);
             if (tmp >= 0) {
@@ -139,7 +137,6 @@ int main(void) {
             }
         }
 
-        // --- VERBINDUNGSANNAHME INTERRUPT-KANAL ---
         if (fds[IDX_SRV_INTR].revents & POLLIN) {
             int tmp = accept(srv_intr, NULL, NULL);
             if (tmp >= 0) {
@@ -153,7 +150,6 @@ int main(void) {
             }
         }
 
-        // --- ASYNCHRONER FEHLER- UND ABBRUCHSCHUTZ (GATED HANDSHAKE BLINDING) ---
         if (client_ctrl >= 0 && (fds[IDX_CLI_CTRL].revents & (POLLERR | POLLNVAL | POLLHUP))) {
             if (!(fds[IDX_CLI_CTRL].revents & POLLIN)) goto shutdown_control;
         }
@@ -168,51 +164,57 @@ int main(void) {
             if (!(fds[IDX_VDSD_INTR].revents & POLLIN)) goto shutdown_interrupt;
         }
 
-        // --- TRANSPARENTES DATA ROUTING (CONTROL) ---
         if (client_ctrl >= 0 && vdsd_ctrl >= 0) {
             if (fds[IDX_CLI_CTRL].revents & POLLIN) {
                 ssize_t len = recv(client_ctrl, heap_buffer, 1024, 0);
                 if (len > 0) {
-                    send(vdsd_ctrl, heap_buffer, len, 0);
+                    send(vdsd_ctrl, heap_buffer, len, MSG_DONTWAIT);
+                } else if (len == 0) {
+                    if (fds[IDX_CLI_CTRL].revents & POLLHUP) goto shutdown_control;
                 } else if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
-                    goto shutdown_control;
-                } else if (len == 0 && (fds[IDX_CLI_CTRL].revents & POLLHUP)) {
-                    // Trennung nur, wenn Kernel explizit HUP signalisiert
                     goto shutdown_control;
                 }
             }
             if (fds[IDX_VDSD_CTRL].revents & POLLIN) {
                 ssize_t len = recv(vdsd_ctrl, heap_buffer, 1024, 0);
                 if (len > 0) {
-                    send(client_ctrl, heap_buffer, len, 0);
+                    send(client_ctrl, heap_buffer, len, MSG_DONTWAIT);
+                } else if (len == 0) {
+                    if (fds[IDX_VDSD_CTRL].revents & POLLHUP) {
+                        goto shutdown_control;
+                    } else {
+                        fflush(stderr);
+                        usleep(500);
+                    }
                 } else if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
-                    goto shutdown_control;
-                } else if (len == 0 && (fds[IDX_VDSD_CTRL].revents & POLLHUP)) {
-                    // Trennung nur, wenn Kernel explizit HUP signalisiert
                     goto shutdown_control;
                 }
             }
         }
 
-        // --- TRANSPARENTES DATA ROUTING (INTERRUPT) ---
         if (client_intr >= 0 && vdsd_intr >= 0) {
             if (fds[IDX_CLI_INTR].revents & POLLIN) {
                 ssize_t len = recv(client_intr, heap_buffer, 1024, 0);
                 if (len > 0) {
-                    send(vdsd_intr, heap_buffer, len, 0);
+                    send(vdsd_intr, heap_buffer, len, MSG_DONTWAIT);
+                } else if (len == 0) {
+                    if (fds[IDX_CLI_INTR].revents & POLLHUP) goto shutdown_interrupt;
                 } else if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
-                    goto shutdown_interrupt;
-                } else if (len == 0 && (fds[IDX_CLI_INTR].revents & POLLHUP)) {
                     goto shutdown_interrupt;
                 }
             }
             if (fds[IDX_VDSD_INTR].revents & POLLIN) {
                 ssize_t len = recv(vdsd_intr, heap_buffer, 1024, 0);
                 if (len > 0) {
-                    send(client_intr, heap_buffer, len, 0);
+                    send(client_intr, heap_buffer, len, MSG_DONTWAIT);
+                } else if (len == 0) {
+                    if (fds[IDX_VDSD_INTR].revents & POLLHUP) {
+                        goto shutdown_interrupt;
+                    } else {
+                        fflush(stderr);
+                        usleep(500);
+                    }
                 } else if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
-                    goto shutdown_interrupt;
-                } else if (len == 0 && (fds[IDX_VDSD_INTR].revents & POLLHUP)) {
                     goto shutdown_interrupt;
                 }
             }
@@ -221,8 +223,6 @@ int main(void) {
 
     shutdown_control:
         printf("vDS-Proxy: Control-Pipeline getrennt (System-Errno: %d - %s).\n", errno, strerror(errno));
-        if (fds[IDX_CLI_CTRL].revents & POLLIN)  printf(" -> Signal-Ausloeser: Controller (CLI_CTRL) meldete POLLIN.\n");
-        if (fds[IDX_VDSD_CTRL].revents & POLLIN) printf(" -> Signal-Ausloeser: Daemon (VDSD_CTRL) meldete POLLIN.\n");
         if (client_ctrl >= 0) close(client_ctrl);
         if (vdsd_ctrl >= 0) close(vdsd_ctrl);
         client_ctrl = -1; vdsd_ctrl = -1;
@@ -230,8 +230,6 @@ int main(void) {
 
     shutdown_interrupt:
         printf("vDS-Proxy: Interrupt-Pipeline getrennt (System-Errno: %d - %s).\n", errno, strerror(errno));
-        if (fds[IDX_CLI_INTR].revents & POLLIN)  printf(" -> Signal-Ausloeser: Controller (CLI_INTR) meldete POLLIN.\n");
-        if (fds[IDX_VDSD_INTR].revents & POLLIN) printf(" -> Signal-Ausloeser: Daemon (VDSD_INTR) meldete POLLIN.\n");
         if (client_intr >= 0) close(client_intr);
         if (vdsd_intr >= 0) close(vdsd_intr);
         client_intr = -1; vdsd_intr = -1;
