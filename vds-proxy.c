@@ -215,14 +215,18 @@ int main(void) {
         continue;
 
     shutdown_control:
-        printf("vDS-Proxy: Control-Pipeline getrennt. Setze Kanal zurueck...\n");
+        printf("vDS-Proxy: Control-Pipeline getrennt (System-Errno: %d - %s).\n", errno, strerror(errno));
+        if (fds[IDX_CLI_CTRL].revents & POLLIN)  printf(" -> Signal-Ausloeser: Controller (CLI_CTRL) meldete POLLIN.\n");
+        if (fds[IDX_VDSD_CTRL].revents & POLLIN) printf(" -> Signal-Ausloeser: Daemon (VDSD_CTRL) meldete POLLIN.\n");
         if (client_ctrl >= 0) close(client_ctrl);
         if (vdsd_ctrl >= 0) close(vdsd_ctrl);
         client_ctrl = -1; vdsd_ctrl = -1;
         continue;
 
     shutdown_interrupt:
-        printf("vDS-Proxy: Interrupt-Pipeline getrennt. Setze Kanal zurueck...\n");
+        printf("vDS-Proxy: Interrupt-Pipeline getrennt (System-Errno: %d - %s).\n", errno, strerror(errno));
+        if (fds[IDX_CLI_INTR].revents & POLLIN)  printf(" -> Signal-Ausloeser: Controller (CLI_INTR) meldete POLLIN.\n");
+        if (fds[IDX_VDSD_INTR].revents & POLLIN) printf(" -> Signal-Ausloeser: Daemon (VDSD_INTR) meldete POLLIN.\n");
         if (client_intr >= 0) close(client_intr);
         if (vdsd_intr >= 0) close(vdsd_intr);
         client_intr = -1; vdsd_intr = -1;
