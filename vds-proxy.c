@@ -58,6 +58,7 @@ int open_bt_server_link(uint16_t psm) {
 }
 
 int connect_unix_pipe(const char *name_three_bytes) {
+    // FD-Leak-Schutz direkt beim Erstellen
     int sock = socket(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0);
     if (sock < 0) return -1;
     
@@ -69,8 +70,10 @@ int connect_unix_pipe(const char *name_three_bytes) {
     socklen_t len = offsetof(struct sockaddr_un, sun_path) + 1 + 3;
     
     if (connect(sock, (struct sockaddr *)&addr, len) < 0) {
-        close(sock);
-        return -1;
+        if (errno != EINPROGRESS) {
+            close(sock);
+            return -1;
+        }
     }
     if (set_nonblocking_fd(sock) < 0) {
         close(sock);
@@ -173,7 +176,8 @@ int main(void) {
                     send(vdsd_ctrl, heap_buffer, len, 0);
                 } else if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
                     goto shutdown_control;
-                } else if (len == 0) {
+                } else if (len == 0 && (fds[IDX_CLI_CTRL].revents & POLLHUP)) {
+                    // Trennung nur, wenn Kernel explizit HUP signalisiert
                     goto shutdown_control;
                 }
             }
@@ -183,7 +187,8 @@ int main(void) {
                     send(client_ctrl, heap_buffer, len, 0);
                 } else if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
                     goto shutdown_control;
-                } else if (len == 0) {
+                } else if (len == 0 && (fds[IDX_VDSD_CTRL].revents & POLLHUP)) {
+                    // Trennung nur, wenn Kernel explizit HUP signalisiert
                     goto shutdown_control;
                 }
             }
@@ -197,7 +202,7 @@ int main(void) {
                     send(vdsd_intr, heap_buffer, len, 0);
                 } else if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
                     goto shutdown_interrupt;
-                } else if (len == 0) {
+                } else if (len == 0 && (fds[IDX_CLI_INTR].revents & POLLHUP)) {
                     goto shutdown_interrupt;
                 }
             }
@@ -207,7 +212,7 @@ int main(void) {
                     send(client_intr, heap_buffer, len, 0);
                 } else if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
                     goto shutdown_interrupt;
-                } else if (len == 0) {
+                } else if (len == 0 && (fds[IDX_VDSD_INTR].revents & POLLHUP)) {
                     goto shutdown_interrupt;
                 }
             }
