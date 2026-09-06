@@ -9,6 +9,7 @@
 #include <span>
 #include <cstddef> 
 #include <stdio.h> 
+#include <cerrno>
 
 namespace vds {
 
@@ -34,7 +35,7 @@ static UniqueFd create_ipc_listener(const char *name) {
     socklen_t actual_len = offsetof(struct sockaddr_un, sun_path) + 1 + 3;
     
     if (::bind(fd, reinterpret_cast<const struct sockaddr*>(&un_addr), actual_len) < 0) {
-        fprintf(stderr, "vDS-CORE: FATAL - Bind fuer @%s fehlgeschlagen: %s\n", name, std::strerror(errno));
+        fprintf(stderr, "vDS-CORE: FATAL - Bind fuer @%s failed: %s\n", name, std::strerror(errno));
         fflush(stderr);
         ::close(fd);
         throw std::runtime_error("IPC Bind Failed");
@@ -56,7 +57,19 @@ std::optional<BtAcceptedChannel> BtL2capAcceptor::accept_control() {
     socklen_t len = sizeof(struct sockaddr_un);
     std::memset(&peer, 0, sizeof(struct sockaddr_un));
 
-    int fd = ::accept(control_listener_fd_.get(), reinterpret_cast<struct sockaddr*>(&peer), &len);
+    int fd = -1;
+    // V7.2.2 EAGAIN-Schleifenschutz: Fängt Kernel-Races ab, falls epoll schneller feuert als der Connect einrastet
+    for (int retry = 0; retry < 10; ++retry) {
+        fd = ::accept(control_listener_fd_.get(), reinterpret_cast<struct sockaddr*>(&peer), &len);
+        if (fd >= 0) break;
+        
+        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+            ::usleep(1000); // 1ms Puffer, damit der Kernel-Scheduler den Socket verbinden kann
+            continue;
+        }
+        break; // Echter fataler Fehler, sofort raus
+    }
+
     if (fd < 0) return std::nullopt;
     
     ::fcntl(fd, F_SETFD, FD_CLOEXEC);
@@ -69,7 +82,19 @@ std::optional<BtAcceptedChannel> BtL2capAcceptor::accept_interrupt() {
     socklen_t len = sizeof(struct sockaddr_un);
     std::memset(&peer, 0, sizeof(struct sockaddr_un));
 
-    int fd = ::accept(interrupt_listener_fd_.get(), reinterpret_cast<struct sockaddr*>(&peer), &len);
+    int fd = -1;
+    // V7.2.2 EAGAIN-Schleifenschutz: Fängt Kernel-Races ab, falls epoll schneller feuert als der Connect einrastet
+    for (int retry = 0; retry < 10; ++retry) {
+        fd = ::accept(interrupt_listener_fd_.get(), reinterpret_cast<struct sockaddr*>(&peer), &len);
+        if (fd >= 0) break;
+        
+        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+            ::usleep(1000);
+            continue;
+        }
+        break;
+    }
+
     if (fd < 0) return std::nullopt;
     
     ::fcntl(fd, F_SETFD, FD_CLOEXEC);
@@ -95,7 +120,7 @@ BtL2capBackend &BtL2capBackend::operator=(BtL2capBackend &&other) noexcept {
     if (this != &other) {
         if(control_fd_ >= 0) ::close(control_fd_);
         if(interrupt_fd_ >= 0) ::close(interrupt_fd_);
-        address_ = std::move(other.address_);
+        address = std::move(other.address_);
         control_fd_ = other.control_fd_;
         interrupt_fd_ = other.interrupt_fd_;
         other.control_fd_ = -1;
