@@ -16,7 +16,7 @@ static void setup_abstract_un(struct sockaddr_un &un_addr, const char *name) {
     std::memset(&un_addr, 0, sizeof(struct sockaddr_un));
     un_addr.sun_family = AF_UNIX;
     
-    // Das erste Byte (un_addr.sun_path[0]) bleibt \0 für den abstrakten Namespace.
+    // Das erste Byte (un_addr.sun_path) bleibt \0 für den abstrakten Namespace.
     // Kopiere exakt die 3 Zeichen ("v_c" oder "v_i") ab Position sun_path + 1.
     std::memcpy(un_addr.sun_path + 1, name, 3);
 }
@@ -105,8 +105,9 @@ BtL2capBackend &BtL2capBackend::operator=(BtL2capBackend &&other) noexcept {
     if (this != &other) {
         if(control_fd_ >= 0) ::close(control_fd_);
         if(interrupt_fd_ >= 0) ::close(interrupt_fd_);
-        address = std::move(other.address_);
-        control_fd_ = other.control_fd_;
+        // KORREKTUR: Unterstrich hinzugefügt (address_ statt address)
+        address_ = std::move(other.address_);
+        control_fd = other.control_fd_;
         interrupt_fd_ = other.interrupt_fd_;
         other.control_fd_ = -1;
         other.interrupt_fd_ = -1;
