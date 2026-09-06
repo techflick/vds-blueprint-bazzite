@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include <unistd.h>
 #include <fcntl.h>
-#include <stddef.h> // Erforderlich für offsetof
+#include <stddef.h> 
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <sys/poll.h>
@@ -65,14 +65,9 @@ int connect_unix_pipe(const char *name_three_bytes) {
     memset(&addr, 0, sizeof(struct sockaddr_un));
     addr.sun_family = AF_UNIX;
     
-    // Kopiere exakt die 3 Bytes ("v_c" oder "v_i") ab Position sun_path + 1
     memcpy(addr.sun_path + 1, name_three_bytes, 3); 
-    
-    // KORREKTUR: Berechne die exakte mathematische Länge (6 Bytes) für den RAM-Namespace
-    // 2 Bytes (sun_family) + 1 Byte (\0) + 3 Bytes (Name) = 6 Bytes.
     socklen_t len = offsetof(struct sockaddr_un, sun_path) + 1 + 3;
     
-    // Dem Kernel wird beim connect() NUR die tatsächliche Länge übergeben.
     if (connect(sock, (struct sockaddr *)&addr, len) < 0) {
         close(sock);
         return -1;
@@ -155,12 +150,20 @@ int main(void) {
             }
         }
 
-        // --- ASYNCHRONER FEHLER- UND ABBRUCHSCHUTZ ---
-        if (client_ctrl >= 0 && (fds[IDX_CLI_CTRL].revents & (POLLERR | POLLNVAL | POLLHUP))) goto shutdown_control;
-        if (vdsd_ctrl >= 0   && (fds[IDX_VDSD_CTRL].revents & (POLLERR | POLLNVAL | POLLHUP))) goto shutdown_control;
+        // --- ASYNCHRONER FEHLER- UND ABBRUCHSCHUTZ (GATED HANDSHAKE BLINDING) ---
+        if (client_ctrl >= 0 && (fds[IDX_CLI_CTRL].revents & (POLLERR | POLLNVAL | POLLHUP))) {
+            if (!(fds[IDX_CLI_CTRL].revents & POLLIN)) goto shutdown_control;
+        }
+        if (vdsd_ctrl >= 0 && (fds[IDX_VDSD_CTRL].revents & (POLLERR | POLLNVAL | POLLHUP))) {
+            if (!(fds[IDX_VDSD_CTRL].revents & POLLIN)) goto shutdown_control;
+        }
         
-        if (client_intr >= 0 && (fds[IDX_CLI_INTR].revents & (POLLERR | POLLNVAL | POLLHUP))) goto shutdown_interrupt;
-        if (vdsd_intr >= 0   && (fds[IDX_VDSD_INTR].revents & (POLLERR | POLLNVAL | POLLHUP))) goto shutdown_interrupt;
+        if (client_intr >= 0 && (fds[IDX_CLI_INTR].revents & (POLLERR | POLLNVAL | POLLHUP))) {
+            if (!(fds[IDX_CLI_INTR].revents & POLLIN)) goto shutdown_interrupt;
+        }
+        if (vdsd_intr >= 0 && (fds[IDX_VDSD_INTR].revents & (POLLERR | POLLNVAL | POLLHUP))) {
+            if (!(fds[IDX_VDSD_INTR].revents & POLLIN)) goto shutdown_interrupt;
+        }
 
         // --- TRANSPARENTES DATA ROUTING (CONTROL) ---
         if (client_ctrl >= 0 && vdsd_ctrl >= 0) {
