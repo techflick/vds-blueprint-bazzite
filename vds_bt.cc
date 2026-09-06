@@ -23,7 +23,6 @@ static UniqueFd create_ipc_listener(const char *name) {
     fprintf(stderr, "vDS-CORE: UNTERSTUETZUNG FUER ABSTRAKTE UNIX-SOCKETS AKTIV! Erstelle Pipeline: @%s\n", name);
     fflush(stderr);
 
-    // V7.2.4 ASYNC-FIX: Initialisierung mit SOCK_NONBLOCK für die Epoll-Architektur
     int fd = ::socket(AF_UNIX, SOCK_SEQPACKET | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
     if (fd < 0) throw std::runtime_error("IPC Socket Creation Failed");
     
@@ -114,7 +113,7 @@ BtL2capBackend::~BtL2capBackend() {
 BtL2capBackend::BtL2capBackend(BtL2capBackend &&other) noexcept 
     : address_(std::move(other.address_)), control_fd_(other.control_fd_), interrupt_fd_(other.interrupt_fd_) {
     other.control_fd_ = -1;
-    other.interrupt_fd_ = -1; // KORRIGIERT: Unterstrich hinzugefügt
+    other.interrupt_fd_ = -1;
 }
 
 BtL2capBackend &BtL2capBackend::operator=(BtL2capBackend &&other) noexcept {
@@ -125,16 +124,37 @@ BtL2capBackend &BtL2capBackend::operator=(BtL2capBackend &&other) noexcept {
         control_fd_ = other.control_fd_;
         interrupt_fd_ = other.interrupt_fd_;
         other.control_fd_ = -1;
-        other.interrupt_fd_ = -1; // KORRIGIERT: Unterstrich hinzugefügt
+        other.interrupt_fd_ = -1;
     }
     return *this;
 }
 
-void BtL2capBackend::send_output_report(std::span<const std::uint8_t> r) { ::write(interrupt_fd_, r.data(), r.size()); }
-bool BtL2capBackend::try_send_output_report(std::span<const std::uint8_t> r) { return ::write(interrupt_fd_, r.data(), r.size()) > 0; }
-void BtL2capBackend::send_feature_get(std::uint8_t id) {}
-void BtL2capBackend::send_feature_set(std::span<const std::uint8_t> r) {}
-std::optional<std::vector<std::uint8_t>> BtL2capBackend::read_feature_report() { return std::nullopt; }
+void BtL2capBackend::send_output_report(std::span<const std::uint8_t> r) { 
+    if (interrupt_fd_ >= 0) ::write(interrupt_fd_, r.data(), r.size()); 
+}
+
+bool BtL2capBackend::try_send_output_report(std::span<const std::uint8_t> r) { 
+    if (interrupt_fd_ < 0) return false;
+    return ::write(interrupt_fd_, r.data(), r.size()) > 0; 
+}
+
+void BtL2capBackend::send_feature_get(std::uint8_t id) {
+    fprintf(stderr, "vDS-SPOOF: Modalias usb:v054Cp0CE6d0100 aktiv an L2CAP gemeldet.\n");
+    fflush(stderr);
+}
+
+void BtL2capBackend::send_feature_set(std::span<const std::uint8_t> r) {
+    fflush(stderr);
+}
+
+std::optional<std::vector<std::uint8_t>> BtL2capBackend::read_feature_report() { 
+    std::vector<std::uint8_t> fake_report = {
+        0x05, 
+        0x00, 0x1b, 0xdc, 0x00, 0x00, 0x00, 
+        0x4C, 0x05, 0xE6, 0x0C 
+    };
+    return fake_report;
+}
 
 std::optional<std::vector<std::uint8_t>> BtL2capBackend::read_interrupt_packet() {
     std::vector<std::uint8_t> buf(110);
