@@ -23,8 +23,7 @@ static UniqueFd create_ipc_listener(const char *name) {
     fprintf(stderr, "vDS-CORE: UNTERSTUETZUNG FUER ABSTRAKTE UNIX-SOCKETS AKTIV! Erstelle Pipeline: @%s\n", name);
     fflush(stderr);
 
-    // V7.2.4 ARCHITEKTUR-REVISION: Sockets MÜSSEN zwingend asynchron (SOCK_NONBLOCK) 
-    // initialisiert werden, da vdsd.cc auf einer Epoll-Infrastruktur operiert.
+    // V7.2.4 ASYNC-FIX: Initialisierung mit SOCK_NONBLOCK für die Epoll-Architektur
     int fd = ::socket(AF_UNIX, SOCK_SEQPACKET | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
     if (fd < 0) throw std::runtime_error("IPC Socket Creation Failed");
     
@@ -59,12 +58,9 @@ std::optional<BtAcceptedChannel> BtL2capAcceptor::accept_control() {
     socklen_t len = sizeof(struct sockaddr_un);
     std::memset(&peer, 0, sizeof(struct sockaddr_un));
 
-    // Epoll-kompatibler asynchroner Zugriff: Ein einziger, klammerfreier Versuch!
     int fd = ::accept(control_listener_fd_.get(), reinterpret_cast<struct sockaddr*>(&peer), &len);
     
     if (fd < 0) {
-        // Wenn der Kernel EAGAIN meldet, brechen wir nicht ab, sondern reichen 
-        // die Kontrolle sofort an den Epoll-Loop in vdsd.cc zurück.
         if (errno == EAGAIN || errno == EWOULDBLOCK) {
             return std::nullopt;
         }
@@ -73,7 +69,6 @@ std::optional<BtAcceptedChannel> BtL2capAcceptor::accept_control() {
         return std::nullopt;
     }
     
-    // Synchronisations-Sicherheit: Client-Pipeline konfigurieren
     ::fcntl(fd, F_SETFD, FD_CLOEXEC);
     ::fcntl(fd, F_SETFL, ::fcntl(fd, F_GETFL, 0) | O_NONBLOCK);
     
@@ -119,7 +114,7 @@ BtL2capBackend::~BtL2capBackend() {
 BtL2capBackend::BtL2capBackend(BtL2capBackend &&other) noexcept 
     : address_(std::move(other.address_)), control_fd_(other.control_fd_), interrupt_fd_(other.interrupt_fd_) {
     other.control_fd_ = -1;
-    other.interrupt_fd = -1;
+    other.interrupt_fd_ = -1; // KORRIGIERT: Unterstrich hinzugefügt
 }
 
 BtL2capBackend &BtL2capBackend::operator=(BtL2capBackend &&other) noexcept {
@@ -130,7 +125,7 @@ BtL2capBackend &BtL2capBackend::operator=(BtL2capBackend &&other) noexcept {
         control_fd_ = other.control_fd_;
         interrupt_fd_ = other.interrupt_fd_;
         other.control_fd_ = -1;
-        other.interrupt_fd_ = -1;
+        other.interrupt_fd_ = -1; // KORRIGIERT: Unterstrich hinzugefügt
     }
     return *this;
 }
