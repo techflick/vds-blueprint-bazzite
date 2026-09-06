@@ -84,20 +84,11 @@ modules:
         #endif
         EOF
 
-        # BLOCK 4: DEFINITIVE IPC-UMSTELLUNG (KORREKTUR)
-        # Kopiert die fehlerfreien C/C++ Dateien direkt in das Dateisystem des Containers
+        # BLOCK 4: IPC-DATEI-TRANSFER
+        # Platziert Ihre modifizierten Versionen exakt im Quellcode-Pfad vor dem Build
         COPY vds-proxy.c /vds_build_dir/vds-proxy.c
-        COPY vds_bt.cc /vds_build_dir/vds_bt.cc
+        COPY vds_bt.cc /vds_build_dir/src/platform/linux/vds_bt.cc
 
-        RUN cd /vds_build_dir && \
-            # Ersetzt die originale vds_bt.cc radikal vor dem CMake-Aufruf
-            cp /vds_build_dir/vds_bt.cc /vds_build_dir/src/platform/linux/vds_bt.cc && \
-            # Deaktiviert BlueZ-Abhängigkeiten im Build-System
-            sed -i '/pkg_check_modules.*bluez/c\set(bluez_FOUND TRUE)\nset(bluez_INCLUDE_DIRS "/vds_build_dir/include")\nset(bluez_LIBRARIES "")' CMakeLists.txt && \
-            sed -i 's/PkgConfig::BLUEZ//g' CMakeLists.txt && \
-            # Starr typisierte Hardware-Fälschung maskiert patchen (\x3a verhindert YAML-Parser-Kollaps)
-            sed -i "s|vds::bluez_device_modalias(address);|std::optional<std::string>(\"usb\x3av054Cp0CE6d0100\");|g" src/platform/linux/vdsd.cc
-        
         # BLOCK 5: SYSTEM-KONFIGURATIONEN (SYSTEMD, UDEV, ALSA) - MIT KERNEL-BOOT-SCHUTZ
         RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
             PKG_ROOT="/vds-pkg-root" && \
@@ -174,23 +165,32 @@ modules:
             # KORREKTUR: Relativer Symlink löst den absoluten Pfadfehler im Paketierungskontext auf
             ln -sf ../../../usr/share/wireplumber/wireplumber.conf.d/99-vds-prioritisation.conf "${PKG_ROOT}/etc/wireplumber/wireplumber.conf.d/99-vds-prioritisation.conf"
         
-        # BLOCK 6: BUILD & RPM-PAKETIERUNG (SYNCHRONISIERT)
+        # BLOCK 6: BUILD & RPM-PAKETIERUNG (GEHÄRTET & BEREINIGT)
         RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
             PKG_ROOT="/vds-pkg-root" && \
             cp /vds_build_dir/module/vds_hcd.ko "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra/vds_hcd.ko" && \
             chmod 644 "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra/vds_hcd.ko" && \
-            # Native C-Kompilierung des Proxys mit gesetzten Optimierungen
+            \
+            # 1. Native C-Kompilierung des Proxys aus dem Hauptverzeichnis
             g++ -O3 -Wall /vds_build_dir/vds-proxy.c -o /vds_build_dir/vds-proxy-bin && \
-            # CMake generiert das Build-Verzeichnis unter Verwendung der überschriebenen vds_bt.cc
-            cd /vds_build_dir && mkdir -p build && cd build && \
+            \
+            # 2. HÄRTUNG: BlueZ-Abhängigkeiten im CMake-System radikal kappen vor dem Aufruf
+            cd /vds_build_dir && \
+            sed -i '/pkg_check_modules.*bluez/c\set(bluez_FOUND TRUE)\nset(bluez_INCLUDE_DIRS "/vds_build_dir/include")\nset(bluez_LIBRARIES "")' CMakeLists.txt && \
+            sed -i 's/PkgConfig::BLUEZ//g' CMakeLists.txt && \
+            \
+            # 3. Clean-Build initialisieren
+            mkdir -p build && cd build && \
             cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS="-isystem /vds_build_dir/include" -DCMAKE_CXX_FLAGS="-isystem /vds_build_dir/include" && \
             make -j$(nproc) && \
-            # Integration der Binaries in die Paket-Struktur
+            \
+            # 4. Integration der modifizierten Binaries in die Paket-Struktur
             cp /vds_build_dir/build/vdsd "${PKG_ROOT}/usr/bin/vdsd" && \
             cp /vds_build_dir/build/vdsctl "${PKG_ROOT}/usr/bin/vdsctl" && \
             cp /vds_build_dir/vds-proxy-bin "${PKG_ROOT}/usr/bin/vds-proxy" && \
             chmod 755 "${PKG_ROOT}/usr/bin/vdsd" "${PKG_ROOT}/usr/bin/vdsctl" "${PKG_ROOT}/usr/bin/vds-proxy" && \
-            # Erstellung der RPM-Struktur
+            \
+            # 5. Erstellung der RPM-Struktur
             mkdir -p /root/rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS} && \
             ( \
               echo 'Name: kmod-vds'; echo 'Version: 1.0.0'; echo 'Release: 1'; \
