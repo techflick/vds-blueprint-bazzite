@@ -120,7 +120,8 @@ BtL2capBackend &BtL2capBackend::operator=(BtL2capBackend &&other) noexcept {
     if (this != &other) {
         if(control_fd_ >= 0) ::close(control_fd_);
         if(interrupt_fd_ >= 0) ::close(interrupt_fd_);
-        address = std::move(other.address_);
+        // KORREKTUR: Fehlenden Unterstrich bei address_ hinzugefuegt
+        address_ = std::move(other.address_);
         control_fd_ = other.control_fd_;
         interrupt_fd_ = other.interrupt_fd_;
         other.control_fd_ = -1;
