@@ -60,7 +60,6 @@ int open_bt_server_link(uint16_t psm) {
 }
 
 int connect_unix_pipe(const char *name_three_bytes) {
-    // 1. Rein blockierend oeffnen, damit connect() garantiert im Kernel einrastet
     int sock = socket(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0);
     if (sock < 0) return -1;
     
@@ -68,7 +67,6 @@ int connect_unix_pipe(const char *name_three_bytes) {
     memset(&addr, 0, sizeof(struct sockaddr_un));
     addr.sun_family = AF_UNIX;
     
-    // REGEL: Strikte 6-Byte-Regel via bitgenauem Kopieren in sun_path + 1
     memcpy(addr.sun_path + 1, name_three_bytes, 3); 
     socklen_t len = offsetof(struct sockaddr_un, sun_path) + 1 + 3;
     
@@ -77,10 +75,8 @@ int connect_unix_pipe(const char *name_three_bytes) {
         return -1;
     }
     
-    // REGEL: Dem Kernel-Scheduler 2ms Zeit geben, das accept() im vdsd zu verarbeiten
     usleep(2000);
     
-    // 2. Erst NACH dem erfolgreichen Handshake fuer unseren Multiplex-Loop auf Non-Blocking schalten
     if (set_nonblocking_fd(sock) < 0) {
         close(sock);
         return -1;
@@ -131,17 +127,13 @@ int main(void) {
             break;
         }
 
-        // ==================== ABFANGEN DER CONTROLLER-VERBINDUNGEN ====================
+        // ==================== SIMULTANES ABFANGEN DER KANÄLE ====================
         if (fds[IDX_SRV_CTRL].revents & POLLIN) {
             int tmp = accept(srv_ctrl, NULL, NULL);
             if (tmp >= 0) {
                 client_ctrl = tmp;
                 set_nonblocking_fd(client_ctrl);
                 printf("vDS-Proxy: Controller Control-Kanal aktiv abgefangen.\n");
-                vdsd_ctrl = connect_unix_pipe("v_c");
-                if (vdsd_ctrl >= 0) {
-                    printf("vDS-Proxy: Control-Speicher-Pipeline instanziiert.\n");
-                }
             }
         }
 
@@ -151,10 +143,22 @@ int main(void) {
                 client_intr = tmp;
                 set_nonblocking_fd(client_intr);
                 printf("vDS-Proxy: Controller Interrupt-Kanal aktiv abgefangen.\n");
-                vdsd_intr = connect_unix_pipe("v_i");
-                if (vdsd_intr >= 0) {
-                    printf("vDS-Proxy: Interrupt-Speicher-Pipeline instanziiert.\n");
-                }
+            }
+        }
+
+        // ERST NACHDEM BEIDE DA SIND: BRÜCKENSCHLAG ZUM VDSD (TIMING-FIX)
+        if (client_ctrl >= 0 && client_intr >= 0 && vdsd_ctrl < 0 && vdsd_intr < 0) {
+            printf("vDS-Proxy: Beide Bluetooth-Kanaele gesichert. Verbinde RAM-Pipelines...\n");
+            vdsd_ctrl = connect_unix_pipe("v_c");
+            vdsd_intr = connect_unix_pipe("v_i");
+            if (vdsd_ctrl >= 0 && vdsd_intr >= 0) {
+                printf("vDS-Proxy: Beide Speicher-Pipelines erfolgreich instanziiert. Tunnel aktiv.\n");
+            } else {
+                fprintf(stderr, "vDS-Proxy: FATAL - IPC-Verbindung zum vdsd fehlgeschlagen.\n");
+                if (vdsd_ctrl >= 0) { close(vdsd_ctrl); vdsd_ctrl = -1; }
+                if (vdsd_intr >= 0) { close(vdsd_intr); vdsd_intr = -1; }
+                close(client_ctrl); client_ctrl = -1;
+                close(client_intr); client_intr = -1;
             }
         }
 
@@ -184,7 +188,7 @@ int main(void) {
                         goto shutdown_control;
                     } else {
                         sched_yield(); usleep(2000);
-                        continue;
+                        break; // FIX: Verhindert Einfrieren des anderen Kanals
                     }
                 } else if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
                     goto shutdown_control;
@@ -195,7 +199,6 @@ int main(void) {
                 if (len > 0) {
                     send(client_ctrl, heap_buffer, len, MSG_DONTWAIT);
                 } else if (len == 0) {
-                    // KORREKTUR: goto statt unendlichem continue. Verhindert 100% CPU-Auslastung bei geschlossenem Socket.
                     goto shutdown_control;
                 } else if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
                     goto shutdown_control;
@@ -214,7 +217,7 @@ int main(void) {
                         goto shutdown_interrupt;
                     } else {
                         sched_yield(); usleep(2000);
-                        continue;
+                        break; // FIX: Verhindert Einfrieren des anderen Kanals
                     }
                 } else if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
                     goto shutdown_interrupt;
@@ -225,7 +228,6 @@ int main(void) {
                 if (len > 0) {
                     send(client_intr, heap_buffer, len, MSG_DONTWAIT);
                 } else if (len == 0) {
-                    // KORREKTUR: goto statt unendlichem continue.
                     goto shutdown_interrupt;
                 } else if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
                     goto shutdown_interrupt;
@@ -234,7 +236,6 @@ int main(void) {
         }
         continue;
 
-    // ==================== CLEANUP & RESET-PIPELINES ====================
     shutdown_control:
         printf("vDS-Proxy: Control-Pipeline getrennt (System-Errno: %d - %s).\n", errno, strerror(errno));
         if (client_ctrl >= 0) close(client_ctrl);
