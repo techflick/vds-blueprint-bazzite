@@ -8,6 +8,7 @@
 #include <vector>
 #include <span>
 #include <cstddef> // Erforderlich für offsetof
+#include <stdio.h> // Erforderlich für fprintf / fflush
 
 namespace vds {
 
@@ -21,6 +22,13 @@ static void setup_abstract_un(struct sockaddr_un &un_addr, const char *name) {
 }
 
 static UniqueFd create_ipc_listener(const char *name) {
+    // 1. DEFINITIVER IPC-INDIKATOR (Wird für jeden erstellten RAM-Kanal ins Journal geschrieben)
+    fprintf(stderr, "\n==================================================\n");
+    fprintf(stderr, "vDS-CORE: UNTERSTUETZUNG FUER ABSTRAKTE UNIX-SOCKETS AKTIV!\n");
+    fprintf(stderr, "vDS-CORE: Erstelle RAM-Pipeline: @%s\n", name);
+    fprintf(stderr, "==================================================\n\n");
+    fflush(stderr);
+
     int fd = ::socket(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC | SOCK_NONBLOCK, 0);
     if (fd < 0) throw std::runtime_error("IPC Socket Creation Failed");
     
@@ -97,7 +105,7 @@ BtL2capBackend &BtL2capBackend::operator=(BtL2capBackend &&other) noexcept {
     if (this != &other) {
         if(control_fd_ >= 0) ::close(control_fd_);
         if(interrupt_fd_ >= 0) ::close(interrupt_fd_);
-        address_ = std::move(other.address_);
+        address = std::move(other.address_);
         control_fd_ = other.control_fd_;
         interrupt_fd_ = other.interrupt_fd_;
         other.control_fd_ = -1;
