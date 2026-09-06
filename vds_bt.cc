@@ -23,9 +23,9 @@ static UniqueFd create_ipc_listener(const char *name) {
     fprintf(stderr, "vDS-CORE: UNTERSTUETZUNG FUER ABSTRAKTE UNIX-SOCKETS AKTIV! Erstelle Pipeline: @%s\n", name);
     fflush(stderr);
 
-    // KORREKTUR: SOCK_NONBLOCK hier entfernt. Der Server-Listener muss blockierend sein,
-    // damit der Kernel die Backlog-Queue für anklopfende Clients (Proxy/socat) sauber verwaltet.
-    int fd = ::socket(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0);
+    // V7.2.4 ARCHITEKTUR-REVISION: Sockets MÜSSEN zwingend asynchron (SOCK_NONBLOCK) 
+    // initialisiert werden, da vdsd.cc auf einer Epoll-Infrastruktur operiert.
+    int fd = ::socket(AF_UNIX, SOCK_SEQPACKET | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
     if (fd < 0) throw std::runtime_error("IPC Socket Creation Failed");
     
     int reuse = 1;
@@ -59,23 +59,27 @@ std::optional<BtAcceptedChannel> BtL2capAcceptor::accept_control() {
     socklen_t len = sizeof(struct sockaddr_un);
     std::memset(&peer, 0, sizeof(struct sockaddr_un));
 
-    int fd = -1;
-    // V7.2.2 EAGAIN-Schleifenschutz: Fängt Kernel-Races ab, falls epoll schneller feuert als der Connect einrastet
-    for (int retry = 0; retry < 10; ++retry) {
-        fd = ::accept(control_listener_fd_.get(), reinterpret_cast<struct sockaddr*>(&peer), &len);
-        if (fd >= 0) break;
-        
-        if (errno == EAGAIN || errno == EWOULDBLOCK) {
-            ::usleep(1000); // 1ms Puffer, damit der Kernel-Scheduler den Socket verbinden kann
-            continue;
-        }
-        break; // Echter fataler Fehler, sofort raus
-    }
-
-    if (fd < 0) return std::nullopt;
+    // Epoll-kompatibler asynchroner Zugriff: Ein einziger, klammerfreier Versuch!
+    int fd = ::accept(control_listener_fd_.get(), reinterpret_cast<struct sockaddr*>(&peer), &len);
     
+    if (fd < 0) {
+        // Wenn der Kernel EAGAIN meldet, brechen wir nicht ab, sondern reichen 
+        // die Kontrolle sofort an den Epoll-Loop in vdsd.cc zurück.
+        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+            return std::nullopt;
+        }
+        fprintf(stderr, "vDS-CORE: Kritischer accept-Fehler auf Control: %s\n", std::strerror(errno));
+        fflush(stderr);
+        return std::nullopt;
+    }
+    
+    // Synchronisations-Sicherheit: Client-Pipeline konfigurieren
     ::fcntl(fd, F_SETFD, FD_CLOEXEC);
     ::fcntl(fd, F_SETFL, ::fcntl(fd, F_GETFL, 0) | O_NONBLOCK);
+    
+    fprintf(stderr, "vDS-CORE: Control-Kanal erfolgreich per accept() aus Epoll-Event extrahiert.\n");
+    fflush(stderr);
+    
     return BtAcceptedChannel{.address = "00:1b:dc:00:00:00", .fd = UniqueFd(fd)};
 }
 
@@ -84,23 +88,23 @@ std::optional<BtAcceptedChannel> BtL2capAcceptor::accept_interrupt() {
     socklen_t len = sizeof(struct sockaddr_un);
     std::memset(&peer, 0, sizeof(struct sockaddr_un));
 
-    int fd = -1;
-    // V7.2.2 EAGAIN-Schleifenschutz: Fängt Kernel-Races ab, falls epoll schneller feuert als der Connect einrastet
-    for (int retry = 0; retry < 10; ++retry) {
-        fd = ::accept(interrupt_listener_fd_.get(), reinterpret_cast<struct sockaddr*>(&peer), &len);
-        if (fd >= 0) break;
-        
+    int fd = ::accept(interrupt_listener_fd_.get(), reinterpret_cast<struct sockaddr*>(&peer), &len);
+    
+    if (fd < 0) {
         if (errno == EAGAIN || errno == EWOULDBLOCK) {
-            ::usleep(1000);
-            continue;
+            return std::nullopt;
         }
-        break;
+        fprintf(stderr, "vDS-CORE: Kritischer accept-Fehler auf Interrupt: %s\n", std::strerror(errno));
+        fflush(stderr);
+        return std::nullopt;
     }
-
-    if (fd < 0) return std::nullopt;
     
     ::fcntl(fd, F_SETFD, FD_CLOEXEC);
     ::fcntl(fd, F_SETFL, ::fcntl(fd, F_GETFL, 0) | O_NONBLOCK);
+    
+    fprintf(stderr, "vDS-CORE: Interrupt-Kanal erfolgreich per accept() aus Epoll-Event extrahiert.\n");
+    fflush(stderr);
+    
     return BtAcceptedChannel{.address = "00:1b:dc:00:00:00", .fd = UniqueFd(fd)};
 }
 
@@ -115,7 +119,7 @@ BtL2capBackend::~BtL2capBackend() {
 BtL2capBackend::BtL2capBackend(BtL2capBackend &&other) noexcept 
     : address_(std::move(other.address_)), control_fd_(other.control_fd_), interrupt_fd_(other.interrupt_fd_) {
     other.control_fd_ = -1;
-    other.interrupt_fd_ = -1;
+    other.interrupt_fd = -1;
 }
 
 BtL2capBackend &BtL2capBackend::operator=(BtL2capBackend &&other) noexcept {
