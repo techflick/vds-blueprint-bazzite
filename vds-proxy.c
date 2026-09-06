@@ -195,8 +195,8 @@ int main(void) {
                 if (len > 0) {
                     send(client_ctrl, heap_buffer, len, MSG_DONTWAIT);
                 } else if (len == 0) {
-                    sched_yield(); usleep(2000);
-                    continue;
+                    // KORREKTUR: goto statt unendlichem continue. Verhindert 100% CPU-Auslastung bei geschlossenem Socket.
+                    goto shutdown_control;
                 } else if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
                     goto shutdown_control;
                 }
@@ -225,8 +225,8 @@ int main(void) {
                 if (len > 0) {
                     send(client_intr, heap_buffer, len, MSG_DONTWAIT);
                 } else if (len == 0) {
-                    sched_yield(); usleep(2000);
-                    continue;
+                    // KORREKTUR: goto statt unendlichem continue.
+                    goto shutdown_interrupt;
                 } else if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
                     goto shutdown_interrupt;
                 }
