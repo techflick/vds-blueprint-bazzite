@@ -43,7 +43,6 @@ static UniqueFd create_ipc_listener(const char *name) {
     socklen_t actual_len = offsetof(struct sockaddr_un, sun_path) + 1 + 3;
     
     // Dem Kernel wird NUR die tatsächliche Länge übergeben.
-    // Das verhindert das Auffüllen des Schlüssels mit den restlichen 106 Nullbytes.
     if (::bind(fd, reinterpret_cast<const struct sockaddr*>(&un_addr), actual_len) < 0) {
         ::close(fd);
         throw std::runtime_error("IPC Bind Failed");
@@ -105,9 +104,9 @@ BtL2capBackend &BtL2capBackend::operator=(BtL2capBackend &&other) noexcept {
     if (this != &other) {
         if(control_fd_ >= 0) ::close(control_fd_);
         if(interrupt_fd_ >= 0) ::close(interrupt_fd_);
-        // KORREKTUR: Unterstrich hinzugefügt (address_ statt address)
         address_ = std::move(other.address_);
-        control_fd = other.control_fd_;
+        // KORREKTUR: Unterstriche hinzugefügt (control_fd_ und interrupt_fd_)
+        control_fd_ = other.control_fd_;
         interrupt_fd_ = other.interrupt_fd_;
         other.control_fd_ = -1;
         other.interrupt_fd_ = -1;
