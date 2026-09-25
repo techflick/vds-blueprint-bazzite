@@ -179,29 +179,31 @@ int main(void) {
         }
 
         // ==================== DATEN-ROUTING: CONTROL-KANAL ====================
+        // ==================== DATEN-ROUTING: CONTROL-KANAL ====================
         if (client_ctrl >= 0 && vdsd_ctrl >= 0) {
             if (fds[IDX_CLI_CTRL].revents & POLLIN) {
                 ssize_t len = recv(client_ctrl, heap_buffer, 1024, 0);
+                int local_errno = errno; // <-- HIER SICHERN
                 if (len > 0) {
                     send(vdsd_ctrl, heap_buffer, len, MSG_DONTWAIT);
                 } else if (len == 0) {
                     if (fds[IDX_CLI_CTRL].revents & POLLHUP) {
                         goto shutdown_control;
                     } else {
-                        sched_yield(); usleep(2000);
-                        continue; 
+                        break; // <-- REGELEINHALTUNG: break statt continue
                     }
-                } else if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
+                } else if (len < 0 && local_errno != EAGAIN && local_errno != EWOULDBLOCK) {
                     goto shutdown_control;
                 }
             }
             if (fds[IDX_VDSD_CTRL].revents & POLLIN) {
                 ssize_t len = recv(vdsd_ctrl, heap_buffer, 1024, 0);
+                int local_errno = errno; // <-- HIER SICHERN
                 if (len > 0) {
                     send(client_ctrl, heap_buffer, len, MSG_DONTWAIT);
                 } else if (len == 0) {
                     goto shutdown_control;
-                } else if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
+                } else if (len < 0 && local_errno != EAGAIN && local_errno != EWOULDBLOCK) {
                     goto shutdown_control;
                 }
             }
@@ -211,26 +213,27 @@ int main(void) {
         if (client_intr >= 0 && vdsd_intr >= 0) {
             if (fds[IDX_CLI_INTR].revents & POLLIN) {
                 ssize_t len = recv(client_intr, heap_buffer, 1024, 0);
+                int local_errno = errno; // <-- HIER SICHERN
                 if (len > 0) {
                     send(vdsd_intr, heap_buffer, len, MSG_DONTWAIT);
                 } else if (len == 0) {
                     if (fds[IDX_CLI_INTR].revents & POLLHUP) {
                         goto shutdown_interrupt;
                     } else {
-                        sched_yield(); usleep(2000);
-                        continue; 
+                        break; // <-- REGELEINHALTUNG: break statt continue
                     }
-                } else if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
+                } else if (len < 0 && local_errno != EAGAIN && local_errno != EWOULDBLOCK) {
                     goto shutdown_interrupt;
                 }
             }
             if (fds[IDX_VDSD_INTR].revents & POLLIN) {
                 ssize_t len = recv(vdsd_intr, heap_buffer, 1024, 0);
+                int local_errno = errno; // <-- HIER SICHERN
                 if (len > 0) {
                     send(client_intr, heap_buffer, len, MSG_DONTWAIT);
                 } else if (len == 0) {
                     goto shutdown_interrupt;
-                } else if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
+                } else if (len < 0 && local_errno != EAGAIN && local_errno != EWOULDBLOCK) {
                     goto shutdown_interrupt;
                 }
             }
