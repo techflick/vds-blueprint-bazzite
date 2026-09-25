@@ -116,10 +116,11 @@ int main(void) {
         fds[IDX_SRV_INTR].fd = (client_intr < 0) ? srv_intr : -1;
         fds[IDX_SRV_INTR].events = POLLIN;
 
-        fds[IDX_CLI_CTRL].fd  = client_ctrl;  fds[IDX_CLI_CTRL].events  = (client_ctrl >= 0) ? POLLIN : 0;
-        fds[IDX_VDSD_CTRL].fd = vdsd_ctrl;    fds[IDX_VDSD_CTRL].events = (vdsd_ctrl >= 0) ? POLLIN : 0;
-        fds[IDX_CLI_INTR].fd  = client_intr;  fds[IDX_CLI_INTR].events  = (client_intr >= 0) ? POLLIN : 0;
-        fds[IDX_VDSD_INTR].fd = vdsd_intr;    fds[IDX_VDSD_INTR].events = (vdsd_intr >= 0) ? POLLIN : 0;
+        fds[IDX_CLI_CTRL].events  = (client_ctrl >= 0 && vdsd_ctrl >= 0) ? POLLIN : 0;
+        fds[IDX_VDSD_CTRL].events = (vdsd_ctrl >= 0) ? POLLIN : 0;
+        fds[IDX_CLI_INTR].events  = (client_intr >= 0 && vdsd_intr >= 0) ? POLLIN : 0;
+        fds[IDX_VDSD_INTR].events = (vdsd_intr >= 0) ? POLLIN : 0;
+
 
         int ret = poll(fds, TOTAL_FDS, -1);
         if (ret < 0) {
@@ -188,7 +189,7 @@ int main(void) {
                         goto shutdown_control;
                     } else {
                         sched_yield(); usleep(2000);
-                        break; // FIX: Verhindert Einfrieren des anderen Kanals
+                        continue; 
                     }
                 } else if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
                     goto shutdown_control;
@@ -217,7 +218,7 @@ int main(void) {
                         goto shutdown_interrupt;
                     } else {
                         sched_yield(); usleep(2000);
-                        break; // FIX: Verhindert Einfrieren des anderen Kanals
+                        continue; 
                     }
                 } else if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
                     goto shutdown_interrupt;
