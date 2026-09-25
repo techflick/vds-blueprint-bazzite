@@ -159,7 +159,14 @@ std::optional<std::vector<std::uint8_t>> BtL2capBackend::read_feature_report() {
 std::optional<std::vector<std::uint8_t>> BtL2capBackend::read_interrupt_packet() {
     std::vector<std::uint8_t> buf(110);
     int n = ::read(interrupt_fd_, buf.data(), buf.size());
-    if(n <= 0) return std::nullopt;
+    
+    if (n < 0) {
+        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+            return std::vector<std::uint8_t>();
+        }
+        return std::nullopt;
+    }
+    if (n == 0) return std::nullopt;
     buf.resize(n);
     return buf;
 }
