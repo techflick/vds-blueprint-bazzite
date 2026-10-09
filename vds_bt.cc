@@ -142,30 +142,34 @@ void BtL2capBackend::send_feature_set(std::span<const std::uint8_t> r) {
 }
 
 std::optional<std::vector<std::uint8_t>> BtL2capBackend::read_feature_report() { 
-    // Erweiterter, protokollkonformer 64-Byte-Sony-Vendor-Report zur Kernel-Validierung
-    std::vector<std::uint8_t> fake_report(64, 0x00);
+    // Erhöht auf 65 Byte (1 Byte HID-Header + 64 Byte Sony-Vendor-Report)
+    std::vector<std::uint8_t> fake_report(65, 0x00);
     
-    fake_report[0] = 0x05; // Report ID 0x05 (DualSense Bluetooth Feature Calibration)
+    // [0] MUST BE: Bluetooth HID-Header für Feature-Reports (DATA | FEATURE)
+    fake_report[0] = 0xA3; 
+
+    // [1] Report ID 0x05 (DualSense Bluetooth Feature Calibration)
+    fake_report[1] = 0x05; 
     
-    // Bluetooth MAC-Spoofing (rückwärts im HID-Datenstrom gespiegelt)
-    fake_report[1] = 0x00; 
-    fake_report[2] = 0x00;
+    // Bluetooth MAC-Spoofing (rückwärts gespiegelt, verschoben um 1 Byte)
+    fake_report[2] = 0x00; 
     fake_report[3] = 0x00;
-    fake_report[4] = 0xdc;
-    fake_report[5] = 0x1b;
-    fake_report[6] = 0x00;
+    fake_report[4] = 0x00;
+    fake_report[5] = 0xdc;
+    fake_report[6] = 0x1b;
+    fake_report[7] = 0x00;
     
-    // Strikter Modalias-Abgleich (Sony Interactive Entertainment = 0x054C, DualSense = 0x0CE6)
-    fake_report[7] = 0x4C; 
-    fake_report[8] = 0x05; 
-    fake_report[9] = 0xE6;
-    fake_report[10] = 0x0C;
+    // Strikter Modalias-Abgleich (Sony = 0x054C, DualSense = 0x0CE6)
+    fake_report[8] = 0x4C; 
+    fake_report[9] = 0x05; 
+    fake_report[10] = 0xE6;
+    fake_report[11] = 0x0C;
     
-    // Hardware-Revisions- & Firmware-Kompatibilitäts-Flags (Erforderlich für Kernel-Sanity Check)
-    fake_report[11] = 0x01;
-    fake_report[12] = 0x00;
-    fake_report[13] = 0x24; // Firmware Major Build
-    fake_report[14] = 0x00;
+    // Hardware-Revisions- & Firmware-Kompatibilitäts-Flags (Verschoben um 1 Byte)
+    fake_report[12] = 0x01;
+    fake_report[13] = 0x00;
+    fake_report[14] = 0x24; // Firmware Major Build
+    fake_report[15] = 0x00;
     
     return fake_report;
 }
