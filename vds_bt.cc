@@ -10,6 +10,7 @@
 #include <cstddef> 
 #include <stdio.h> 
 #include <cerrno>
+#include <csignal>
 
 namespace vds {
 
@@ -32,8 +33,7 @@ static UniqueFd create_ipc_listener(const char *name) {
     struct sockaddr_un un_addr;
     setup_abstract_un(un_addr, name);
     
-    // 3 Bytes Nutzdaten ("v_c" oder "v_i") + 1 Byte '\0'-Präfix
-    socklen_t actual_len = offsetof(struct sockaddr_un, sun_path) + 1 + 3;
+    socklen_t actual_len = offsetof(struct sockaddr_un, sun_path) + 4;
     
     if (::bind(fd, reinterpret_cast<const struct sockaddr*>(&un_addr), actual_len) < 0) {
         fprintf(stderr, "vDS-CORE: FATAL - Bind fuer @%s failed: %s\n", name, std::strerror(errno));
@@ -98,7 +98,9 @@ std::optional<BtAcceptedChannel> BtL2capAcceptor::accept_interrupt() {
 }
 
 BtL2capBackend::BtL2capBackend(std::string addr, UniqueFd c, UniqueFd i) 
-    : address_(addr), control_fd_(c.release()), interrupt_fd_(i.release()) {}
+    : address_(addr), control_fd_(c.release()), interrupt_fd_(i.release()) {
+    std::signal(SIGPIPE, SIG_IGN);
+}
 
 BtL2capBackend::~BtL2capBackend() { 
     if(control_fd_ >= 0) ::close(control_fd_); 
@@ -115,8 +117,8 @@ BtL2capBackend &BtL2capBackend::operator=(BtL2capBackend &&other) noexcept {
     if (this != &other) {
         if(control_fd_ >= 0) ::close(control_fd_);
         if(interrupt_fd_ >= 0) ::close(interrupt_fd_);
-        address_ = std::move(other.address_); 
-        control_fd_ = other.control_fd_;    // <- Hier: Unterstrich hinzugefügt!
+        address = std::move(other.address_); 
+        control_fd_ = other.control_fd_;    
         interrupt_fd_ = other.interrupt_fd_;
         other.control_fd_ = -1;
         other.interrupt_fd_ = -1;
@@ -143,16 +145,11 @@ void BtL2capBackend::send_feature_set(std::span<const std::uint8_t> r) {
 }
 
 std::optional<std::vector<std::uint8_t>> BtL2capBackend::read_feature_report() { 
-    // Erhöht auf 65 Byte (1 Byte HID-Header + 64 Byte Sony-Vendor-Report)
     std::vector<std::uint8_t> fake_report(65, 0x00);
     
-    // [0] Bluetooth HID-Transaktions-Header für Feature-Reports (DATA | FEATURE)
-    fake_report[0] = 0xA3; 
-
-    // [1] Report ID 0x05 (DualSense Bluetooth Feature Calibration)
-    fake_report[1] = 0x05; 
+    fake_report[0] = 0xA3; // Bluetooth HID-Transaktions-Header (DATA | FEATURE)
+    fake_report[1] = 0x05; // Report ID
     
-    // Bluetooth MAC-Spoofing (rückwärts gespiegelt, verschoben um 1 Byte)
     fake_report[2] = 0x00; 
     fake_report[3] = 0x00;
     fake_report[4] = 0x00;
@@ -160,13 +157,11 @@ std::optional<std::vector<std::uint8_t>> BtL2capBackend::read_feature_report() {
     fake_report[6] = 0x1b;
     fake_report[7] = 0x00;
     
-    // Strikter Modalias-Abgleich (Sony = 0x054C, DualSense = 0x0CE6)
     fake_report[8] = 0x4C; 
     fake_report[9] = 0x05; 
     fake_report[10] = 0xE6;
     fake_report[11] = 0x0C;
     
-    // Hardware-Revisions- & Firmware-Kompatibilitäts-Flags (Verschoben um 1 Byte)
     fake_report[12] = 0x01;
     fake_report[13] = 0x00;
     fake_report[14] = 0x24; // Firmware Major Build
@@ -178,7 +173,6 @@ std::optional<std::vector<std::uint8_t>> BtL2capBackend::read_feature_report() {
 std::optional<std::vector<std::uint8_t>> BtL2capBackend::read_interrupt_packet() {
     std::vector<std::uint8_t> buf(110);
     
-    // Nutze recv() mit MSG_DONTWAIT und MSG_NOSIGNAL statt nacktem read()
     ssize_t n = ::recv(interrupt_fd_, buf.data(), buf.size(), MSG_DONTWAIT | MSG_NOSIGNAL);
     
     if (n < 0) {
@@ -189,7 +183,15 @@ std::optional<std::vector<std::uint8_t>> BtL2capBackend::read_interrupt_packet()
     }
     
     if (n == 0) {
-        return std::nullopt;
+        // --- STRIKTER MSG_PEEK-SCHUTZ GEGEN ASYNC BREAKS ---
+        std::uint8_t peek_dummy;
+        ssize_t peek_n = ::recv(interrupt_fd_, &peek_dummy, 1, MSG_PEEK | MSG_DONTWAIT);
+        if (peek_n == 0) {
+            fprintf(stderr, "vDS-CORE: Physisches EOF auf Interrupt-Kanal erkannt.\n");
+            fflush(stderr);
+            return std::nullopt; 
+        }
+        return std::nullopt; 
     }
     
     buf.resize(n);
