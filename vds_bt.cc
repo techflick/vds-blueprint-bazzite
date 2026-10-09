@@ -11,7 +11,6 @@
 #include <stdio.h> 
 #include <cerrno>
 
-
 namespace vds {
 
 static void setup_abstract_un(struct sockaddr_un &un_addr, const char *name) {
@@ -117,7 +116,7 @@ BtL2capBackend &BtL2capBackend::operator=(BtL2capBackend &&other) noexcept {
         if(control_fd_ >= 0) ::close(control_fd_);
         if(interrupt_fd_ >= 0) ::close(interrupt_fd_);
         address_ = std::move(other.address_); 
-        control_fd = other.control_fd_;
+        control_fd_ = other.control_fd_;    // <- Hier: Unterstrich hinzugefügt!
         interrupt_fd_ = other.interrupt_fd_;
         other.control_fd_ = -1;
         other.interrupt_fd_ = -1;
