@@ -171,7 +171,7 @@ int main(void) {
             if (vdsd_ctrl >= 0 && vdsd_intr >= 0) {
                 printf("vDS-Proxy: Beide Speicher-Pipelines erfolgreich instanziiert. Tunnel aktiv.\n");
                 fflush(stderr); // Erzwinge Flush nach Setup laut Vorgabe [2]
-                continue;
+                // KEIN continue hier! Wir lassen den Loop weiterlaufen, um die FDs direkt zu verarbeiten.
             } else {
                 fprintf(stderr, "vDS-Proxy: FATAL - IPC-Verbindung zum vdsd fehlgeschlagen.\n");
                 if (vdsd_ctrl >= 0) { close(vdsd_ctrl); vdsd_ctrl = -1; }
@@ -182,71 +182,80 @@ int main(void) {
             }
         }
 
-        // Striktes POLLHUP/Fehler-Handling [2]
-        if (client_ctrl >= 0 && (fds[IDX_CLI_CTRL].revents & (POLLERR | POLLNVAL))) goto shutdown_control;
-        if (client_ctrl >= 0 && (fds[IDX_CLI_CTRL].revents & POLLHUP) && !(fds[IDX_CLI_CTRL].revents & POLLIN)) goto shutdown_control;
+        // Striktes POLLHUP/Fehler-Handling [2] (Nur auswerten, wenn poll() auch wirklich Events für diesen FD gemeldet hat)
+        if (client_ctrl >= 0 && fds[IDX_CLI_CTRL].fd >= 0) {
+            if (fds[IDX_CLI_CTRL].revents & (POLLERR | POLLNVAL)) goto shutdown_control;
+            if ((fds[IDX_CLI_CTRL].revents & POLLHUP) && !(fds[IDX_CLI_CTRL].revents & POLLIN)) goto shutdown_control;
+        }
 
-        if (client_intr >= 0 && (fds[IDX_CLI_INTR].revents & (POLLERR | POLLNVAL))) goto shutdown_interrupt;
-        if (client_intr >= 0 && (fds[IDX_CLI_INTR].revents & POLLHUP) && !(fds[IDX_CLI_INTR].revents & POLLIN)) goto shutdown_interrupt;
+        if (client_intr >= 0 && fds[IDX_CLI_INTR].fd >= 0) {
+            if (fds[IDX_CLI_INTR].revents & (POLLERR | POLLNVAL)) goto shutdown_interrupt;
+            if ((fds[IDX_CLI_INTR].revents & POLLHUP) && !(fds[IDX_CLI_INTR].revents & POLLIN)) goto shutdown_interrupt;
+        }
         
-        if (vdsd_ctrl >= 0 && (fds[IDX_VDSD_CTRL].revents & (POLLERR | POLLNVAL))) goto shutdown_control;
-        if (vdsd_ctrl >= 0 && (fds[IDX_VDSD_CTRL].revents & POLLHUP) && !(fds[IDX_VDSD_CTRL].revents & POLLIN)) goto shutdown_control;
+        if (vdsd_ctrl >= 0 && fds[IDX_VDSD_CTRL].fd >= 0) {
+            if (fds[IDX_VDSD_CTRL].revents & (POLLERR | POLLNVAL)) goto shutdown_control;
+            if ((fds[IDX_VDSD_CTRL].revents & POLLHUP) && !(fds[IDX_VDSD_CTRL].revents & POLLIN)) goto shutdown_control;
+        }
 
-        if (vdsd_intr >= 0 && (fds[IDX_VDSD_INTR].revents & (POLLERR | POLLNVAL))) goto shutdown_interrupt;
-        if (vdsd_intr >= 0 && (fds[IDX_VDSD_INTR].revents & POLLHUP) && !(fds[IDX_VDSD_INTR].revents & POLLIN)) goto shutdown_interrupt;
+        if (vdsd_intr >= 0 && fds[IDX_VDSD_INTR].fd >= 0) {
+            if (fds[IDX_VDSD_INTR].revents & (POLLERR | POLLNVAL)) goto shutdown_interrupt;
+            if ((fds[IDX_VDSD_INTR].revents & POLLHUP) && !(fds[IDX_VDSD_INTR].revents & POLLIN)) goto shutdown_interrupt;
+        }
 
         // --- CONTROL KANAL DATA ROUTING ---
-        if (client_ctrl >= 0) {
-            if (fds[IDX_CLI_CTRL].revents & POLLIN) {
-                ssize_t len = recv(client_ctrl, heap_buffer, 1024, 0);
-                if (len > 0) {
-                    if (vdsd_ctrl >= 0) {
-                        send(vdsd_ctrl, heap_buffer, len, MSG_DONTWAIT | MSG_NOSIGNAL);
-                    }
-                } else if (len == 0) {
-                    // Sanity-Schutz gegen CPU-Dauerschleife bei Verbindungsabbruch [2]
+        if (client_ctrl >= 0 && (fds[IDX_CLI_CTRL].revents & POLLIN)) {
+            ssize_t len = recv(client_ctrl, heap_buffer, 1024, 0);
+            if (len > 0) {
+                if (vdsd_ctrl >= 0) {
+                    send(vdsd_ctrl, heap_buffer, len, MSG_DONTWAIT | MSG_NOSIGNAL);
+                }
+            } else if (len == 0) {
+                // Bei asynchronen L2CAP-Sockets kann ein len == 0 im Handshake ein valides Signal sein, 
+                // sofern kein Fehler vorliegt und EAGAIN nicht geworfen wurde. Wir sichern das ab:
+                if (errno != EAGAIN && errno != EWOULDBLOCK) {
                     goto shutdown_control; 
-                } else if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
-                    goto shutdown_control;
                 }
+            } else if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
+                goto shutdown_control;
             }
+        }
 
-            if (vdsd_ctrl >= 0 && (fds[IDX_VDSD_CTRL].revents & POLLIN)) {
-                ssize_t len = recv(vdsd_ctrl, heap_buffer, 1024, 0);
-                if (len > 0) {
-                    send(client_ctrl, heap_buffer, len, MSG_DONTWAIT | MSG_NOSIGNAL);
-                } else if (len == 0) {
-                    goto shutdown_control; // Zero-Length RAM-Kanal = Tunnel-Ende [2]
-                } else if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
-                    goto shutdown_control;
-                }
+        if (vdsd_ctrl >= 0 && (fds[IDX_VDSD_CTRL].revents & POLLIN)) {
+            ssize_t len = recv(vdsd_ctrl, heap_buffer, 1024, 0);
+            if (len > 0) {
+                send(client_ctrl, heap_buffer, len, MSG_DONTWAIT | MSG_NOSIGNAL);
+            } else if (len == 0) {
+                goto shutdown_control; // Zero-Length RAM-Kanal = Tunnel-Ende [2]
+            } else if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
+                goto shutdown_control;
             }
         }
 
         // --- INTERRUPT KANAL DATA ROUTING ---
-        if (client_intr >= 0) {
-            if (fds[IDX_CLI_INTR].revents & POLLIN) {
-                ssize_t len = recv(client_intr, heap_buffer, 1024, 0);
-                if (len > 0) {
-                    if (vdsd_intr >= 0) {
-                        send(vdsd_intr, heap_buffer, len, MSG_DONTWAIT | MSG_NOSIGNAL);
-                    }
-                } else if (len == 0) {
+        if (client_intr >= 0 && (fds[IDX_CLI_INTR].revents & POLLIN)) {
+            ssize_t len = recv(client_intr, heap_buffer, 1024, 0);
+            if (len > 0) {
+                if (vdsd_intr >= 0) {
+                    send(vdsd_intr, heap_buffer, len, MSG_DONTWAIT | MSG_NOSIGNAL);
+                }
+            } else if (len == 0) {
+                if (errno != EAGAIN && errno != EWOULDBLOCK) {
                     goto shutdown_interrupt; 
-                } else if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
-                    goto shutdown_interrupt;
                 }
+            } else if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
+                goto shutdown_interrupt;
             }
+        }
 
-            if (vdsd_intr >= 0 && (fds[IDX_VDSD_INTR].revents & POLLIN)) {
-                ssize_t len = recv(vdsd_intr, heap_buffer, 1024, 0);
-                if (len > 0) {
-                    send(client_intr, heap_buffer, len, MSG_DONTWAIT | MSG_NOSIGNAL);
-                } else if (len == 0) {
-                    goto shutdown_interrupt; // Zero-Length RAM-Kanal = Tunnel-Ende [2]
-                } else if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
-                    goto shutdown_interrupt;
-                }
+        if (vdsd_intr >= 0 && (fds[IDX_VDSD_INTR].revents & POLLIN)) {
+            ssize_t len = recv(vdsd_intr, heap_buffer, 1024, 0);
+            if (len > 0) {
+                send(client_intr, heap_buffer, len, MSG_DONTWAIT | MSG_NOSIGNAL);
+            } else if (len == 0) {
+                goto shutdown_interrupt; // Zero-Length RAM-Kanal = Tunnel-Ende [2]
+            } else if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
+                goto shutdown_interrupt;
             }
         }
         continue;
@@ -258,16 +267,10 @@ int main(void) {
         client_ctrl = -1; vdsd_ctrl = -1;
         continue;
 
-        shutdown_interrupt:
+    shutdown_interrupt:
         printf("vDS-Proxy: Interrupt-Pipeline getrennt (System-Errno: %d - %s).\n", errno, strerror(errno));
         if (client_intr >= 0) close(client_intr);
         if (vdsd_intr >= 0) close(vdsd_intr);
         client_intr = -1; vdsd_intr = -1;
         continue;
     }
-
-    free(heap_buffer);
-    close(srv_ctrl); close(srv_intr);
-    return 0;
-}
-
