@@ -17,11 +17,8 @@ namespace vds {
 static void setup_abstract_un(struct sockaddr_un &un_addr, const char *name) {
     std::memset(&un_addr, 0, sizeof(struct sockaddr_un));
     un_addr.sun_family = AF_UNIX;
-    // Explizit nur 3 Bytes kopieren (ohne die implizite \0 des Strings)
-    un_addr.sun_path[0] = '\0';
-    un_addr.sun_path[1] = name[0];
-    un_addr.sun_path[2] = name[1];
-    un_addr.sun_path[3] = name[2];
+    // Kopiert exakt die 3 Zeichen "v_c" oder "v_i" ab Index 1 (Index 0 bleibt \0)
+    std::memcpy(un_addr.sun_path + 1, name, 3);
 }
 
 static UniqueFd create_ipc_listener(const char *name) {
@@ -122,9 +119,7 @@ BtL2capBackend &BtL2capBackend::operator=(BtL2capBackend &&other) noexcept {
         if(control_fd_ >= 0) ::close(control_fd_);
         if(interrupt_fd_ >= 0) ::close(interrupt_fd_);
         
-        // KORREKTUR: 'address_' statt 'address' gegen Compiler-Fehler
         address_ = std::move(other.address_); 
-        
         control_fd_ = other.control_fd_;    
         interrupt_fd_ = other.interrupt_fd_;
         other.control_fd_ = -1;
@@ -154,8 +149,8 @@ void BtL2capBackend::send_feature_set(std::span<const std::uint8_t> r) {
 std::optional<std::vector<std::uint8_t>> BtL2capBackend::read_feature_report() { 
     std::vector<std::uint8_t> fake_report(65, 0x00);
     
-    fake_report[0] = 0xA3; // Bluetooth HID-Transaktions-Header (DATA | FEATURE)
-    fake_report[1] = 0x05; // Report ID
+    fake_report[0] = 0xA3; 
+    fake_report[1] = 0x05; 
     
     fake_report[2] = 0x00; 
     fake_report[3] = 0x00;
@@ -171,7 +166,7 @@ std::optional<std::vector<std::uint8_t>> BtL2capBackend::read_feature_report() {
     
     fake_report[12] = 0x01;
     fake_report[13] = 0x00;
-    fake_report[14] = 0x24; // Firmware Major Build
+    fake_report[14] = 0x24; 
     fake_report[15] = 0x00;
     
     return fake_report;
@@ -190,7 +185,6 @@ std::optional<std::vector<std::uint8_t>> BtL2capBackend::read_interrupt_packet()
     }
     
     if (n == 0) {
-        // --- STRIKTER MSG_PEEK-SCHUTZ GEGEN ASYNC BREAKS ---
         std::uint8_t peek_dummy;
         ssize_t peek_n = ::recv(interrupt_fd_, &peek_dummy, 1, MSG_PEEK | MSG_DONTWAIT);
         if (peek_n == 0) {
