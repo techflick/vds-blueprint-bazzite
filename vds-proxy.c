@@ -11,7 +11,7 @@
 #include <sys/poll.h>
 #include <errno.h>
 #include <sched.h>
-#include <signal.h> // Hinzugefügt für SIG_IGN
+#include <signal.h>
 
 #define BT_AF_BLUETOOTH   31
 #define BT_SOCK_SEQPACKET 5
@@ -79,7 +79,7 @@ int connect_unix_pipe(const char *name_three_bytes) {
     addr.sun_path[0] = '\0';
     memcpy(addr.sun_path + 1, name_three_bytes, 3); 
     
-    // KORREKTUR: offsetof + 1 (für \0) + 3 (Nutzdaten) = exakt 4 zusätzliche Bytes
+    // offsetof + 1 (für \0) + 3 (Nutzdaten) = exakt 4 zusätzliche Bytes
     socklen_t len = offsetof(struct sockaddr_un, sun_path) + 4;
     
     if (connect(sock, (struct sockaddr *)&addr, len) < 0) {
@@ -198,15 +198,15 @@ int main(void) {
             if (fds[IDX_CLI_CTRL].revents & POLLIN) {
                 ssize_t len = recv(client_ctrl, heap_buffer, 1024, 0);
                 if (len > 0) {
-                    // KORREKTUR: MSG_NOSIGNAL schützt vor Abstürzen
                     send(vdsd_ctrl, heap_buffer, len, MSG_DONTWAIT | MSG_NOSIGNAL);
                 } else if (len == 0) {
-                    // Zero-Length Loop-Block Schutz
-                    break; 
+                    // KORREKTUR: Verlässt nur diesen Event-Zweig, bricht nicht mehr den Loop ab
+                    goto skip_cli_ctrl; 
                 } else if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
                     goto shutdown_control;
                 }
             }
+        skip_cli_ctrl:
 
             if (fds[IDX_VDSD_CTRL].revents & POLLIN) {
                 ssize_t len = recv(vdsd_ctrl, heap_buffer, 1024, 0);
@@ -228,12 +228,13 @@ int main(void) {
                 if (len > 0) {
                     send(vdsd_intr, heap_buffer, len, MSG_DONTWAIT | MSG_NOSIGNAL);
                 } else if (len == 0) {
-                    // Zero-Length Loop-Block Schutz
-                    break;
+                    // KORREKTUR: Verlässt nur diesen Event-Zweig, bricht nicht mehr den Loop ab
+                    goto skip_cli_intr;
                 } else if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
                     goto shutdown_interrupt;
                 }
             }
+        skip_cli_intr:
 
             if (fds[IDX_VDSD_INTR].revents & POLLIN) {
                 ssize_t len = recv(vdsd_intr, heap_buffer, 1024, 0);
