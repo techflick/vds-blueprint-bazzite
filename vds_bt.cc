@@ -17,7 +17,7 @@ namespace vds {
 static void setup_abstract_un(struct sockaddr_un &un_addr, const char *name) {
     std::memset(&un_addr, 0, sizeof(struct sockaddr_un));
     un_addr.sun_family = AF_UNIX;
-    // Kopiert exakt die 3 Zeichen "v_c" oder "v_i" ab Index 1 (Index 0 bleibt \0)
+    // Kopiert exakt die 3 Zeichen "v_c" oder "v_i" (Index 0 bleibt die native \0)
     std::memcpy(un_addr.sun_path + 1, name, 3);
 }
 
@@ -34,6 +34,7 @@ static UniqueFd create_ipc_listener(const char *name) {
     struct sockaddr_un un_addr;
     setup_abstract_un(un_addr, name);
     
+    // Strukturgröße strikt nach Formel: offsetof + 1 Byte (\0) + 3 Byte Name = 4 zusätzliche Bytes
     socklen_t actual_len = offsetof(struct sockaddr_un, sun_path) + 4;
     
     if (::bind(fd, reinterpret_cast<const struct sockaddr*>(&un_addr), actual_len) < 0) {
@@ -151,19 +152,16 @@ std::optional<std::vector<std::uint8_t>> BtL2capBackend::read_feature_report() {
     
     fake_report[0] = 0xA3; 
     fake_report[1] = 0x05; 
-    
     fake_report[2] = 0x00; 
     fake_report[3] = 0x00;
     fake_report[4] = 0x00;
     fake_report[5] = 0xdc;
     fake_report[6] = 0x1b;
     fake_report[7] = 0x00;
-    
     fake_report[8] = 0x4C; 
     fake_report[9] = 0x05; 
     fake_report[10] = 0xE6;
     fake_report[11] = 0x0C;
-    
     fake_report[12] = 0x01;
     fake_report[13] = 0x00;
     fake_report[14] = 0x24; 
