@@ -68,36 +68,44 @@ int open_bt_server_link(uint16_t psm) {
 }
 
 int connect_unix_pipe(const char *name_three_bytes) {
-    // Atomares Erstellen mit SOCK_CLOEXEC
     int sock = socket(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0);
     if (sock < 0) return -1;
-    
-    // ZWINGEND: Vor dem Connect in den non-blocking Zustand versetzen
-    if (set_nonblocking_fd(sock) < 0) {
-        close(sock);
-        return -1;
-    }
     
     struct sockaddr_un addr;
     memset(&addr, 0, sizeof(struct sockaddr_un));
     addr.sun_family = AF_UNIX;
-    
-    // Strikte Pfad-Regel für abstrakte Sockets
     addr.sun_path[0] = '\0';
     memcpy(addr.sun_path + 1, name_three_bytes, 3); 
     
-    // offsetof + 1 (\0) + 3 (Nutzdaten) = exakt 4 zusätzliche Bytes
     socklen_t len = offsetof(struct sockaddr_un, sun_path) + 4;
     
+    // Zuerst blockierend verbinden -> Garantiert Zustand ESTABLISHED!
     if (connect(sock, (struct sockaddr *)&addr, len) < 0) {
-        // EINPROGRESS ist bei non-blocking Sockets ein valider Zustand
-        if (errno != EINPROGRESS) {
-            close(sock);
-            return -1;
-        }
+        close(sock);
+        return -1;
     }
     
+    // Erst danach non-blocking machen
+    if (set_nonblocking_fd(sock) < 0) {
+        close(sock);
+        return -1;
+    }
     return sock;
+}
+
+// 2. FIX FÜR DIE ROUTING-SCHLEIFE (Beispiel für CONTROL BT -> RAM)
+if (client_ctrl >= 0 && (fds[IDX_CLI_CTRL].revents & POLLIN)) {
+    ssize_t len = recv(client_ctrl, heap_buffer, 1024, MSG_DONTWAIT | MSG_NOSIGNAL);
+    if (len > 0) {
+        if (vdsd_ctrl >= 0) send(vdsd_ctrl, heap_buffer, len, MSG_DONTWAIT | MSG_NOSIGNAL);
+    } else if (len == 0) {
+        // HIER WAR DER FEHLER: Jetzt mit striktem MSG_PEEK-Schutz!
+        char test_ch;
+        ssize_t check = recv(client_ctrl, &test_ch, 1, MSG_PEEK | MSG_DONTWAIT);
+        if (check == 0) goto shutdown_control; // Erst bei echtem EOF trennen
+    } else if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
+        goto shutdown_control; 
+    }
 }
 
 int main(void) {
