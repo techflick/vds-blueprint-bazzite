@@ -28,7 +28,7 @@
 struct custom_sockaddr_l2 {
     uint16_t    l2_family;
     uint16_t    l2_psm;
-    uint8_t     l2_bdaddr;
+    uint8_t     l2_bdaddr[6];
     uint16_t    l2_cid;
     uint8_t     l2_bdaddr_type;
 };
@@ -79,37 +79,22 @@ int connect_unix_pipe(const char *name_three_bytes) {
     
     socklen_t len = offsetof(struct sockaddr_un, sun_path) + 4;
     
-    // Zuerst blockierend verbinden -> Garantiert Zustand ESTABLISHED!
+    // Blockierend verbinden um EINPROGRESS im Scheduler zu umgehen
     if (connect(sock, (struct sockaddr *)&addr, len) < 0) {
         close(sock);
         return -1;
     }
     
-    // Erst danach non-blocking machen
+    // Nach erfolgreichem Connect sofort asynchron schalten
     if (set_nonblocking_fd(sock) < 0) {
         close(sock);
         return -1;
     }
+    
     return sock;
 }
 
-// 2. FIX FÜR DIE ROUTING-SCHLEIFE (Beispiel für CONTROL BT -> RAM)
-if (client_ctrl >= 0 && (fds[IDX_CLI_CTRL].revents & POLLIN)) {
-    ssize_t len = recv(client_ctrl, heap_buffer, 1024, MSG_DONTWAIT | MSG_NOSIGNAL);
-    if (len > 0) {
-        if (vdsd_ctrl >= 0) send(vdsd_ctrl, heap_buffer, len, MSG_DONTWAIT | MSG_NOSIGNAL);
-    } else if (len == 0) {
-        // HIER WAR DER FEHLER: Jetzt mit striktem MSG_PEEK-Schutz!
-        char test_ch;
-        ssize_t check = recv(client_ctrl, &test_ch, 1, MSG_PEEK | MSG_DONTWAIT);
-        if (check == 0) goto shutdown_control; // Erst bei echtem EOF trennen
-    } else if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
-        goto shutdown_control; 
-    }
-}
-
 int main(void) {
-    // Signal-Absturzsicherung: SIGPIPE global ignorieren
     signal(SIGPIPE, SIG_IGN);
 
     setvbuf(stdout, NULL, _IOLBF, 0);
@@ -143,7 +128,6 @@ int main(void) {
         fds[IDX_SRV_INTR].fd = (client_intr < 0) ? srv_intr : -1;
         fds[IDX_SRV_INTR].events = POLLIN;
 
-        // Zustandsgesteuerte Selektivüberwachung gegen Kernel-Deadlocks
         fds[IDX_CLI_CTRL].fd  = client_ctrl;  fds[IDX_CLI_CTRL].events  = (client_ctrl >= 0) ? POLLIN : 0;
         fds[IDX_VDSD_CTRL].fd = vdsd_ctrl;    fds[IDX_VDSD_CTRL].events = (vdsd_ctrl >= 0) ? POLLIN : 0;
         fds[IDX_CLI_INTR].fd  = client_intr;  fds[IDX_CLI_INTR].events  = (client_intr >= 0) ? POLLIN : 0;
@@ -208,7 +192,9 @@ int main(void) {
             if (len > 0) {
                 if (vdsd_ctrl >= 0) send(vdsd_ctrl, heap_buffer, len, MSG_DONTWAIT | MSG_NOSIGNAL);
             } else if (len == 0) {
-                goto shutdown_control; 
+                char test_ch;
+                ssize_t check = recv(client_ctrl, &test_ch, 1, MSG_PEEK | MSG_DONTWAIT);
+                if (check == 0) goto shutdown_control;
             } else if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
                 goto shutdown_control; 
             }
@@ -234,7 +220,9 @@ int main(void) {
             if (len > 0) {
                 if (vdsd_intr >= 0) send(vdsd_intr, heap_buffer, len, MSG_DONTWAIT | MSG_NOSIGNAL);
             } else if (len == 0) {
-                goto shutdown_interrupt;
+                char test_ch;
+                ssize_t check = recv(client_intr, &test_ch, 1, MSG_PEEK | MSG_DONTWAIT);
+                if (check == 0) goto shutdown_interrupt;
             } else if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
                 goto shutdown_interrupt;
             }
