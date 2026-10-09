@@ -68,31 +68,35 @@ int open_bt_server_link(uint16_t psm) {
 }
 
 int connect_unix_pipe(const char *name_three_bytes) {
+    // Atomares Erstellen mit SOCK_CLOEXEC
     int sock = socket(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0);
     if (sock < 0) return -1;
+    
+    // ZWINGEND: Vor dem Connect in den non-blocking Zustand versetzen
+    if (set_nonblocking_fd(sock) < 0) {
+        close(sock);
+        return -1;
+    }
     
     struct sockaddr_un addr;
     memset(&addr, 0, sizeof(struct sockaddr_un));
     addr.sun_family = AF_UNIX;
     
-    // Strikte 6-Byte-Regel einhalten: Erstes Byte ist \0, dann 3 Bytes Name
+    // Strikte Pfad-Regel für abstrakte Sockets
     addr.sun_path[0] = '\0';
     memcpy(addr.sun_path + 1, name_three_bytes, 3); 
     
-    // offsetof + 1 (für \0) + 3 (Nutzdaten) = exakt 4 zusätzliche Bytes (6 Bytes Gesamtgröße)
+    // offsetof + 1 (\0) + 3 (Nutzdaten) = exakt 4 zusätzliche Bytes
     socklen_t len = offsetof(struct sockaddr_un, sun_path) + 4;
     
     if (connect(sock, (struct sockaddr *)&addr, len) < 0) {
-        close(sock);
-        return -1;
+        // EINPROGRESS ist bei non-blocking Sockets ein valider Zustand
+        if (errno != EINPROGRESS) {
+            close(sock);
+            return -1;
+        }
     }
     
-    usleep(2000);
-    
-    if (set_nonblocking_fd(sock) < 0) {
-        close(sock);
-        return -1;
-    }
     return sock;
 }
 
@@ -122,7 +126,7 @@ int main(void) {
 
     struct pollfd fds[TOTAL_FDS];
 
-        while (1) {
+    while (1) {
         memset(fds, 0, sizeof(fds));
         
         fds[IDX_SRV_CTRL].fd = (client_ctrl < 0) ? srv_ctrl : -1;
@@ -155,7 +159,6 @@ int main(void) {
                 vdsd_ctrl = connect_unix_pipe("v_c");
                 if (vdsd_ctrl >= 0) {
                     printf("vDS-Proxy: Control-Pipeline erfolgreich aktiv geschaltet.\n");
-                    fflush(stderr);
                 } else {
                     fprintf(stderr, "vDS-Proxy: Fehler beim Verbinden mit @v_c\n");
                     close(client_ctrl); client_ctrl = -1;
@@ -172,7 +175,6 @@ int main(void) {
                 vdsd_intr = connect_unix_pipe("v_i");
                 if (vdsd_intr >= 0) {
                     printf("vDS-Proxy: Interrupt-Pipeline erfolgreich aktiv geschaltet.\n");
-                    fflush(stderr);
                 } else {
                     fprintf(stderr, "vDS-Proxy: Fehler beim Verbinden mit @v_i\n");
                     close(client_intr); client_intr = -1;
@@ -181,7 +183,7 @@ int main(void) {
         }
 
         // =================================================================
-        // 2. STRIKTES POLLHUP / FEHLER-HANDLING (NUR BEI ECHTEM FEHLER ABBRECHEN)
+        // 2. STRIKTES POLLHUP / FEHLER-HANDLING
         // =================================================================
         if (client_ctrl >= 0 && (fds[IDX_CLI_CTRL].revents & (POLLERR | POLLNVAL))) goto shutdown_control;
         if (vdsd_ctrl >= 0   && (fds[IDX_VDSD_CTRL].revents & (POLLERR | POLLNVAL))) goto shutdown_control;
@@ -189,7 +191,7 @@ int main(void) {
         if (vdsd_intr >= 0   && (fds[IDX_VDSD_INTR].revents & (POLLERR | POLLNVAL))) goto shutdown_interrupt;
 
         // =================================================================
-        // 3. DATEN-ROUTING (ASYNCHRONER HANDSHAKE-SCHUTZ & ZERO-LENGTH SIGNALING)
+        // 3. DATEN-ROUTING (ASYNCHRONER HANDSHAKE-SCHUTZ & ZERO-LENGTH)
         // =================================================================
 
         // --- CONTROL KANAL: BT -> RAM ---
@@ -198,7 +200,6 @@ int main(void) {
             if (len > 0) {
                 if (vdsd_ctrl >= 0) send(vdsd_ctrl, heap_buffer, len, MSG_DONTWAIT | MSG_NOSIGNAL);
             } else if (len == 0) {
-                // Echtes EOF auf Bluetooth-Ebene
                 goto shutdown_control; 
             } else if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
                 goto shutdown_control; 
@@ -211,11 +212,9 @@ int main(void) {
             if (len > 0) {
                 if (client_ctrl >= 0) send(client_ctrl, heap_buffer, len, MSG_DONTWAIT | MSG_NOSIGNAL);
             } else if (len == 0) {
-                // Bei frisch initialisierten UNIX-Pipes werfen wir das Signal im Handshake-Leerlauf NICHT weg!
-                // Erst wenn auch ein Leseversuch einen echten Fehler liefert, wird abgebaut.
                 char test_ch;
                 ssize_t check = recv(vdsd_ctrl, &test_ch, 1, MSG_PEEK | MSG_DONTWAIT);
-                if (check == 0) goto shutdown_control; // Echtes EOF vom Daemon
+                if (check == 0) goto shutdown_control;
             } else if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
                 goto shutdown_control; 
             }
@@ -247,13 +246,18 @@ int main(void) {
             }
         }
         
-        // Letzter Schutz: Wenn die Gegenseite wegbricht, fange es hier kontrolliert ab
+        // =================================================================
+        // 4. VERZÖGERTES POLLHUP-HANDLING
+        // =================================================================
         if ((fds[IDX_CLI_CTRL].revents & POLLHUP) || (fds[IDX_VDSD_CTRL].revents & POLLHUP)) {
-            // Erst trennen, wenn keine Daten mehr im Socket-Buffer liegen
-            goto shutdown_control;
+            if (!(fds[IDX_CLI_CTRL].revents & POLLIN) && !(fds[IDX_VDSD_CTRL].revents & POLLIN)) {
+                goto shutdown_control;
+            }
         }
         if ((fds[IDX_CLI_INTR].revents & POLLHUP) || (fds[IDX_VDSD_INTR].revents & POLLHUP)) {
-            goto shutdown_interrupt;
+            if (!(fds[IDX_CLI_INTR].revents & POLLIN) && !(fds[IDX_VDSD_INTR].revents & POLLIN)) {
+                goto shutdown_interrupt;
+            }
         }
         
         continue;
