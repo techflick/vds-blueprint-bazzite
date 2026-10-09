@@ -79,7 +79,7 @@ int connect_unix_pipe(const char *name_three_bytes) {
     addr.sun_path[0] = '\0';
     memcpy(addr.sun_path + 1, name_three_bytes, 3); 
     
-    // offsetof + 1 (für \0) + 3 (Nutzdaten) = exakt 4 zusätzliche Bytes
+    // offsetof + 1 (für \0) + 3 (Nutzdaten) = exakt 4 zusätzliche Bytes (6 Bytes Gesamtgröße)
     socklen_t len = offsetof(struct sockaddr_un, sun_path) + 4;
     
     if (connect(sock, (struct sockaddr *)&addr, len) < 0) {
@@ -152,7 +152,6 @@ int main(void) {
                 client_ctrl = tmp;
                 printf("vDS-Proxy: Controller Control-Kanal aktiv abgefangen.\n");
                 
-                // Sofort mit RAM-Pipe verbinden, nicht blockierend auf den Interrupt-Kanal warten!
                 vdsd_ctrl = connect_unix_pipe("v_c");
                 if (vdsd_ctrl >= 0) {
                     printf("vDS-Proxy: Control-Pipeline erfolgreich aktiv geschaltet.\n");
@@ -170,7 +169,6 @@ int main(void) {
                 client_intr = tmp;
                 printf("vDS-Proxy: Controller Interrupt-Kanal aktiv abgefangen.\n");
                 
-                // Sofort mit RAM-Pipe verbinden!
                 vdsd_intr = connect_unix_pipe("v_i");
                 if (vdsd_intr >= 0) {
                     printf("vDS-Proxy: Interrupt-Pipeline erfolgreich aktiv geschaltet.\n");
@@ -183,7 +181,7 @@ int main(void) {
         }
 
         // =================================================================
-        // 2. STRIKTES POLLHUP / FEHLER-HANDLING (SCHUTZ VOR CPU-DAUERSCHLEIFEN)
+        // 2. STRIKTES POLLHUP / FEHLER-HANDLING
         // =================================================================
         if (client_ctrl >= 0 && (fds[IDX_CLI_CTRL].revents & (POLLERR | POLLNVAL | POLLHUP))) goto shutdown_control;
         if (vdsd_ctrl >= 0   && (fds[IDX_VDSD_CTRL].revents & (POLLERR | POLLNVAL | POLLHUP))) goto shutdown_control;
@@ -191,7 +189,7 @@ int main(void) {
         if (vdsd_intr >= 0   && (fds[IDX_VDSD_INTR].revents & (POLLERR | POLLNVAL | POLLHUP))) goto shutdown_interrupt;
 
         // =================================================================
-        // 3. DATEN-ROUTING (ECHTE ZEIT-GEBEN LOGIK VS. TUNNEL-ENDE)
+        // 3. DATEN-ROUTING (ASYNCHRONER HANDSHAKE-SCHUTZ)
         // =================================================================
 
         // --- CONTROL KANAL: BT -> RAM ---
@@ -200,12 +198,10 @@ int main(void) {
             if (len > 0) {
                 if (vdsd_ctrl >= 0) send(vdsd_ctrl, heap_buffer, len, MSG_DONTWAIT | MSG_NOSIGNAL);
             } else if (len == 0) {
-                goto shutdown_control; // EOF: Controller hat physisch getrennt
+                goto shutdown_control; 
             } else if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
-                goto shutdown_control; // Echter schwerer Socket-Fehler
+                goto shutdown_control; 
             }
-            // HINWEIS: Wenn len == -1 und errno == EAGAIN, läuft der Loop einfach weiter.
-            // Das gewährt dem Kernel die benötigte Verhandlungszeit!
         }
 
         // --- CONTROL KANAL: RAM -> BT ---
@@ -213,8 +209,13 @@ int main(void) {
             ssize_t len = recv(vdsd_ctrl, heap_buffer, 1024, MSG_DONTWAIT | MSG_NOSIGNAL);
             if (len > 0) {
                 if (client_ctrl >= 0) send(client_ctrl, heap_buffer, len, MSG_DONTWAIT | MSG_NOSIGNAL);
-            } else if (len == 0 || (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK)) {
-                goto shutdown_control; // Zero-Length RAM-Kanal = Sofortiges Tunnel-Ende!
+            } else if (len == 0) {
+                // Abfangen temporärer Kernel-Handshake-Leerläufe direkt nach Connect
+                if (errno == EAGAIN || errno == EWOULDBLOCK) continue;
+                goto shutdown_control; 
+            } else if (len < 0) {
+                if (errno == EAGAIN || errno == EWOULDBLOCK) continue;
+                goto shutdown_control; 
             }
         }
 
@@ -235,8 +236,12 @@ int main(void) {
             ssize_t len = recv(vdsd_intr, heap_buffer, 1024, MSG_DONTWAIT | MSG_NOSIGNAL);
             if (len > 0) {
                 if (client_intr >= 0) send(client_intr, heap_buffer, len, MSG_DONTWAIT | MSG_NOSIGNAL);
-            } else if (len == 0 || (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK)) {
-                goto shutdown_interrupt; // Zero-Length RAM-Kanal = Sofortiges Tunnel-Ende!
+            } else if (len == 0) {
+                if (errno == EAGAIN || errno == EWOULDBLOCK) continue;
+                goto shutdown_interrupt;
+            } else if (len < 0) {
+                if (errno == EAGAIN || errno == EWOULDBLOCK) continue;
+                goto shutdown_interrupt;
             }
         }
         continue;
