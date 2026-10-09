@@ -179,16 +179,59 @@ int main(void) {
         if (vdsd_intr >= 0   && (fds[IDX_VDSD_INTR].revents & (POLLERR | POLLNVAL))) goto shutdown_interrupt;
 
         // --- 3. PIPELINE ROUTING MIT STRIKTEM MSG_PEEK SCHUTZ ---
+                // --- 3. PIPELINE ROUTING MIT SPEZIFIKATIONSKONFORMEM PEEK-SCHUTZ ---
         if (client_ctrl >= 0 && (fds[IDX_CLI_CTRL].revents & POLLIN)) {
             ssize_t len = recv(client_ctrl, heap_buffer, 1024, MSG_DONTWAIT | MSG_NOSIGNAL);
             if (len > 0) {
                 if (vdsd_ctrl >= 0) send(vdsd_ctrl, heap_buffer, len, MSG_DONTWAIT | MSG_NOSIGNAL);
             } else if (len == 0) {
                 char test_ch;
-                ssize_t check = recv(client_ctrl, &test_ch, 1, MSG_PEEK | MSG_DONTWAIT);
+                // Ein echter Verbindungsabbruch (EOF) liefert bei PEEK exakt 0.
+                // Ist die Leitung nur temporär leer, liefert es -1 (EAGAIN).
+                ssize_t check = recv(client_ctrl, &test_ch, 1, MSG_PEEK | MSG_DONTWAIT | MSG_NOSIGNAL);
                 if (check == 0) goto shutdown_control;
             } else if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
                 goto shutdown_control; 
+            }
+        }
+
+        if (vdsd_ctrl >= 0 && (fds[IDX_VDSD_CTRL].revents & POLLIN)) {
+            ssize_t len = recv(vdsd_ctrl, heap_buffer, 1024, MSG_DONTWAIT | MSG_NOSIGNAL);
+            if (len > 0) {
+                if (client_ctrl >= 0) send(client_ctrl, heap_buffer, len, MSG_DONTWAIT | MSG_NOSIGNAL);
+            } else if (len == 0) {
+                char test_ch;
+                ssize_t check = recv(vdsd_ctrl, &test_ch, 1, MSG_PEEK | MSG_DONTWAIT | MSG_NOSIGNAL);
+                // Nur wenn der Socket physikalisch geschlossen wurde, greift der Shutdown
+                if (check == 0) goto shutdown_control;
+            } else if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
+                goto shutdown_control; 
+            }
+        }
+
+        if (client_intr >= 0 && (fds[IDX_CLI_INTR].revents & POLLIN)) {
+            ssize_t len = recv(client_intr, heap_buffer, 1024, MSG_DONTWAIT | MSG_NOSIGNAL);
+            if (len > 0) {
+                if (vdsd_intr >= 0) send(vdsd_intr, heap_buffer, len, MSG_DONTWAIT | MSG_NOSIGNAL);
+            } else if (len == 0) {
+                char test_ch;
+                ssize_t check = recv(client_intr, &test_ch, 1, MSG_PEEK | MSG_DONTWAIT | MSG_NOSIGNAL);
+                if (check == 0) goto shutdown_interrupt;
+            } else if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
+                goto shutdown_interrupt;
+            }
+        }
+
+        if (vdsd_intr >= 0 && (fds[IDX_VDSD_INTR].revents & POLLIN)) {
+            ssize_t len = recv(vdsd_intr, heap_buffer, 1024, MSG_DONTWAIT | MSG_NOSIGNAL);
+            if (len > 0) {
+                if (client_intr >= 0) send(client_intr, heap_buffer, len, MSG_DONTWAIT | MSG_NOSIGNAL);
+            } else if (len == 0) {
+                char test_ch;
+                ssize_t check = recv(vdsd_intr, &test_ch, 1, MSG_PEEK | MSG_DONTWAIT | MSG_NOSIGNAL);
+                if (check == 0) goto shutdown_interrupt;
+            } else if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
+                goto shutdown_interrupt;
             }
         }
 
