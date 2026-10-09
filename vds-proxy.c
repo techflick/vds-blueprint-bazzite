@@ -97,7 +97,7 @@ int connect_unix_pipe(const char *name_three_bytes) {
 }
 
 int main(void) {
-    // Signal-Absturzsicherung: SIGPIPE global ignorieren [2]
+    // Signal-Absturzsicherung: SIGPIPE global ignorieren
     signal(SIGPIPE, SIG_IGN);
 
     setvbuf(stdout, NULL, _IOLBF, 0);
@@ -131,7 +131,7 @@ int main(void) {
         fds[IDX_SRV_INTR].fd = (client_intr < 0) ? srv_intr : -1;
         fds[IDX_SRV_INTR].events = POLLIN;
 
-        // Zustandsgesteuerte Selektivüberwachung gegen Kernel-Deadlocks [2]
+        // Zustandsgesteuerte Selektivüberwachung gegen Kernel-Deadlocks
         fds[IDX_CLI_CTRL].fd  = client_ctrl;  fds[IDX_CLI_CTRL].events  = (client_ctrl >= 0) ? POLLIN : 0;
         fds[IDX_VDSD_CTRL].fd = vdsd_ctrl;    fds[IDX_VDSD_CTRL].events = (vdsd_ctrl >= 0) ? POLLIN : 0;
         fds[IDX_CLI_INTR].fd  = client_intr;  fds[IDX_CLI_INTR].events  = (client_intr >= 0) ? POLLIN : 0;
@@ -143,135 +143,121 @@ int main(void) {
             break;
         }
 
+        // =================================================================
+        // 1. KANÄLE ASYNCHRON ABFANGEN & SOFORT KOPPELN (TIMEOUT-PRÄVENTION)
+        // =================================================================
         if (fds[IDX_SRV_CTRL].fd >= 0 && (fds[IDX_SRV_CTRL].revents & POLLIN)) {
-            int tmp = accept(srv_ctrl, NULL, NULL);
+            int tmp = accept4(srv_ctrl, NULL, NULL, SOCK_NONBLOCK | SOCK_CLOEXEC);
             if (tmp >= 0) {
                 client_ctrl = tmp;
-                fcntl(client_ctrl, F_SETFD, FD_CLOEXEC);
-                set_nonblocking_fd(client_ctrl);
                 printf("vDS-Proxy: Controller Control-Kanal aktiv abgefangen.\n");
+                
+                // Sofort mit RAM-Pipe verbinden, nicht blockierend auf den Interrupt-Kanal warten!
+                vdsd_ctrl = connect_unix_pipe("v_c");
+                if (vdsd_ctrl >= 0) {
+                    printf("vDS-Proxy: Control-Pipeline erfolgreich aktiv geschaltet.\n");
+                    fflush(stderr);
+                } else {
+                    fprintf(stderr, "vDS-Proxy: Fehler beim Verbinden mit @v_c\n");
+                    close(client_ctrl); client_ctrl = -1;
+                }
             }
         }
 
         if (fds[IDX_SRV_INTR].fd >= 0 && (fds[IDX_SRV_INTR].revents & POLLIN)) {
-            int tmp = accept(srv_intr, NULL, NULL);
+            int tmp = accept4(srv_intr, NULL, NULL, SOCK_NONBLOCK | SOCK_CLOEXEC);
             if (tmp >= 0) {
                 client_intr = tmp;
-                fcntl(client_intr, F_SETFD, FD_CLOEXEC);
-                set_nonblocking_fd(client_intr);
                 printf("vDS-Proxy: Controller Interrupt-Kanal aktiv abgefangen.\n");
-            }
-        }
-
-        // Synchroner Doppel-Connect Brückenschlag zu vdsd [2]
-        if (client_ctrl >= 0 && client_intr >= 0 && vdsd_ctrl < 0 && vdsd_intr < 0) {
-            printf("vDS-Proxy: Beide Bluetooth-Kanaele gesichert. Verbinde RAM-Pipelines...\n");
-            vdsd_ctrl = connect_unix_pipe("v_c");
-            vdsd_intr = connect_unix_pipe("v_i");
-            if (vdsd_ctrl >= 0 && vdsd_intr >= 0) {
-                printf("vDS-Proxy: Beide Speicher-Pipelines erfolgreich instanziiert. Tunnel aktiv.\n");
-                fflush(stderr); // Erzwinge Flush nach Setup laut Vorgabe [2]
-                // KEIN continue hier! Wir lassen den Loop weiterlaufen, um die FDs direkt zu verarbeiten.
-            } else {
-                fprintf(stderr, "vDS-Proxy: FATAL - IPC-Verbindung zum vdsd fehlgeschlagen.\n");
-                if (vdsd_ctrl >= 0) { close(vdsd_ctrl); vdsd_ctrl = -1; }
-                if (vdsd_intr >= 0) { close(vdsd_intr); vdsd_intr = -1; }
-                close(client_ctrl); client_ctrl = -1;
-                close(client_intr); client_intr = -1;
-                continue;
-            }
-        }
-
-        // Striktes POLLHUP/Fehler-Handling [2] (Nur auswerten, wenn poll() auch wirklich Events für diesen FD gemeldet hat)
-        if (client_ctrl >= 0 && fds[IDX_CLI_CTRL].fd >= 0) {
-            if (fds[IDX_CLI_CTRL].revents & (POLLERR | POLLNVAL)) goto shutdown_control;
-            if ((fds[IDX_CLI_CTRL].revents & POLLHUP) && !(fds[IDX_CLI_CTRL].revents & POLLIN)) goto shutdown_control;
-        }
-
-        if (client_intr >= 0 && fds[IDX_CLI_INTR].fd >= 0) {
-            if (fds[IDX_CLI_INTR].revents & (POLLERR | POLLNVAL)) goto shutdown_interrupt;
-            if ((fds[IDX_CLI_INTR].revents & POLLHUP) && !(fds[IDX_CLI_INTR].revents & POLLIN)) goto shutdown_interrupt;
-        }
-        
-        if (vdsd_ctrl >= 0 && fds[IDX_VDSD_CTRL].fd >= 0) {
-            if (fds[IDX_VDSD_CTRL].revents & (POLLERR | POLLNVAL)) goto shutdown_control;
-            if ((fds[IDX_VDSD_CTRL].revents & POLLHUP) && !(fds[IDX_VDSD_CTRL].revents & POLLIN)) goto shutdown_control;
-        }
-
-        if (vdsd_intr >= 0 && fds[IDX_VDSD_INTR].fd >= 0) {
-            if (fds[IDX_VDSD_INTR].revents & (POLLERR | POLLNVAL)) goto shutdown_interrupt;
-            if ((fds[IDX_VDSD_INTR].revents & POLLHUP) && !(fds[IDX_VDSD_INTR].revents & POLLIN)) goto shutdown_interrupt;
-        }
-
-        // --- CONTROL KANAL DATA ROUTING ---
-        if (client_ctrl >= 0 && (fds[IDX_CLI_CTRL].revents & POLLIN)) {
-            ssize_t len = recv(client_ctrl, heap_buffer, 1024, 0);
-            if (len > 0) {
-                if (vdsd_ctrl >= 0) {
-                    send(vdsd_ctrl, heap_buffer, len, MSG_DONTWAIT | MSG_NOSIGNAL);
-                }
-            } else if (len == 0) {
-                // Bei asynchronen L2CAP-Sockets kann ein len == 0 im Handshake ein valides Signal sein, 
-                // sofern kein Fehler vorliegt und EAGAIN nicht geworfen wurde. Wir sichern das ab:
-                if (errno != EAGAIN && errno != EWOULDBLOCK) {
-                    goto shutdown_control; 
-                }
-            } else if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
-                goto shutdown_control;
-            }
-        }
-
-        if (vdsd_ctrl >= 0 && (fds[IDX_VDSD_CTRL].revents & POLLIN)) {
-            ssize_t len = recv(vdsd_ctrl, heap_buffer, 1024, 0);
-            if (len > 0) {
-                send(client_ctrl, heap_buffer, len, MSG_DONTWAIT | MSG_NOSIGNAL);
-            } else if (len == 0) {
-                goto shutdown_control; // Zero-Length RAM-Kanal = Tunnel-Ende [2]
-            } else if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
-                goto shutdown_control;
-            }
-        }
-
-        // --- INTERRUPT KANAL DATA ROUTING ---
-        if (client_intr >= 0 && (fds[IDX_CLI_INTR].revents & POLLIN)) {
-            ssize_t len = recv(client_intr, heap_buffer, 1024, 0);
-            if (len > 0) {
+                
+                // Sofort mit RAM-Pipe verbinden!
+                vdsd_intr = connect_unix_pipe("v_i");
                 if (vdsd_intr >= 0) {
-                    send(vdsd_intr, heap_buffer, len, MSG_DONTWAIT | MSG_NOSIGNAL);
+                    printf("vDS-Proxy: Interrupt-Pipeline erfolgreich aktiv geschaltet.\n");
+                    fflush(stderr);
+                } else {
+                    fprintf(stderr, "vDS-Proxy: Fehler beim Verbinden mit @v_i\n");
+                    close(client_intr); client_intr = -1;
                 }
+            }
+        }
+
+        // =================================================================
+        // 2. STRIKTES POLLHUP / FEHLER-HANDLING (SCHUTZ VOR CPU-DAUERSCHLEIFEN)
+        // =================================================================
+        if (client_ctrl >= 0 && (fds[IDX_CLI_CTRL].revents & (POLLERR | POLLNVAL | POLLHUP))) goto shutdown_control;
+        if (vdsd_ctrl >= 0   && (fds[IDX_VDSD_CTRL].revents & (POLLERR | POLLNVAL | POLLHUP))) goto shutdown_control;
+        if (client_intr >= 0 && (fds[IDX_CLI_INTR].revents & (POLLERR | POLLNVAL | POLLHUP))) goto shutdown_interrupt;
+        if (vdsd_intr >= 0   && (fds[IDX_VDSD_INTR].revents & (POLLERR | POLLNVAL | POLLHUP))) goto shutdown_interrupt;
+
+        // =================================================================
+        // 3. DATEN-ROUTING (ECHTE ZEIT-GEBEN LOGIK VS. TUNNEL-ENDE)
+        // =================================================================
+
+        // --- CONTROL KANAL: BT -> RAM ---
+        if (client_ctrl >= 0 && (fds[IDX_CLI_CTRL].revents & POLLIN)) {
+            ssize_t len = recv(client_ctrl, heap_buffer, 1024, MSG_DONTWAIT | MSG_NOSIGNAL);
+            if (len > 0) {
+                if (vdsd_ctrl >= 0) send(vdsd_ctrl, heap_buffer, len, MSG_DONTWAIT | MSG_NOSIGNAL);
             } else if (len == 0) {
-                if (errno != EAGAIN && errno != EWOULDBLOCK) {
-                    goto shutdown_interrupt; 
-                }
+                goto shutdown_control; // EOF: Controller hat physisch getrennt
+            } else if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
+                goto shutdown_control; // Echter schwerer Socket-Fehler
+            }
+            // HINWEIS: Wenn len == -1 und errno == EAGAIN, läuft der Loop einfach weiter.
+            // Das gewährt dem Kernel die benötigte Verhandlungszeit!
+        }
+
+        // --- CONTROL KANAL: RAM -> BT ---
+        if (vdsd_ctrl >= 0 && (fds[IDX_VDSD_CTRL].revents & POLLIN)) {
+            ssize_t len = recv(vdsd_ctrl, heap_buffer, 1024, MSG_DONTWAIT | MSG_NOSIGNAL);
+            if (len > 0) {
+                if (client_ctrl >= 0) send(client_ctrl, heap_buffer, len, MSG_DONTWAIT | MSG_NOSIGNAL);
+            } else if (len == 0 || (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK)) {
+                goto shutdown_control; // Zero-Length RAM-Kanal = Sofortiges Tunnel-Ende!
+            }
+        }
+
+        // --- INTERRUPT KANAL: BT -> RAM ---
+        if (client_intr >= 0 && (fds[IDX_CLI_INTR].revents & POLLIN)) {
+            ssize_t len = recv(client_intr, heap_buffer, 1024, MSG_DONTWAIT | MSG_NOSIGNAL);
+            if (len > 0) {
+                if (vdsd_intr >= 0) send(vdsd_intr, heap_buffer, len, MSG_DONTWAIT | MSG_NOSIGNAL);
+            } else if (len == 0) {
+                goto shutdown_interrupt;
             } else if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
                 goto shutdown_interrupt;
             }
         }
 
+        // --- INTERRUPT KANAL: RAM -> BT ---
         if (vdsd_intr >= 0 && (fds[IDX_VDSD_INTR].revents & POLLIN)) {
-            ssize_t len = recv(vdsd_intr, heap_buffer, 1024, 0);
+            ssize_t len = recv(vdsd_intr, heap_buffer, 1024, MSG_DONTWAIT | MSG_NOSIGNAL);
             if (len > 0) {
-                send(client_intr, heap_buffer, len, MSG_DONTWAIT | MSG_NOSIGNAL);
-            } else if (len == 0) {
-                goto shutdown_interrupt; // Zero-Length RAM-Kanal = Tunnel-Ende [2]
-            } else if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
-                goto shutdown_interrupt;
+                if (client_intr >= 0) send(client_intr, heap_buffer, len, MSG_DONTWAIT | MSG_NOSIGNAL);
+            } else if (len == 0 || (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK)) {
+                goto shutdown_interrupt; // Zero-Length RAM-Kanal = Sofortiges Tunnel-Ende!
             }
         }
         continue;
 
     shutdown_control:
-        printf("vDS-Proxy: Control-Pipeline getrennt (System-Errno: %d - %s).\n", errno, strerror(errno));
+        printf("vDS-Proxy: Control-Pipeline getrennt.\n");
         if (client_ctrl >= 0) close(client_ctrl);
         if (vdsd_ctrl >= 0) close(vdsd_ctrl);
         client_ctrl = -1; vdsd_ctrl = -1;
         continue;
 
     shutdown_interrupt:
-        printf("vDS-Proxy: Interrupt-Pipeline getrennt (System-Errno: %d - %s).\n", errno, strerror(errno));
+        printf("vDS-Proxy: Interrupt-Pipeline getrennt.\n");
         if (client_intr >= 0) close(client_intr);
         if (vdsd_intr >= 0) close(vdsd_intr);
         client_intr = -1; vdsd_intr = -1;
         continue;
     }
+
+    free(heap_buffer);
+    close(srv_ctrl);
+    close(srv_intr);
+    return 0;
 }
