@@ -97,7 +97,7 @@ int connect_unix_pipe(const char *name_three_bytes) {
 }
 
 int main(void) {
-    // Signal-Absturzsicherung: SIGPIPE global ignorieren
+    // Signal-Absturzsicherung: SIGPIPE global ignorieren [2]
     signal(SIGPIPE, SIG_IGN);
 
     setvbuf(stdout, NULL, _IOLBF, 0);
@@ -131,6 +131,7 @@ int main(void) {
         fds[IDX_SRV_INTR].fd = (client_intr < 0) ? srv_intr : -1;
         fds[IDX_SRV_INTR].events = POLLIN;
 
+        // Zustandsgesteuerte Selektivüberwachung gegen Kernel-Deadlocks [2]
         fds[IDX_CLI_CTRL].fd  = client_ctrl;  fds[IDX_CLI_CTRL].events  = (client_ctrl >= 0) ? POLLIN : 0;
         fds[IDX_VDSD_CTRL].fd = vdsd_ctrl;    fds[IDX_VDSD_CTRL].events = (vdsd_ctrl >= 0) ? POLLIN : 0;
         fds[IDX_CLI_INTR].fd  = client_intr;  fds[IDX_CLI_INTR].events  = (client_intr >= 0) ? POLLIN : 0;
@@ -162,13 +163,14 @@ int main(void) {
             }
         }
 
-        // Simultaner Doppel-Connect Schutz
+        // Synchroner Doppel-Connect Brückenschlag zu vdsd [2]
         if (client_ctrl >= 0 && client_intr >= 0 && vdsd_ctrl < 0 && vdsd_intr < 0) {
             printf("vDS-Proxy: Beide Bluetooth-Kanaele gesichert. Verbinde RAM-Pipelines...\n");
             vdsd_ctrl = connect_unix_pipe("v_c");
             vdsd_intr = connect_unix_pipe("v_i");
             if (vdsd_ctrl >= 0 && vdsd_intr >= 0) {
                 printf("vDS-Proxy: Beide Speicher-Pipelines erfolgreich instanziiert. Tunnel aktiv.\n");
+                fflush(stderr); // Erzwinge Flush nach Setup laut Vorgabe [2]
                 continue;
             } else {
                 fprintf(stderr, "vDS-Proxy: FATAL - IPC-Verbindung zum vdsd fehlgeschlagen.\n");
@@ -180,7 +182,7 @@ int main(void) {
             }
         }
 
-        // Striktes POLLHUP/Fehler-Handling
+        // Striktes POLLHUP/Fehler-Handling [2]
         if (client_ctrl >= 0 && (fds[IDX_CLI_CTRL].revents & (POLLERR | POLLNVAL))) goto shutdown_control;
         if (client_ctrl >= 0 && (fds[IDX_CLI_CTRL].revents & POLLHUP) && !(fds[IDX_CLI_CTRL].revents & POLLIN)) goto shutdown_control;
 
@@ -194,27 +196,27 @@ int main(void) {
         if (vdsd_intr >= 0 && (fds[IDX_VDSD_INTR].revents & POLLHUP) && !(fds[IDX_VDSD_INTR].revents & POLLIN)) goto shutdown_interrupt;
 
         // --- CONTROL KANAL DATA ROUTING ---
-        if (client_ctrl >= 0 && vdsd_ctrl >= 0) {
+        if (client_ctrl >= 0) {
             if (fds[IDX_CLI_CTRL].revents & POLLIN) {
                 ssize_t len = recv(client_ctrl, heap_buffer, 1024, 0);
                 if (len > 0) {
-                    send(vdsd_ctrl, heap_buffer, len, MSG_DONTWAIT | MSG_NOSIGNAL);
+                    if (vdsd_ctrl >= 0) {
+                        send(vdsd_ctrl, heap_buffer, len, MSG_DONTWAIT | MSG_NOSIGNAL);
+                    }
                 } else if (len == 0) {
-                    // KORREKTUR: Verlässt nur diesen Event-Zweig, bricht nicht mehr den Loop ab
-                    goto skip_cli_ctrl; 
+                    // Sanity-Schutz gegen CPU-Dauerschleife bei Verbindungsabbruch [2]
+                    goto shutdown_control; 
                 } else if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
                     goto shutdown_control;
                 }
             }
-        skip_cli_ctrl:
 
-            if (fds[IDX_VDSD_CTRL].revents & POLLIN) {
+            if (vdsd_ctrl >= 0 && (fds[IDX_VDSD_CTRL].revents & POLLIN)) {
                 ssize_t len = recv(vdsd_ctrl, heap_buffer, 1024, 0);
                 if (len > 0) {
                     send(client_ctrl, heap_buffer, len, MSG_DONTWAIT | MSG_NOSIGNAL);
                 } else if (len == 0) {
-                    // Zero-Length RAM-Kanal = Tunnel-Ende
-                    goto shutdown_control;
+                    goto shutdown_control; // Zero-Length RAM-Kanal = Tunnel-Ende [2]
                 } else if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
                     goto shutdown_control;
                 }
@@ -222,27 +224,26 @@ int main(void) {
         }
 
         // --- INTERRUPT KANAL DATA ROUTING ---
-        if (client_intr >= 0 && vdsd_intr >= 0) {
+        if (client_intr >= 0) {
             if (fds[IDX_CLI_INTR].revents & POLLIN) {
                 ssize_t len = recv(client_intr, heap_buffer, 1024, 0);
                 if (len > 0) {
-                    send(vdsd_intr, heap_buffer, len, MSG_DONTWAIT | MSG_NOSIGNAL);
+                    if (vdsd_intr >= 0) {
+                        send(vdsd_intr, heap_buffer, len, MSG_DONTWAIT | MSG_NOSIGNAL);
+                    }
                 } else if (len == 0) {
-                    // KORREKTUR: Verlässt nur diesen Event-Zweig, bricht nicht mehr den Loop ab
-                    goto skip_cli_intr;
+                    goto shutdown_interrupt; 
                 } else if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
                     goto shutdown_interrupt;
                 }
             }
-        skip_cli_intr:
 
-            if (fds[IDX_VDSD_INTR].revents & POLLIN) {
+            if (vdsd_intr >= 0 && (fds[IDX_VDSD_INTR].revents & POLLIN)) {
                 ssize_t len = recv(vdsd_intr, heap_buffer, 1024, 0);
                 if (len > 0) {
                     send(client_intr, heap_buffer, len, MSG_DONTWAIT | MSG_NOSIGNAL);
                 } else if (len == 0) {
-                    // Zero-Length RAM-Kanal = Tunnel-Ende
-                    goto shutdown_interrupt;
+                    goto shutdown_interrupt; // Zero-Length RAM-Kanal = Tunnel-Ende [2]
                 } else if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
                     goto shutdown_interrupt;
                 }
@@ -257,7 +258,7 @@ int main(void) {
         client_ctrl = -1; vdsd_ctrl = -1;
         continue;
 
-    shutdown_interrupt:
+        shutdown_interrupt:
         printf("vDS-Proxy: Interrupt-Pipeline getrennt (System-Errno: %d - %s).\n", errno, strerror(errno));
         if (client_intr >= 0) close(client_intr);
         if (vdsd_intr >= 0) close(vdsd_intr);
@@ -269,3 +270,4 @@ int main(void) {
     close(srv_ctrl); close(srv_intr);
     return 0;
 }
+
