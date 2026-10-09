@@ -32,6 +32,7 @@ static UniqueFd create_ipc_listener(const char *name) {
     struct sockaddr_un un_addr;
     setup_abstract_un(un_addr, name);
     
+    // 3 Bytes Nutzdaten ("v_c" oder "v_i") + 1 Byte '\0'-Präfix
     socklen_t actual_len = offsetof(struct sockaddr_un, sun_path) + 1 + 3;
     
     if (::bind(fd, reinterpret_cast<const struct sockaddr*>(&un_addr), actual_len) < 0) {
@@ -114,8 +115,8 @@ BtL2capBackend &BtL2capBackend::operator=(BtL2capBackend &&other) noexcept {
     if (this != &other) {
         if(control_fd_ >= 0) ::close(control_fd_);
         if(interrupt_fd_ >= 0) ::close(interrupt_fd_);
-        address_ = std::move(other.address_); // Korrigiert: Unterstrich hinzugefügt
-        control_fd_ = other.control_fd_;
+        address_ = std::move(other.address_); 
+        control_fd = other.control_fd_;
         interrupt_fd_ = other.interrupt_fd_;
         other.control_fd_ = -1;
         other.interrupt_fd_ = -1;
@@ -145,7 +146,7 @@ std::optional<std::vector<std::uint8_t>> BtL2capBackend::read_feature_report() {
     // Erhöht auf 65 Byte (1 Byte HID-Header + 64 Byte Sony-Vendor-Report)
     std::vector<std::uint8_t> fake_report(65, 0x00);
     
-    // [0] MUST BE: Bluetooth HID-Header für Feature-Reports (DATA | FEATURE)
+    // [0] Bluetooth HID-Transaktions-Header für Feature-Reports (DATA | FEATURE)
     fake_report[0] = 0xA3; 
 
     // [1] Report ID 0x05 (DualSense Bluetooth Feature Calibration)
