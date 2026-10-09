@@ -79,24 +79,24 @@ int connect_unix_pipe(const char *name_three_bytes) {
     
     socklen_t len = offsetof(struct sockaddr_un, sun_path) + 4;
     
-    // Blockierend verbinden um EINPROGRESS im Scheduler zu umgehen
+    // Synchroner blockierender Connect um EINPROGRESS-Timing-Fehler zu verhindern
     if (connect(sock, (struct sockaddr *)&addr, len) < 0) {
         close(sock);
         return -1;
     }
     
-    // Nach erfolgreichem Connect sofort asynchron schalten
+    // Nach Etablierung sofort asynchron schalten für den Multiplexer
     if (set_nonblocking_fd(sock) < 0) {
         close(sock);
         return -1;
     }
-    
     return sock;
 }
 
 int main(void) {
     signal(SIGPIPE, SIG_IGN);
 
+    // Unbestechliche Zeilenpufferung erzwingen
     setvbuf(stdout, NULL, _IOLBF, 0);
     setvbuf(stderr, NULL, _IOLBF, 0);
 
@@ -139,9 +139,7 @@ int main(void) {
             break;
         }
 
-        // =================================================================
-        // 1. KANÄLE ASYNCHRON ABFANGEN & SOFORT KOPPELN (TIMEOUT-PRÄVENTION)
-        // =================================================================
+        // --- 1. ASYNCHRONES ABFANGEN & DIREKTKOPPLUNG ---
         if (fds[IDX_SRV_CTRL].fd >= 0 && (fds[IDX_SRV_CTRL].revents & POLLIN)) {
             int tmp = accept4(srv_ctrl, NULL, NULL, SOCK_NONBLOCK | SOCK_CLOEXEC);
             if (tmp >= 0) {
@@ -174,19 +172,13 @@ int main(void) {
             }
         }
 
-        // =================================================================
-        // 2. STRIKTES POLLHUP / FEHLER-HANDLING
-        // =================================================================
+        // --- 2. CRITICAL HARDWARE ERROR-HANDLING ---
         if (client_ctrl >= 0 && (fds[IDX_CLI_CTRL].revents & (POLLERR | POLLNVAL))) goto shutdown_control;
         if (vdsd_ctrl >= 0   && (fds[IDX_VDSD_CTRL].revents & (POLLERR | POLLNVAL))) goto shutdown_control;
         if (client_intr >= 0 && (fds[IDX_CLI_INTR].revents & (POLLERR | POLLNVAL))) goto shutdown_interrupt;
         if (vdsd_intr >= 0   && (fds[IDX_VDSD_INTR].revents & (POLLERR | POLLNVAL))) goto shutdown_interrupt;
 
-        // =================================================================
-        // 3. DATEN-ROUTING (ASYNCHRONER HANDSHAKE-SCHUTZ & ZERO-LENGTH)
-        // =================================================================
-
-        // --- CONTROL KANAL: BT -> RAM ---
+        // --- 3. PIPELINE ROUTING MIT STRIKTEM MSG_PEEK SCHUTZ ---
         if (client_ctrl >= 0 && (fds[IDX_CLI_CTRL].revents & POLLIN)) {
             ssize_t len = recv(client_ctrl, heap_buffer, 1024, MSG_DONTWAIT | MSG_NOSIGNAL);
             if (len > 0) {
@@ -200,7 +192,6 @@ int main(void) {
             }
         }
 
-        // --- CONTROL KANAL: RAM -> BT ---
         if (vdsd_ctrl >= 0 && (fds[IDX_VDSD_CTRL].revents & POLLIN)) {
             ssize_t len = recv(vdsd_ctrl, heap_buffer, 1024, MSG_DONTWAIT | MSG_NOSIGNAL);
             if (len > 0) {
@@ -214,7 +205,6 @@ int main(void) {
             }
         }
 
-        // --- INTERRUPT KANAL: BT -> RAM ---
         if (client_intr >= 0 && (fds[IDX_CLI_INTR].revents & POLLIN)) {
             ssize_t len = recv(client_intr, heap_buffer, 1024, MSG_DONTWAIT | MSG_NOSIGNAL);
             if (len > 0) {
@@ -228,7 +218,6 @@ int main(void) {
             }
         }
 
-        // --- INTERRUPT KANAL: RAM -> BT ---
         if (vdsd_intr >= 0 && (fds[IDX_VDSD_INTR].revents & POLLIN)) {
             ssize_t len = recv(vdsd_intr, heap_buffer, 1024, MSG_DONTWAIT | MSG_NOSIGNAL);
             if (len > 0) {
@@ -242,9 +231,7 @@ int main(void) {
             }
         }
         
-        // =================================================================
-        // 4. VERZÖGERTES POLLHUP-HANDLING
-        // =================================================================
+        // --- 4. VERZÖGERTES POLLHUP-HANDLING ---
         if ((fds[IDX_CLI_CTRL].revents & POLLHUP) || (fds[IDX_VDSD_CTRL].revents & POLLHUP)) {
             if (!(fds[IDX_CLI_CTRL].revents & POLLIN) && !(fds[IDX_VDSD_CTRL].revents & POLLIN)) {
                 goto shutdown_control;
