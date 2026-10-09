@@ -122,7 +122,7 @@ int main(void) {
 
     struct pollfd fds[TOTAL_FDS];
 
-    while (1) {
+        while (1) {
         memset(fds, 0, sizeof(fds));
         
         fds[IDX_SRV_CTRL].fd = (client_ctrl < 0) ? srv_ctrl : -1;
@@ -181,15 +181,15 @@ int main(void) {
         }
 
         // =================================================================
-        // 2. STRIKTES POLLHUP / FEHLER-HANDLING
+        // 2. STRIKTES POLLHUP / FEHLER-HANDLING (NUR BEI ECHTEM FEHLER ABBRECHEN)
         // =================================================================
-        if (client_ctrl >= 0 && (fds[IDX_CLI_CTRL].revents & (POLLERR | POLLNVAL | POLLHUP))) goto shutdown_control;
-        if (vdsd_ctrl >= 0   && (fds[IDX_VDSD_CTRL].revents & (POLLERR | POLLNVAL | POLLHUP))) goto shutdown_control;
-        if (client_intr >= 0 && (fds[IDX_CLI_INTR].revents & (POLLERR | POLLNVAL | POLLHUP))) goto shutdown_interrupt;
-        if (vdsd_intr >= 0   && (fds[IDX_VDSD_INTR].revents & (POLLERR | POLLNVAL | POLLHUP))) goto shutdown_interrupt;
+        if (client_ctrl >= 0 && (fds[IDX_CLI_CTRL].revents & (POLLERR | POLLNVAL))) goto shutdown_control;
+        if (vdsd_ctrl >= 0   && (fds[IDX_VDSD_CTRL].revents & (POLLERR | POLLNVAL))) goto shutdown_control;
+        if (client_intr >= 0 && (fds[IDX_CLI_INTR].revents & (POLLERR | POLLNVAL))) goto shutdown_interrupt;
+        if (vdsd_intr >= 0   && (fds[IDX_VDSD_INTR].revents & (POLLERR | POLLNVAL))) goto shutdown_interrupt;
 
         // =================================================================
-        // 3. DATEN-ROUTING (ASYNCHRONER HANDSHAKE-SCHUTZ)
+        // 3. DATEN-ROUTING (ASYNCHRONER HANDSHAKE-SCHUTZ & ZERO-LENGTH SIGNALING)
         // =================================================================
 
         // --- CONTROL KANAL: BT -> RAM ---
@@ -198,6 +198,7 @@ int main(void) {
             if (len > 0) {
                 if (vdsd_ctrl >= 0) send(vdsd_ctrl, heap_buffer, len, MSG_DONTWAIT | MSG_NOSIGNAL);
             } else if (len == 0) {
+                // Echtes EOF auf Bluetooth-Ebene
                 goto shutdown_control; 
             } else if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
                 goto shutdown_control; 
@@ -210,11 +211,12 @@ int main(void) {
             if (len > 0) {
                 if (client_ctrl >= 0) send(client_ctrl, heap_buffer, len, MSG_DONTWAIT | MSG_NOSIGNAL);
             } else if (len == 0) {
-                // Abfangen temporärer Kernel-Handshake-Leerläufe direkt nach Connect
-                if (errno == EAGAIN || errno == EWOULDBLOCK) continue;
-                goto shutdown_control; 
-            } else if (len < 0) {
-                if (errno == EAGAIN || errno == EWOULDBLOCK) continue;
+                // Bei frisch initialisierten UNIX-Pipes werfen wir das Signal im Handshake-Leerlauf NICHT weg!
+                // Erst wenn auch ein Leseversuch einen echten Fehler liefert, wird abgebaut.
+                char test_ch;
+                ssize_t check = recv(vdsd_ctrl, &test_ch, 1, MSG_PEEK | MSG_DONTWAIT);
+                if (check == 0) goto shutdown_control; // Echtes EOF vom Daemon
+            } else if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
                 goto shutdown_control; 
             }
         }
@@ -237,13 +239,23 @@ int main(void) {
             if (len > 0) {
                 if (client_intr >= 0) send(client_intr, heap_buffer, len, MSG_DONTWAIT | MSG_NOSIGNAL);
             } else if (len == 0) {
-                if (errno == EAGAIN || errno == EWOULDBLOCK) continue;
-                goto shutdown_interrupt;
-            } else if (len < 0) {
-                if (errno == EAGAIN || errno == EWOULDBLOCK) continue;
+                char test_ch;
+                ssize_t check = recv(vdsd_intr, &test_ch, 1, MSG_PEEK | MSG_DONTWAIT);
+                if (check == 0) goto shutdown_interrupt;
+            } else if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
                 goto shutdown_interrupt;
             }
         }
+        
+        // Letzter Schutz: Wenn die Gegenseite wegbricht, fange es hier kontrolliert ab
+        if ((fds[IDX_CLI_CTRL].revents & POLLHUP) || (fds[IDX_VDSD_CTRL].revents & POLLHUP)) {
+            // Erst trennen, wenn keine Daten mehr im Socket-Buffer liegen
+            goto shutdown_control;
+        }
+        if ((fds[IDX_CLI_INTR].revents & POLLHUP) || (fds[IDX_VDSD_INTR].revents & POLLHUP)) {
+            goto shutdown_interrupt;
+        }
+        
         continue;
 
     shutdown_control:
