@@ -139,7 +139,7 @@ int main(void) {
             if (errno == EINTR) continue;
             break;
         }
-        
+
         if (fds[IDX_SRV_CTRL].fd >= 0 && (fds[IDX_SRV_CTRL].revents & POLLIN)) {
             struct custom_sockaddr_l2 saddr;
             socklen_t slen = sizeof(saddr);
@@ -184,6 +184,17 @@ int main(void) {
         if (client_ctrl >= 0 && (fds[IDX_CLI_CTRL].revents & POLLIN)) {
             ssize_t len = recv(client_ctrl, heap_buffer, 1024, MSG_DONTWAIT | MSG_NOSIGNAL);
             if (len > 0) {
+                uint8_t *ptr = (uint8_t *)heap_buffer;
+                if (len >= 2 && (ptr[0] == 0xA2 || ptr[0] == 0xA3)) {
+                    uint8_t report_id = ptr[1];
+                    if (report_id == 0x05 || report_id == 0x09 || len > 64) {
+                        static int ds5_logged = 0;
+                        if (!ds5_logged) { printf("vDS-Proxy: HIERARCHIE-DETEKTION - DualSense Hardware erkannt (Len: %ld).\n", len); ds5_logged = 1; }
+                    } else if (report_id == 0x02 || len <= 64) {
+                        static int ds4_logged = 0;
+                        if (!ds4_logged) { printf("vDS-Proxy: HIERARCHIE-DETEKTION - DualShock Hardware erkannt (Len: %ld).\n", len); ds4_logged = 1; }
+                    }
+                }
                 if (vdsd_ctrl >= 0) send(vdsd_ctrl, heap_buffer, len, MSG_DONTWAIT | MSG_NOSIGNAL);
             } else if (len == 0) {
                 char test_ch;
@@ -229,17 +240,6 @@ int main(void) {
                 ssize_t check = recv(vdsd_intr, &test_ch, 1, MSG_PEEK | MSG_DONTWAIT | MSG_NOSIGNAL);
                 if (check == 0 && (fds[IDX_VDSD_INTR].revents & POLLHUP)) goto shutdown_interrupt;
             } else if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
-                goto shutdown_interrupt;
-            }
-        }
-        
-        if ((fds[IDX_CLI_CTRL].revents & POLLHUP) || (fds[IDX_VDSD_CTRL].revents & POLLHUP)) {
-            if (!(fds[IDX_CLI_CTRL].revents & POLLIN) && !(fds[IDX_VDSD_CTRL].revents & POLLIN)) {
-                goto shutdown_control;
-            }
-        }
-        if ((fds[IDX_CLI_INTR].revents & POLLHUP) || (fds[IDX_VDSD_INTR].revents & POLLHUP)) {
-            if (!(fds[IDX_CLI_INTR].revents & POLLIN) && !(fds[IDX_VDSD_INTR].revents & POLLIN)) {
                 goto shutdown_interrupt;
             }
         }
