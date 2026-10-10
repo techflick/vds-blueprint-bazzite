@@ -68,36 +68,27 @@ int open_bt_server_link(uint16_t psm) {
 }
 
 int connect_unix_pipe(const char *pipe_name, const uint8_t *mac_bytes) {
-    // Anti-EINPROGRESS: Blockierende Erstellung zur Beseitigung von Multiplexer-Races
     int sock = socket(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0);
     if (sock < 0) return -1;
     
     struct sockaddr_un addr;
     memset(&addr, 0, sizeof(struct sockaddr_un));
     addr.sun_family = AF_UNIX;
-    
-    // Invariante: Erstes Byte muss zwingend '\0' sein (Abstrakter Namespace)
     addr.sun_path[0] = '\0';
-    
-    // KORREKTUR: Alle 3 Zeichen ("v_c" oder "v_i") komplett ab Index 1 kopieren
     memcpy(&addr.sun_path[1], pipe_name, 3);
     
-    // Invariante: Kernel-Längenformel für das 4-Byte-Muster (1x Nullbyte + 3x String-Zeichen)
     socklen_t len = offsetof(struct sockaddr_un, sun_path) + 4;
     
-    // Blockienter Verbindungsaufbau verhindert Multiplexer-Races
     if (connect(sock, (struct sockaddr *)&addr, len) < 0) {
         close(sock);
         return -1;
     }
     
-    // INVARIANTE: MAC-Injektion via Stream-Payload direkt nach Aufbau
     if (send(sock, mac_bytes, 6, MSG_NOSIGNAL) != 6) {
         close(sock);
         return -1;
     }
     
-    // Erst jetzt den Socket in den Zustand O_NONBLOCK versetzen
     if (set_nonblocking_fd(sock) < 0) {
         close(sock);
         return -1;
@@ -106,10 +97,7 @@ int connect_unix_pipe(const char *pipe_name, const uint8_t *mac_bytes) {
 }
 
 int main(void) {
-    // Senderschutz erzwingen
     signal(SIGPIPE, SIG_IGN);
-
-    // Unbestechliche Zeilenpufferung erzwingen
     setvbuf(stdout, NULL, _IOLBF, 0);
     setvbuf(stderr, NULL, _IOLBF, 0);
 
@@ -152,7 +140,6 @@ int main(void) {
             break;
         }
 
-        // --- 1. ASYNCHRONES ABFANGEN & DIREKTKOPPLUNG ---
         if (fds[IDX_SRV_CTRL].fd >= 0 && (fds[IDX_SRV_CTRL].revents & POLLIN)) {
             struct custom_sockaddr_l2 saddr;
             socklen_t slen = sizeof(saddr);
@@ -189,13 +176,11 @@ int main(void) {
             }
         }
 
-        // --- 2. CRITICAL HARDWARE ERROR-HANDLING ---
         if (client_ctrl >= 0 && (fds[IDX_CLI_CTRL].revents & (POLLERR | POLLNVAL))) goto shutdown_control;
         if (vdsd_ctrl >= 0   && (fds[IDX_VDSD_CTRL].revents & (POLLERR | POLLNVAL))) goto shutdown_control;
         if (client_intr >= 0 && (fds[IDX_CLI_INTR].revents & (POLLERR | POLLNVAL))) goto shutdown_interrupt;
         if (vdsd_intr >= 0   && (fds[IDX_VDSD_INTR].revents & (POLLERR | POLLNVAL))) goto shutdown_interrupt;
 
-        // --- 3. PIPELINE ROUTING MIT SPEZIFIKATIONSKONFORMEM PEEK-SCHUTZ ---
         if (client_ctrl >= 0 && (fds[IDX_CLI_CTRL].revents & POLLIN)) {
             ssize_t len = recv(client_ctrl, heap_buffer, 1024, MSG_DONTWAIT | MSG_NOSIGNAL);
             if (len > 0) {
@@ -248,7 +233,6 @@ int main(void) {
             }
         }
         
-        // --- 4. VERZÖGERTES POLLHUP-HANDLING ---
         if ((fds[IDX_CLI_CTRL].revents & POLLHUP) || (fds[IDX_VDSD_CTRL].revents & POLLHUP)) {
             if (!(fds[IDX_CLI_CTRL].revents & POLLIN) && !(fds[IDX_VDSD_CTRL].revents & POLLIN)) {
                 goto shutdown_control;
