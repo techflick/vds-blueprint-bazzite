@@ -67,7 +67,7 @@ static std::string extract_dynamic_mac_from_payload(int client_fd) {
         return "00:00:00:00:00:00";
     }
 
-    // Wir bauen den String lesbar (Big-Endian Repräsentation für das Log)
+    // Für das Bazzite-Log sauber menschenlesbar formatieren (z. B. 88:03:4C...)
     std::stringstream ss;
     for (int i = 5; i >= 0; --i) {
         ss << std::hex << std::setw(2) << std::setfill('0') << std::uppercase << static_cast<int>(mac_bytes[i]);
@@ -91,8 +91,6 @@ std::optional<BtAcceptedChannel> BtL2capAcceptor::accept_control() {
         if (errno == EAGAIN || errno == EWOULDBLOCK) {
             return std::nullopt;
         }
-        fprintf(stderr, "vDS-CORE: Kritischer accept-Fehler auf Control: %s\n", std::strerror(errno));
-        fflush(stderr);
         return std::nullopt;
     }
     
@@ -114,8 +112,6 @@ std::optional<BtAcceptedChannel> BtL2capAcceptor::accept_interrupt() {
         if (errno == EAGAIN || errno == EWOULDBLOCK) {
             return std::nullopt;
         }
-        fprintf(stderr, "vDS-CORE: Kritischer accept-Fehler auf Interrupt: %s\n", std::strerror(errno));
-        fflush(stderr);
         return std::nullopt;
     }
     
@@ -166,98 +162,53 @@ bool BtL2capBackend::try_send_output_report(std::span<const std::uint8_t> r) {
 }
 
 void BtL2capBackend::send_feature_get(std::uint8_t id) {
-    fprintf(stderr, "vDS-SPOOF: Modalias usb:v054Cp0CE6d0100 aktiv an L2CAP gemeldet.\n");
-    fflush(stderr);
+    if (control_fd_ >= 0) {
+        std::uint8_t cmd[2] = {0x43, id}; 
+        ::send(control_fd_, cmd, 2, MSG_NOSIGNAL);
+    }
 }
 
 void BtL2capBackend::send_feature_set(std::span<const std::uint8_t> r) {
-    fflush(stderr);
+    if (control_fd_ >= 0) {
+        ::send(control_fd_, r.data(), r.size(), MSG_NOSIGNAL);
+    }
 }
 
 std::optional<std::vector<std::uint8_t>> BtL2capBackend::read_feature_report() { 
     if (control_fd_ < 0) return std::nullopt;
 
-    // Invariante: Blockierend schalten für den Handshake
     int flags = ::fcntl(control_fd_, F_GETFL, 0);
-    if (flags >= 0) {
-        ::fcntl(control_fd_, F_SETFL, flags & ~O_NONBLOCK);
-    }
+    if (flags >= 0) ::fcntl(control_fd_, F_SETFL, flags & ~O_NONBLOCK);
 
-    std::vector<std::uint8_t> rx_buffer(65);
+    std::vector<std::uint8_t> rx_buffer(1024);
     ssize_t n = ::recv(control_fd_, rx_buffer.data(), rx_buffer.size(), MSG_NOSIGNAL);
     
-    if (flags >= 0) {
-        ::fcntl(control_fd_, F_SETFL, flags);
-    }
+    if (flags >= 0) ::fcntl(control_fd_, F_SETFL, flags);
 
-    // Symmetrischer PEEK-Schutz gegen Race-Conditions bei leerer Leitung
     if (n <= 0) {
         std::uint8_t peek_dummy;
         ssize_t peek_n = ::recv(control_fd_, &peek_dummy, 1, MSG_PEEK | MSG_DONTWAIT | MSG_NOSIGNAL);
-        if (peek_n == 0) {
-            fprintf(stderr, "vDS-CORE: Physisches EOF auf Control-Kanal (Handshake abgebrochen).\n");
-            fflush(stderr);
-            return std::nullopt;
-        }
-        return std::nullopt; // Leitung nur temporär leer, kein Abbruch
+        if (peek_n == 0) return std::nullopt;
+        return std::nullopt; 
     }
 
-    std::vector<std::uint8_t> fake_report(65, 0x00);
-    
-    // HID-Header-Shift Alignment
-    fake_report[0] = 0xA3; 
-    fake_report[1] = 0x05; 
-    
-    // MAC-String sauber in ein temporäres Array parsen (enthält 88, 03, 4C...)
-    std::uint8_t parsed_mac[6] = {0};
-    std::stringstream ss(address_);
-    std::string byte_str;
-    int idx = 0;
-    while (std::getline(ss, byte_str, ':') && idx < 6) {
-        parsed_mac[idx++] = static_cast<std::uint8_t>(std::stoul(byte_str, nullptr, 16));
-    }
-
-    // KORREKTUR: Zwingend echte Spiegelung (Little-Endian) auf Index 5 bis 10.
-    // parsed_mac[0] ist 0x88 -> muss auf Index 10
-    // parsed_mac[5] ist 0x64 -> muss auf Index 5
-    for (int i = 0; i < 6; ++i) {
-        fake_report[5 + i] = parsed_mac[5 - i];
-    }
-    
-    // Konstante Modalias- & Firmware-Flags (Verschoben um 1 Byte durch Shift)
-    fake_report[11] = 0x05; 
-    fake_report[12] = 0xE6;
-    fake_report[13] = 0x0C;
-    fake_report[14] = 0x01;
-    fake_report[15] = 0x00;
-    fake_report[16] = 0x24; 
-    
-    fprintf(stderr, "vDS-SPOOF: Handshake erfolgreich. MAC im Report: [%02X:%02X:%02X:%02X:%02X:%02X]\n",
-            fake_report[5], fake_report[6], fake_report[7], fake_report[8], fake_report[9], fake_report[10]);
-    fflush(stderr);
-    return fake_report;
+    rx_buffer.resize(n);
+    return rx_buffer; // 1:1 Pass-Through der echten Hardware-Daten an Upstream
 }
 
 std::optional<std::vector<std::uint8_t>> BtL2capBackend::read_interrupt_packet() {
-    std::vector<std::uint8_t> buf(110);
-    
+    std::vector<std::uint8_t> buf(1024);
     ssize_t n = ::recv(interrupt_fd_, buf.data(), buf.size(), MSG_DONTWAIT | MSG_NOSIGNAL);
     
     if (n < 0) {
-        if (errno == EAGAIN || errno == EWOULDBLOCK) {
-            return std::nullopt;
-        }
+        if (errno == EAGAIN || errno == EWOULDBLOCK) return std::nullopt;
         return std::nullopt;
     }
     
     if (n == 0) {
         std::uint8_t peek_dummy;
         ssize_t peek_n = ::recv(interrupt_fd_, &peek_dummy, 1, MSG_PEEK | MSG_DONTWAIT | MSG_NOSIGNAL);
-        if (peek_n == 0) {
-            fprintf(stderr, "vDS-CORE: Physisches EOF auf Interrupt-Kanal erkannt.\n");
-            fflush(stderr);
-            return std::nullopt; 
-        }
+        if (peek_n == 0) return std::nullopt; 
         return std::nullopt; 
     }
     
