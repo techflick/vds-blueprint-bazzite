@@ -11,13 +11,14 @@
 #include <stdio.h> 
 #include <cerrno>
 #include <csignal>
+#include <sstream>
+#include <iomanip>
 
 namespace vds {
 
 static void setup_abstract_un(struct sockaddr_un &un_addr, const char *name) {
     std::memset(&un_addr, 0, sizeof(struct sockaddr_un));
     un_addr.sun_family = AF_UNIX;
-    // Kopiert exakt die 3 Zeichen "v_c" oder "v_i" (Index 0 bleibt die native \0)
     std::memcpy(un_addr.sun_path + 1, name, 3);
 }
 
@@ -34,7 +35,6 @@ static UniqueFd create_ipc_listener(const char *name) {
     struct sockaddr_un un_addr;
     setup_abstract_un(un_addr, name);
     
-    // Strukturgröße strikt nach Formel: offsetof + 1 Byte (\0) + 3 Byte Name = 4 zusätzliche Bytes
     socklen_t actual_len = offsetof(struct sockaddr_un, sun_path) + 4;
     
     if (::bind(fd, reinterpret_cast<const struct sockaddr*>(&un_addr), actual_len) < 0) {
@@ -49,6 +49,36 @@ static UniqueFd create_ipc_listener(const char *name) {
         throw std::runtime_error("IPC Listen Failed");
     }
     return UniqueFd(fd);
+}
+
+// INVARIANTE: Keine statischen Mocks. Extrahiert die physische Controller-MAC 
+// vollkommen dynamisch aus dem vom Proxy übergebenen abstrakten Socket-Pfad.
+static std::string extract_dynamic_mac(const struct sockaddr_un &peer, socklen_t len) {
+    if (len <= offsetof(struct sockaddr_un, sun_path)) {
+        fprintf(stderr, "vDS-CORE: ERROR - Keine Pfaddaten im Socket-Payload vorhanden!\n");
+        fflush(stderr);
+        return "00:00:00:00:00:00";
+    }
+
+    size_t path_len = len - offsetof(struct sockaddr_un, sun_path);
+    
+    // Ein abstrakter Pfad mit MAC hat das Format: \0 + v_c_ + 12 Hex-Zeichen = 16 Bytes
+    if (path_len >= 16) {
+        // Überspringe das führende \0 sowie das Präfix (z.B. "v_c_") ab Index 5 im sun_path
+        std::string raw_hex(&peer.sun_path[5], 12);
+        
+        // Formatiere die 12 Hex-Zeichen sauber in das Standard-MAC-Format (XX:XX:XX:XX:XX:XX)
+        std::stringstream ss;
+        for (size_t i = 0; i < 12; i += 2) {
+            ss << raw_hex.substr(i, 2);
+            if (i < 10) ss << ":";
+        }
+        return ss.str();
+    }
+
+    fprintf(stderr, "vDS-CORE: ERROR - Proxy hat das Namensschema verletzt. Keine MAC im Pfad!\n");
+    fflush(stderr);
+    return "00:00:00:00:00:00"; 
 }
 
 BtL2capAcceptor::BtL2capAcceptor() 
@@ -71,10 +101,13 @@ std::optional<BtAcceptedChannel> BtL2capAcceptor::accept_control() {
         return std::nullopt;
     }
     
-    fprintf(stderr, "vDS-CORE: Control-Kanal erfolgreich per accept() aus Epoll-Event extrahiert.\n");
+    std::string mac = extract_dynamic_mac(peer, len);
+    
+    // DIAGNOSTIK-MATRIX: Transparente Ausgabe der erfassten Hardware-ID
+    fprintf(stderr, "vDS-CORE: Control-Kanal erfolgreich extrahiert. Controller-MAC: %s\n", mac.c_str());
     fflush(stderr);
     
-    return BtAcceptedChannel{.address = "00:1b:dc:00:00:00", .fd = UniqueFd(fd)};
+    return BtAcceptedChannel{.address = mac, .fd = UniqueFd(fd)};
 }
 
 std::optional<BtAcceptedChannel> BtL2capAcceptor::accept_interrupt() {
@@ -93,10 +126,12 @@ std::optional<BtAcceptedChannel> BtL2capAcceptor::accept_interrupt() {
         return std::nullopt;
     }
     
-    fprintf(stderr, "vDS-CORE: Interrupt-Kanal erfolgreich per accept() aus Epoll-Event extrahiert.\n");
+    std::string mac = extract_dynamic_mac(peer, len);
+    
+    fprintf(stderr, "vDS-CORE: Interrupt-Kanal erfolgreich extrahiert. Controller-MAC: %s\n", mac.c_str());
     fflush(stderr);
     
-    return BtAcceptedChannel{.address = "00:1b:dc:00:00:00", .fd = UniqueFd(fd)};
+    return BtAcceptedChannel{.address = mac, .fd = UniqueFd(fd)};
 }
 
 BtL2capBackend::BtL2capBackend(std::string addr, UniqueFd c, UniqueFd i) 
@@ -148,24 +183,49 @@ void BtL2capBackend::send_feature_set(std::span<const std::uint8_t> r) {
 }
 
 std::optional<std::vector<std::uint8_t>> BtL2capBackend::read_feature_report() { 
+    if (control_fd_ < 0) return std::nullopt;
+
+    // INVARIANTE: Synchron/blockierend auf das vom Proxy durchgereichte Handshake-Paket warten.
+    // Kein MSG_DONTWAIT nutzen, um EAGAIN/EWOULDBLOCK-Abbrüche zu verhindern.
+    std::vector<std::uint8_t> rx_buffer(65);
+    ssize_t n = ::recv(control_fd_, rx_buffer.data(), rx_buffer.size(), MSG_NOSIGNAL);
+    if (n <= 0) {
+        fprintf(stderr, "vDS-CORE: Handshake-Anfrage auf Control-Kanal fehlgeschlagen oder geschlossen.\n");
+        fflush(stderr);
+        return std::nullopt;
+    }
+
     std::vector<std::uint8_t> fake_report(65, 0x00);
     
-    fake_report[0] = 0xA3; 
-    fake_report[1] = 0x05; 
-    fake_report[2] = 0x00; 
-    fake_report[3] = 0x00;
-    fake_report[4] = 0x00;
-    fake_report[5] = 0xdc;
-    fake_report[6] = 0x1b;
-    fake_report[7] = 0x00;
-    fake_report[8] = 0x4C; 
-    fake_report[9] = 0x05; 
-    fake_report[10] = 0xE6;
-    fake_report[11] = 0x0C;
-    fake_report[12] = 0x01;
-    fake_report[13] = 0x00;
-    fake_report[14] = 0x24; 
+    // HID-Header-Shift Ausrichtung
+    fake_report[0] = 0xA3; // DATA | FEATURE
+    fake_report[1] = 0x05; // Report ID
+    
+    // MAC-Adresse dynamisch parsen (Format: XX:XX:XX:XX:XX:XX)
+    std::uint8_t mac_bytes[6] = {0};
+    std::stringstream ss(address_);
+    std::string byte_str;
+    int idx = 0;
+    while (std::getline(ss, byte_str, ':') && idx < 6) {
+        mac_bytes[idx++] = static_cast<std::uint8_t>(std::stoul(byte_str, nullptr, 16));
+    }
+
+    // INVARIANTE: MAC-Adresse Little-Endian gespiegelt hinterlegen.
+    // Durch den 1-Byte HID-Shift verschiebt sich das Alignment auf Index 5 bis 10.
+    fake_report[5] = mac_bytes[5];
+    fake_report[6] = mac_bytes[4];
+    fake_report[7] = mac_bytes[3];
+    fake_report[8] = mac_bytes[2];
+    fake_report[9] = mac_bytes[1];
+    fake_report[10] = mac_bytes[0];
+    
+    // Restliche native Controller Firmware & Vendor-Flags (um exakt 1 Byte verschoben)
+    fake_report[11] = 0x05; 
+    fake_report[12] = 0xE6;
+    fake_report[13] = 0x0C;
+    fake_report[14] = 0x01;
     fake_report[15] = 0x00;
+    fake_report[16] = 0x24; 
     
     return fake_report;
 }
@@ -183,6 +243,7 @@ std::optional<std::vector<std::uint8_t>> BtL2capBackend::read_interrupt_packet()
     }
     
     if (n == 0) {
+        // INVARIANTE: Symmetrischer Zero-Length & PEEK-Schutz (Anti-Race-Condition)
         std::uint8_t peek_dummy;
         ssize_t peek_n = ::recv(interrupt_fd_, &peek_dummy, 1, MSG_PEEK | MSG_DONTWAIT);
         if (peek_n == 0) {
