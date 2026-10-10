@@ -68,7 +68,7 @@ int open_bt_server_link(uint16_t psm) {
 }
 
 int connect_unix_pipe(const char *prefix_two_bytes, const uint8_t *mac_bytes) {
-    // Anti-EINPROGRESS: Erstellung zwingend blockierend, kein SOCK_NONBLOCK hier!
+    // Anti-EINPROGRESS: Blockierende Erstellung zur Beseitigung von Multiplexer-Races
     int sock = socket(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0);
     if (sock < 0) return -1;
     
@@ -79,30 +79,27 @@ int connect_unix_pipe(const char *prefix_two_bytes, const uint8_t *mac_bytes) {
     // Invariante: Erstes Byte muss zwingend '\0' sein (Abstrakter Namespace)
     addr.sun_path[0] = '\0';
     
-    // Temporärer Buffer, um die schädliche Nullterminierung von snprintf abzufangen
-    char mac_hex[13];
-    snprintf(mac_hex, sizeof(mac_hex), "%02X%02X%02X%02X%02X%02X",
-             mac_bytes[5], mac_bytes[4], mac_bytes[3], mac_bytes[2], mac_bytes[1], mac_bytes[0]);
-    
-    // Kopieren via memcpy, um Schmutzbytes zu unterdrücken
-    // Indizes 1-4: "v_c_" oder "v_i_"
+    // Starre Bindung an das Basisschema (3 Bytes Payload nach dem Nullbyte: "v_c" oder "v_i")
     addr.sun_path[1] = prefix_two_bytes[0];
     addr.sun_path[2] = prefix_two_bytes[1];
-    addr.sun_path[3] = '_';
     
-    // Indizes 4-15: Die 12 Hex-Zeichen der MAC-Adresse
-    memcpy(addr.sun_path + 4, mac_hex, 12);
+    // Kernel-Längenformel fuer das 3-Byte-Basisschema
+    socklen_t len = offsetof(struct sockaddr_un, sun_path) + 3;
     
-    // STRIKTE INVARIANTE: Dynamische Längen-Formel (Zwingend exakt +16 Bytes für connect)
-    socklen_t len = offsetof(struct sockaddr_un, sun_path) + 16;
-    
-    // Blockierender Verbindungsaufbau zur Vermeidung von Multiplexer-Races
+    // Blockierender Verbindungsaufbau
     if (connect(sock, (struct sockaddr *)&addr, len) < 0) {
         close(sock);
         return -1;
     }
     
-    // Sofort nach erfolgreichem Aufbau asynchron via fcntl schalten
+    // INVARIANTE: MAC-Injektion via Stream-Payload direkt nach Aufbau
+    // Sendet die 6 physischen Bytes atomar und blockierend an den wartenden Daemon
+    if (send(sock, mac_bytes, 6, MSG_NOSIGNAL) != 6) {
+        close(sock);
+        return -1;
+    }
+    
+    // Erst jetzt den Socket via fcntl in den Zustand O_NONBLOCK versetzen
     if (set_nonblocking_fd(sock) < 0) {
         close(sock);
         return -1;
