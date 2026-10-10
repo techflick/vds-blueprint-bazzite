@@ -67,25 +67,36 @@ int open_bt_server_link(uint16_t psm) {
     return sock;
 }
 
-int connect_unix_pipe(const char *name_three_bytes) {
+int connect_unix_pipe(const char *prefix_two_bytes, const uint8_t *mac_bytes) {
     int sock = socket(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0);
     if (sock < 0) return -1;
     
     struct sockaddr_un addr;
     memset(&addr, 0, sizeof(struct sockaddr_un));
     addr.sun_family = AF_UNIX;
+    
+    // Invariante: Erstes Byte muss zwingend '\0' sein (Abstrakter Namespace)
     addr.sun_path[0] = '\0';
-    memcpy(addr.sun_path + 1, name_three_bytes, 3); 
     
-    socklen_t len = offsetof(struct sockaddr_un, sun_path) + 4;
+    // Präfix-Format generieren (z. B. "v_c_") -> belegt Indizes 1, 2, 3, 4
+    char full_prefix[8];
+    snprintf(full_prefix, sizeof(full_prefix), "%s_", prefix_two_bytes);
+    memcpy(addr.sun_path + 1, full_prefix, 4);
     
-    // Synchroner blockierender Connect um EINPROGRESS-Timing-Fehler zu verhindern
+    // 12-stelliges Hex-Format ohne Doppelpunkte erzeugen -> belegt Indizes 5 bis 16
+    snprintf(addr.sun_path + 5, 13, "%02X%02X%02X%02X%02X%02X",
+             mac_bytes[5], mac_bytes[4], mac_bytes[3], mac_bytes[2], mac_bytes[1], mac_bytes[0]);
+    
+    // STRIKTE INVARIANTE: Dynamische Längen-Formel (Zwingend +16 Bytes für connect)
+    socklen_t len = offsetof(struct sockaddr_un, sun_path) + 16;
+    
+    // Anti-EINPROGRESS: Blockierender Connect an die Pipes
     if (connect(sock, (struct sockaddr *)&addr, len) < 0) {
         close(sock);
         return -1;
     }
     
-    // Nach Etablierung sofort asynchron schalten für den Multiplexer
+    // Sofort nach Aufbau asynchron schalten für den Multiplexer
     if (set_nonblocking_fd(sock) < 0) {
         close(sock);
         return -1;
@@ -94,6 +105,7 @@ int connect_unix_pipe(const char *name_three_bytes) {
 }
 
 int main(void) {
+    // Senderschutz erzwingen
     signal(SIGPIPE, SIG_IGN);
 
     // Unbestechliche Zeilenpufferung erzwingen
@@ -141,12 +153,14 @@ int main(void) {
 
         // --- 1. ASYNCHRONES ABFANGEN & DIREKTKOPPLUNG ---
         if (fds[IDX_SRV_CTRL].fd >= 0 && (fds[IDX_SRV_CTRL].revents & POLLIN)) {
-            int tmp = accept4(srv_ctrl, NULL, NULL, SOCK_NONBLOCK | SOCK_CLOEXEC);
+            struct custom_sockaddr_l2 saddr;
+            socklen_t slen = sizeof(saddr);
+            int tmp = accept4(srv_ctrl, (struct sockaddr *)&saddr, &slen, SOCK_NONBLOCK | SOCK_CLOEXEC);
             if (tmp >= 0) {
                 client_ctrl = tmp;
                 printf("vDS-Proxy: Controller Control-Kanal aktiv abgefangen.\n");
                 
-                vdsd_ctrl = connect_unix_pipe("v_c");
+                vdsd_ctrl = connect_unix_pipe("v_c", saddr.l2_bdaddr);
                 if (vdsd_ctrl >= 0) {
                     printf("vDS-Proxy: Control-Pipeline erfolgreich aktiv geschaltet.\n");
                 } else {
@@ -157,12 +171,14 @@ int main(void) {
         }
 
         if (fds[IDX_SRV_INTR].fd >= 0 && (fds[IDX_SRV_INTR].revents & POLLIN)) {
-            int tmp = accept4(srv_intr, NULL, NULL, SOCK_NONBLOCK | SOCK_CLOEXEC);
+            struct custom_sockaddr_l2 saddr;
+            socklen_t slen = sizeof(saddr);
+            int tmp = accept4(srv_intr, (struct sockaddr *)&saddr, &slen, SOCK_NONBLOCK | SOCK_CLOEXEC);
             if (tmp >= 0) {
                 client_intr = tmp;
                 printf("vDS-Proxy: Controller Interrupt-Kanal aktiv abgefangen.\n");
                 
-                vdsd_intr = connect_unix_pipe("v_i");
+                vdsd_intr = connect_unix_pipe("v_i", saddr.l2_bdaddr);
                 if (vdsd_intr >= 0) {
                     printf("vDS-Proxy: Interrupt-Pipeline erfolgreich aktiv geschaltet.\n");
                 } else {
@@ -178,16 +194,13 @@ int main(void) {
         if (client_intr >= 0 && (fds[IDX_CLI_INTR].revents & (POLLERR | POLLNVAL))) goto shutdown_interrupt;
         if (vdsd_intr >= 0   && (fds[IDX_VDSD_INTR].revents & (POLLERR | POLLNVAL))) goto shutdown_interrupt;
 
-        // --- 3. PIPELINE ROUTING MIT STRIKTEM MSG_PEEK SCHUTZ ---
-                // --- 3. PIPELINE ROUTING MIT SPEZIFIKATIONSKONFORMEM PEEK-SCHUTZ ---
+        // --- 3. PIPELINE ROUTING MIT SPEZIFIKATIONSKONFORMEM PEEK-SCHUTZ ---
         if (client_ctrl >= 0 && (fds[IDX_CLI_CTRL].revents & POLLIN)) {
             ssize_t len = recv(client_ctrl, heap_buffer, 1024, MSG_DONTWAIT | MSG_NOSIGNAL);
             if (len > 0) {
                 if (vdsd_ctrl >= 0) send(vdsd_ctrl, heap_buffer, len, MSG_DONTWAIT | MSG_NOSIGNAL);
             } else if (len == 0) {
                 char test_ch;
-                // Ein echter Verbindungsabbruch (EOF) liefert bei PEEK exakt 0.
-                // Ist die Leitung nur temporär leer, liefert es -1 (EAGAIN).
                 ssize_t check = recv(client_ctrl, &test_ch, 1, MSG_PEEK | MSG_DONTWAIT | MSG_NOSIGNAL);
                 if (check == 0) goto shutdown_control;
             } else if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
@@ -202,7 +215,6 @@ int main(void) {
             } else if (len == 0) {
                 char test_ch;
                 ssize_t check = recv(vdsd_ctrl, &test_ch, 1, MSG_PEEK | MSG_DONTWAIT | MSG_NOSIGNAL);
-                // Nur wenn der Socket physikalisch geschlossen wurde, greift der Shutdown
                 if (check == 0) goto shutdown_control;
             } else if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
                 goto shutdown_control; 
@@ -229,45 +241,6 @@ int main(void) {
             } else if (len == 0) {
                 char test_ch;
                 ssize_t check = recv(vdsd_intr, &test_ch, 1, MSG_PEEK | MSG_DONTWAIT | MSG_NOSIGNAL);
-                if (check == 0) goto shutdown_interrupt;
-            } else if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
-                goto shutdown_interrupt;
-            }
-        }
-
-        if (vdsd_ctrl >= 0 && (fds[IDX_VDSD_CTRL].revents & POLLIN)) {
-            ssize_t len = recv(vdsd_ctrl, heap_buffer, 1024, MSG_DONTWAIT | MSG_NOSIGNAL);
-            if (len > 0) {
-                if (client_ctrl >= 0) send(client_ctrl, heap_buffer, len, MSG_DONTWAIT | MSG_NOSIGNAL);
-            } else if (len == 0) {
-                char test_ch;
-                ssize_t check = recv(vdsd_ctrl, &test_ch, 1, MSG_PEEK | MSG_DONTWAIT);
-                if (check == 0) goto shutdown_control;
-            } else if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
-                goto shutdown_control; 
-            }
-        }
-
-        if (client_intr >= 0 && (fds[IDX_CLI_INTR].revents & POLLIN)) {
-            ssize_t len = recv(client_intr, heap_buffer, 1024, MSG_DONTWAIT | MSG_NOSIGNAL);
-            if (len > 0) {
-                if (vdsd_intr >= 0) send(vdsd_intr, heap_buffer, len, MSG_DONTWAIT | MSG_NOSIGNAL);
-            } else if (len == 0) {
-                char test_ch;
-                ssize_t check = recv(client_intr, &test_ch, 1, MSG_PEEK | MSG_DONTWAIT);
-                if (check == 0) goto shutdown_interrupt;
-            } else if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
-                goto shutdown_interrupt;
-            }
-        }
-
-        if (vdsd_intr >= 0 && (fds[IDX_VDSD_INTR].revents & POLLIN)) {
-            ssize_t len = recv(vdsd_intr, heap_buffer, 1024, MSG_DONTWAIT | MSG_NOSIGNAL);
-            if (len > 0) {
-                if (client_intr >= 0) send(client_intr, heap_buffer, len, MSG_DONTWAIT | MSG_NOSIGNAL);
-            } else if (len == 0) {
-                char test_ch;
-                ssize_t check = recv(vdsd_intr, &test_ch, 1, MSG_PEEK | MSG_DONTWAIT);
                 if (check == 0) goto shutdown_interrupt;
             } else if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
                 goto shutdown_interrupt;
