@@ -67,7 +67,7 @@ int open_bt_server_link(uint16_t psm) {
     return sock;
 }
 
-int connect_unix_pipe(const char *prefix_two_bytes, const uint8_t *mac_bytes) {
+int connect_unix_pipe(const char *pipe_name, const uint8_t *mac_bytes) {
     // Anti-EINPROGRESS: Blockierende Erstellung zur Beseitigung von Multiplexer-Races
     int sock = socket(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0);
     if (sock < 0) return -1;
@@ -79,27 +79,25 @@ int connect_unix_pipe(const char *prefix_two_bytes, const uint8_t *mac_bytes) {
     // Invariante: Erstes Byte muss zwingend '\0' sein (Abstrakter Namespace)
     addr.sun_path[0] = '\0';
     
-    // Starre Bindung an das Basisschema (3 Bytes nach dem Nullbyte: "v_c" oder "v_i")
-    addr.sun_path[1] = prefix_two_bytes[0];
-    addr.sun_path[2] = prefix_two_bytes[1];
+    // KORREKTUR: Alle 3 Zeichen ("v_c" oder "v_i") komplett ab Index 1 kopieren
+    memcpy(&addr.sun_path[1], pipe_name, 3);
     
-    // KORREKTUR: Kernel-Längenformel für das 4-Byte-Muster (1x Nullbyte + 3x String-Zeichen)
+    // Invariante: Kernel-Längenformel für das 4-Byte-Muster (1x Nullbyte + 3x String-Zeichen)
     socklen_t len = offsetof(struct sockaddr_un, sun_path) + 4;
     
-    // Blockierender Verbindungsaufbau
+    // Blockienter Verbindungsaufbau verhindert Multiplexer-Races
     if (connect(sock, (struct sockaddr *)&addr, len) < 0) {
         close(sock);
         return -1;
     }
     
     // INVARIANTE: MAC-Injektion via Stream-Payload direkt nach Aufbau
-    // Sendet die 6 physischen Bytes atomar und blockierend an den wartenden Daemon
     if (send(sock, mac_bytes, 6, MSG_NOSIGNAL) != 6) {
         close(sock);
         return -1;
     }
     
-    // Erst jetzt den Socket via fcntl in den Zustand O_NONBLOCK versetzen
+    // Erst jetzt den Socket in den Zustand O_NONBLOCK versetzen
     if (set_nonblocking_fd(sock) < 0) {
         close(sock);
         return -1;
