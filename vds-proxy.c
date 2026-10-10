@@ -68,6 +68,7 @@ int open_bt_server_link(uint16_t psm) {
 }
 
 int connect_unix_pipe(const char *prefix_two_bytes, const uint8_t *mac_bytes) {
+    // Anti-EINPROGRESS: Erstellung zwingend blockierend, kein SOCK_NONBLOCK hier!
     int sock = socket(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0);
     if (sock < 0) return -1;
     
@@ -78,25 +79,30 @@ int connect_unix_pipe(const char *prefix_two_bytes, const uint8_t *mac_bytes) {
     // Invariante: Erstes Byte muss zwingend '\0' sein (Abstrakter Namespace)
     addr.sun_path[0] = '\0';
     
-    // Präfix-Format generieren (z. B. "v_c_") -> belegt Indizes 1, 2, 3, 4
-    char full_prefix[8];
-    snprintf(full_prefix, sizeof(full_prefix), "%s_", prefix_two_bytes);
-    memcpy(addr.sun_path + 1, full_prefix, 4);
-    
-    // 12-stelliges Hex-Format ohne Doppelpunkte erzeugen -> belegt Indizes 5 bis 16
-    snprintf(addr.sun_path + 5, 13, "%02X%02X%02X%02X%02X%02X",
+    // Temporärer Buffer, um die schädliche Nullterminierung von snprintf abzufangen
+    char mac_hex[13];
+    snprintf(mac_hex, sizeof(mac_hex), "%02X%02X%02X%02X%02X%02X",
              mac_bytes[5], mac_bytes[4], mac_bytes[3], mac_bytes[2], mac_bytes[1], mac_bytes[0]);
     
-    // STRIKTE INVARIANTE: Dynamische Längen-Formel (Zwingend +16 Bytes für connect)
+    // Kopieren via memcpy, um Schmutzbytes zu unterdrücken
+    // Indizes 1-4: "v_c_" oder "v_i_"
+    addr.sun_path[1] = prefix_two_bytes[0];
+    addr.sun_path[2] = prefix_two_bytes[1];
+    addr.sun_path[3] = '_';
+    
+    // Indizes 4-15: Die 12 Hex-Zeichen der MAC-Adresse
+    memcpy(addr.sun_path + 4, mac_hex, 12);
+    
+    // STRIKTE INVARIANTE: Dynamische Längen-Formel (Zwingend exakt +16 Bytes für connect)
     socklen_t len = offsetof(struct sockaddr_un, sun_path) + 16;
     
-    // Anti-EINPROGRESS: Blockierender Connect an die Pipes
+    // Blockierender Verbindungsaufbau zur Vermeidung von Multiplexer-Races
     if (connect(sock, (struct sockaddr *)&addr, len) < 0) {
         close(sock);
         return -1;
     }
     
-    // Sofort nach Aufbau asynchron schalten für den Multiplexer
+    // Sofort nach erfolgreichem Aufbau asynchron via fcntl schalten
     if (set_nonblocking_fd(sock) < 0) {
         close(sock);
         return -1;
