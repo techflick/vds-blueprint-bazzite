@@ -62,11 +62,12 @@ static std::string extract_dynamic_mac_from_payload(int client_fd) {
     ::fcntl(client_fd, F_SETFL, flags);
 
     if (n != 6) {
-        fprintf(stderr, "vDS-CORE: ERROR - Proxy hat das Payload-Namensschema verletzt (Keine 6 Bytes MAC)!\n");
+        fprintf(stderr, "vDS-CORE: ERROR - Proxy hat das Payload-Namensschema verletzt!\n");
         fflush(stderr);
         return "00:00:00:00:00:00";
     }
 
+    // Wir bauen den String lesbar (Big-Endian Repräsentation für das Log)
     std::stringstream ss;
     for (int i = 5; i >= 0; --i) {
         ss << std::hex << std::setw(2) << std::setfill('0') << std::uppercase << static_cast<int>(mac_bytes[i]);
@@ -176,6 +177,7 @@ void BtL2capBackend::send_feature_set(std::span<const std::uint8_t> r) {
 std::optional<std::vector<std::uint8_t>> BtL2capBackend::read_feature_report() { 
     if (control_fd_ < 0) return std::nullopt;
 
+    // Invariante: Blockierend schalten für den Handshake
     int flags = ::fcntl(control_fd_, F_GETFL, 0);
     if (flags >= 0) {
         ::fcntl(control_fd_, F_SETFL, flags & ~O_NONBLOCK);
@@ -188,32 +190,41 @@ std::optional<std::vector<std::uint8_t>> BtL2capBackend::read_feature_report() {
         ::fcntl(control_fd_, F_SETFL, flags);
     }
 
+    // Symmetrischer PEEK-Schutz gegen Race-Conditions bei leerer Leitung
     if (n <= 0) {
-        fprintf(stderr, "vDS-CORE: Handshake-Anfrage auf Control-Kanal fehlgeschlagen oder geschlossen.\n");
-        fflush(stderr);
-        return std::nullopt;
+        std::uint8_t peek_dummy;
+        ssize_t peek_n = ::recv(control_fd_, &peek_dummy, 1, MSG_PEEK | MSG_DONTWAIT | MSG_NOSIGNAL);
+        if (peek_n == 0) {
+            fprintf(stderr, "vDS-CORE: Physisches EOF auf Control-Kanal (Handshake abgebrochen).\n");
+            fflush(stderr);
+            return std::nullopt;
+        }
+        return std::nullopt; // Leitung nur temporär leer, kein Abbruch
     }
 
     std::vector<std::uint8_t> fake_report(65, 0x00);
     
+    // HID-Header-Shift Alignment
     fake_report[0] = 0xA3; 
     fake_report[1] = 0x05; 
     
-    std::uint8_t mac_bytes[6] = {0};
+    // MAC-String sauber in ein temporäres Array parsen (enthält 88, 03, 4C...)
+    std::uint8_t parsed_mac[6] = {0};
     std::stringstream ss(address_);
     std::string byte_str;
     int idx = 0;
     while (std::getline(ss, byte_str, ':') && idx < 6) {
-        mac_bytes[idx++] = static_cast<std::uint8_t>(std::stoul(byte_str, nullptr, 16));
+        parsed_mac[idx++] = static_cast<std::uint8_t>(std::stoul(byte_str, nullptr, 16));
     }
 
-    fake_report[5]  = mac_bytes[5]; 
-    fake_report[6]  = mac_bytes[4];
-    fake_report[7]  = mac_bytes[3];
-    fake_report[8]  = mac_bytes[2];
-    fake_report[9]  = mac_bytes[1];
-    fake_report[10] = mac_bytes[0];
+    // KORREKTUR: Zwingend echte Spiegelung (Little-Endian) auf Index 5 bis 10.
+    // parsed_mac[0] ist 0x88 -> muss auf Index 10
+    // parsed_mac[5] ist 0x64 -> muss auf Index 5
+    for (int i = 0; i < 6; ++i) {
+        fake_report[5 + i] = parsed_mac[5 - i];
+    }
     
+    // Konstante Modalias- & Firmware-Flags (Verschoben um 1 Byte durch Shift)
     fake_report[11] = 0x05; 
     fake_report[12] = 0xE6;
     fake_report[13] = 0x0C;
@@ -221,7 +232,7 @@ std::optional<std::vector<std::uint8_t>> BtL2capBackend::read_feature_report() {
     fake_report[15] = 0x00;
     fake_report[16] = 0x24; 
     
-    fprintf(stderr, "vDS-SPOOF: Handshake erfolgreich. MAC gespiegelt: [%02X:%02X:%02X:%02X:%02X:%02X]\n",
+    fprintf(stderr, "vDS-SPOOF: Handshake erfolgreich. MAC im Report: [%02X:%02X:%02X:%02X:%02X:%02X]\n",
             fake_report[5], fake_report[6], fake_report[7], fake_report[8], fake_report[9], fake_report[10]);
     fflush(stderr);
     return fake_report;
