@@ -79,12 +79,12 @@ int connect_unix_pipe(const char *prefix_two_bytes, const uint8_t *mac_bytes) {
     // Invariante: Erstes Byte muss zwingend '\0' sein (Abstrakter Namespace)
     addr.sun_path[0] = '\0';
     
-    // Starre Bindung an das Basisschema (3 Bytes Payload nach dem Nullbyte: "v_c" oder "v_i")
+    // Starre Bindung an das Basisschema (3 Bytes nach dem Nullbyte: "v_c" oder "v_i")
     addr.sun_path[1] = prefix_two_bytes[0];
     addr.sun_path[2] = prefix_two_bytes[1];
     
-    // Kernel-Längenformel fuer das 3-Byte-Basisschema
-    socklen_t len = offsetof(struct sockaddr_un, sun_path) + 3;
+    // KORREKTUR: Kernel-Längenformel für das 4-Byte-Muster (1x Nullbyte + 3x String-Zeichen)
+    socklen_t len = offsetof(struct sockaddr_un, sun_path) + 4;
     
     // Blockierender Verbindungsaufbau
     if (connect(sock, (struct sockaddr *)&addr, len) < 0) {
