@@ -67,7 +67,6 @@ static std::string extract_dynamic_mac_from_payload(int client_fd) {
         return "00:00:00:00:00:00";
     }
 
-    // KORREKTUR: Rückwärts auslesen (Little-Endian des Kernels in Big-Endian des Daemons drehen)
     std::stringstream ss;
     for (int i = 5; i >= 0; --i) {
         ss << std::hex << std::setw(2) << std::setfill('0') << std::uppercase << static_cast<int>(mac_bytes[i]);
@@ -137,7 +136,7 @@ BtL2capBackend::~BtL2capBackend() {
 }
 
 BtL2capBackend::BtL2capBackend(BtL2capBackend &&other) noexcept 
-    : address_(std::move(other.address_)), control_fd_(other.control_fd_), interrupt_fd_(other.interrupt_fd_) {
+    : address_(std::move(other.address_)), control_fd_(other.control_fd_), interrupt_fd_(other.interrupt_fd) {
     other.control_fd_ = -1;
     other.interrupt_fd_ = -1;
 }
@@ -147,7 +146,7 @@ BtL2capBackend &BtL2capBackend::operator=(BtL2capBackend &&other) noexcept {
         if(control_fd_ >= 0) ::close(control_fd_);
         if(interrupt_fd_ >= 0) ::close(interrupt_fd_);
         
-        address_ = std::move(other.address_); 
+        address = std::move(other.address_); 
         control_fd_ = other.control_fd_;    
         interrupt_fd_ = other.interrupt_fd_;
         other.control_fd_ = -1;
@@ -177,8 +176,20 @@ void BtL2capBackend::send_feature_set(std::span<const std::uint8_t> r) {
 std::optional<std::vector<std::uint8_t>> BtL2capBackend::read_feature_report() { 
     if (control_fd_ < 0) return std::nullopt;
 
+    // Sichert ab, dass der Socket während des Handshakes synchron blockiert (Anti-EAGAIN-Schutz)
+    int flags = ::fcntl(control_fd_, F_GETFL, 0);
+    if (flags >= 0) {
+        ::fcntl(control_fd_, F_SETFL, flags & ~O_NONBLOCK);
+    }
+
     std::vector<std::uint8_t> rx_buffer(65);
     ssize_t n = ::recv(control_fd_, rx_buffer.data(), rx_buffer.size(), MSG_NOSIGNAL);
+    
+    // Setzt den Socket sofort wieder in den asynchronen Zustand für den Multiplexer zurück
+    if (flags >= 0) {
+        ::fcntl(control_fd_, F_SETFL, flags);
+    }
+
     if (n <= 0) {
         fprintf(stderr, "vDS-CORE: Handshake-Anfrage auf Control-Kanal fehlgeschlagen oder geschlossen.\n");
         fflush(stderr);
@@ -198,13 +209,14 @@ std::optional<std::vector<std::uint8_t>> BtL2capBackend::read_feature_report() {
         mac_bytes[idx++] = static_cast<std::uint8_t>(std::stoul(byte_str, nullptr, 16));
     }
 
-    // Spiegelt die nun korrekte Big-Endian-Adresse sauber rückwärts ins Little-Endian Raster
-    fake_report[5] = mac_bytes[5];
-    fake_report[6] = mac_bytes[4];
-    fake_report[7] = mac_bytes[3];
-    fake_report[8] = mac_bytes[2];
-    fake_report[9] = mac_bytes[1];
-    fake_report[10] = mac_bytes[0];
+    // KORREKTUR: Spiegelt die Big-Endian-MAC aus dem Log-String (z.B. 88:03:4C...) 
+    // wieder korrekt ins native Little-Endian Raster für die Controller-Hardware
+    fake_report[5]  = mac_bytes[5]; // LSB (z.B. 64) kommt auf Index 5
+    fake_report[6]  = mac_bytes[4];
+    fake_report[7]  = mac_bytes[3];
+    fake_report[8]  = mac_bytes[2];
+    fake_report[9]  = mac_bytes[1];
+    fake_report[10] = mac_bytes[0]; // MSB (z.B. 88) kommt auf Index 10
     
     fake_report[11] = 0x05; 
     fake_report[12] = 0xE6;
@@ -213,6 +225,8 @@ std::optional<std::vector<std::uint8_t>> BtL2capBackend::read_feature_report() {
     fake_report[15] = 0x00;
     fake_report[16] = 0x24; 
     
+    fprintf(stderr, "vDS-SPOOF: Handshake erfolgreich. MAC gespiegelt: [%02X:%02X:%02X:%02X:%02X:%02X]\n",
+            fake_report[5], fake_report[6], fake_report[7], fake_report[8], fake_report[9], fake_report[10]);
     fflush(stderr);
     return fake_report;
 }
