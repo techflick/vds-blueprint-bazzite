@@ -136,7 +136,7 @@ BtL2capBackend::~BtL2capBackend() {
 }
 
 BtL2capBackend::BtL2capBackend(BtL2capBackend &&other) noexcept 
-    : address_(std::move(other.address_)), control_fd_(other.control_fd_), interrupt_fd_(other.interrupt_fd) {
+    : address_(std::move(other.address_)), control_fd_(other.control_fd_), interrupt_fd_(other.interrupt_fd_) {
     other.control_fd_ = -1;
     other.interrupt_fd_ = -1;
 }
@@ -146,7 +146,7 @@ BtL2capBackend &BtL2capBackend::operator=(BtL2capBackend &&other) noexcept {
         if(control_fd_ >= 0) ::close(control_fd_);
         if(interrupt_fd_ >= 0) ::close(interrupt_fd_);
         
-        address = std::move(other.address_); 
+        address_ = std::move(other.address_); 
         control_fd_ = other.control_fd_;    
         interrupt_fd_ = other.interrupt_fd_;
         other.control_fd_ = -1;
@@ -176,7 +176,6 @@ void BtL2capBackend::send_feature_set(std::span<const std::uint8_t> r) {
 std::optional<std::vector<std::uint8_t>> BtL2capBackend::read_feature_report() { 
     if (control_fd_ < 0) return std::nullopt;
 
-    // Sichert ab, dass der Socket während des Handshakes synchron blockiert (Anti-EAGAIN-Schutz)
     int flags = ::fcntl(control_fd_, F_GETFL, 0);
     if (flags >= 0) {
         ::fcntl(control_fd_, F_SETFL, flags & ~O_NONBLOCK);
@@ -185,7 +184,6 @@ std::optional<std::vector<std::uint8_t>> BtL2capBackend::read_feature_report() {
     std::vector<std::uint8_t> rx_buffer(65);
     ssize_t n = ::recv(control_fd_, rx_buffer.data(), rx_buffer.size(), MSG_NOSIGNAL);
     
-    // Setzt den Socket sofort wieder in den asynchronen Zustand für den Multiplexer zurück
     if (flags >= 0) {
         ::fcntl(control_fd_, F_SETFL, flags);
     }
@@ -209,14 +207,12 @@ std::optional<std::vector<std::uint8_t>> BtL2capBackend::read_feature_report() {
         mac_bytes[idx++] = static_cast<std::uint8_t>(std::stoul(byte_str, nullptr, 16));
     }
 
-    // KORREKTUR: Spiegelt die Big-Endian-MAC aus dem Log-String (z.B. 88:03:4C...) 
-    // wieder korrekt ins native Little-Endian Raster für die Controller-Hardware
-    fake_report[5]  = mac_bytes[5]; // LSB (z.B. 64) kommt auf Index 5
+    fake_report[5]  = mac_bytes[5]; 
     fake_report[6]  = mac_bytes[4];
     fake_report[7]  = mac_bytes[3];
     fake_report[8]  = mac_bytes[2];
     fake_report[9]  = mac_bytes[1];
-    fake_report[10] = mac_bytes[0]; // MSB (z.B. 88) kommt auf Index 10
+    fake_report[10] = mac_bytes[0];
     
     fake_report[11] = 0x05; 
     fake_report[12] = 0xE6;
