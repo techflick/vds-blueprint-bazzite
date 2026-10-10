@@ -35,7 +35,6 @@ static UniqueFd create_ipc_listener(const char *name) {
     struct sockaddr_un un_addr;
     setup_abstract_un(un_addr, name);
     
-    // Invariante: Bei bind() des Listeners gilt exakt offsetof + 4 Bytes (1 Byte \0 + 3 Bytes Name)
     socklen_t actual_len = offsetof(struct sockaddr_un, sun_path) + 4;
     
     if (::bind(fd, reinterpret_cast<const struct sockaddr*>(&un_addr), actual_len) < 0) {
@@ -52,19 +51,14 @@ static UniqueFd create_ipc_listener(const char *name) {
     return UniqueFd(fd);
 }
 
-// INVARIANTE: Extrahiert die MAC-Adresse nun aus dem Payload-Header des Client-Descriptors
 static std::string extract_dynamic_mac_from_payload(int client_fd) {
     std::uint8_t mac_bytes[6] = {0};
     
-    // Da der Proxy die MAC synchron sendet, bevor er auf NONBLOCK schaltet,
-    // lesen wir hier exakt 6 Bytes blockierend aus dem Stream.
-    // Dazu temporaer NONBLOCK fuer diesen Lese-Schritt deaktivieren.
     int flags = ::fcntl(client_fd, F_GETFL, 0);
     ::fcntl(client_fd, F_SETFL, flags & ~O_NONBLOCK);
     
     ssize_t n = ::recv(client_fd, mac_bytes, 6, MSG_WAITALL | MSG_NOSIGNAL);
     
-    // NONBLOCK-Zustand sofort wiederherstellen
     ::fcntl(client_fd, F_SETFL, flags);
 
     if (n != 6) {
@@ -73,10 +67,11 @@ static std::string extract_dynamic_mac_from_payload(int client_fd) {
         return "00:00:00:00:00:00";
     }
 
+    // KORREKTUR: Rückwärts auslesen (Little-Endian des Kernels in Big-Endian des Daemons drehen)
     std::stringstream ss;
-    for (size_t i = 0; i < 6; ++i) {
+    for (int i = 5; i >= 0; --i) {
         ss << std::hex << std::setw(2) << std::setfill('0') << std::uppercase << static_cast<int>(mac_bytes[i]);
-        if (i < 5) ss << ":";
+        if (i > 0) ss << ":";
     }
     return ss.str();
 }
@@ -152,7 +147,6 @@ BtL2capBackend &BtL2capBackend::operator=(BtL2capBackend &&other) noexcept {
         if(control_fd_ >= 0) ::close(control_fd_);
         if(interrupt_fd_ >= 0) ::close(interrupt_fd_);
         
-        // Type-Safety Invariante: Variablen-Member strikt von Gettern trennen
         address_ = std::move(other.address_); 
         control_fd_ = other.control_fd_;    
         interrupt_fd_ = other.interrupt_fd_;
@@ -183,7 +177,6 @@ void BtL2capBackend::send_feature_set(std::span<const std::uint8_t> r) {
 std::optional<std::vector<std::uint8_t>> BtL2capBackend::read_feature_report() { 
     if (control_fd_ < 0) return std::nullopt;
 
-    // INVARIANTE: Synchron/blockierend auf das Handshake-Paket warten (Kein MSG_DONTWAIT)
     std::vector<std::uint8_t> rx_buffer(65);
     ssize_t n = ::recv(control_fd_, rx_buffer.data(), rx_buffer.size(), MSG_NOSIGNAL);
     if (n <= 0) {
@@ -194,11 +187,9 @@ std::optional<std::vector<std::uint8_t>> BtL2capBackend::read_feature_report() {
 
     std::vector<std::uint8_t> fake_report(65, 0x00);
     
-    // HID-Header-Shift Alignment
-    fake_report[0] = 0xA3; // DATA | FEATURE
-    fake_report[1] = 0x05; // Report ID rueckt auf Byte 1
+    fake_report[0] = 0xA3; 
+    fake_report[1] = 0x05; 
     
-    // MAC-Adresse parsen (Format: XX:XX:XX:XX:XX:XX)
     std::uint8_t mac_bytes[6] = {0};
     std::stringstream ss(address_);
     std::string byte_str;
@@ -207,7 +198,7 @@ std::optional<std::vector<std::uint8_t>> BtL2capBackend::read_feature_report() {
         mac_bytes[idx++] = static_cast<std::uint8_t>(std::stoul(byte_str, nullptr, 16));
     }
 
-    // INVARIANTE: Durch den Header-Shift verschiebt sich das Little-Endian-Spiegelraster strikt auf Indizes 5 bis 10
+    // Spiegelt die nun korrekte Big-Endian-Adresse sauber rückwärts ins Little-Endian Raster
     fake_report[5] = mac_bytes[5];
     fake_report[6] = mac_bytes[4];
     fake_report[7] = mac_bytes[3];
@@ -215,7 +206,6 @@ std::optional<std::vector<std::uint8_t>> BtL2capBackend::read_feature_report() {
     fake_report[9] = mac_bytes[1];
     fake_report[10] = mac_bytes[0];
     
-    // Restliche native Controller Firmware & Vendor-Flags (um exakt 1 Byte verschoben)
     fake_report[11] = 0x05; 
     fake_report[12] = 0xE6;
     fake_report[13] = 0x0C;
@@ -223,7 +213,6 @@ std::optional<std::vector<std::uint8_t>> BtL2capBackend::read_feature_report() {
     fake_report[15] = 0x00;
     fake_report[16] = 0x24; 
     
-    // Unbestechliches fflush nach Setup erzwingen
     fflush(stderr);
     return fake_report;
 }
@@ -241,7 +230,6 @@ std::optional<std::vector<std::uint8_t>> BtL2capBackend::read_interrupt_packet()
     }
     
     if (n == 0) {
-        // INVARIANTE: Symmetrischer Zero-Length & PEEK-Schutz gegen Pipeline Race-Conditions
         std::uint8_t peek_dummy;
         ssize_t peek_n = ::recv(interrupt_fd_, &peek_dummy, 1, MSG_PEEK | MSG_DONTWAIT | MSG_NOSIGNAL);
         if (peek_n == 0) {
@@ -249,7 +237,6 @@ std::optional<std::vector<std::uint8_t>> BtL2capBackend::read_interrupt_packet()
             fflush(stderr);
             return std::nullopt; 
         }
-        // Offene, aber leere asynchrone Iteration ueberspringen ohne zu schliessen
         return std::nullopt; 
     }
     
