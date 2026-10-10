@@ -35,7 +35,7 @@ static UniqueFd create_ipc_listener(const char *name) {
     struct sockaddr_un un_addr;
     setup_abstract_un(un_addr, name);
     
-    // Invariante: Bei bind() des Listeners gilt exakt offsetof + 4 Bytes
+    // Invariante: Bei bind() des Listeners gilt exakt offsetof + 4 Bytes (1 Byte \0 + 3 Bytes Name)
     socklen_t actual_len = offsetof(struct sockaddr_un, sun_path) + 4;
     
     if (::bind(fd, reinterpret_cast<const struct sockaddr*>(&un_addr), actual_len) < 0) {
@@ -52,33 +52,33 @@ static UniqueFd create_ipc_listener(const char *name) {
     return UniqueFd(fd);
 }
 
-static std::string extract_dynamic_mac(const struct sockaddr_un &peer, socklen_t len) {
-    if (len <= offsetof(struct sockaddr_un, sun_path)) {
-        fprintf(stderr, "vDS-CORE: ERROR - Keine Pfaddaten im Socket-Payload vorhanden!\n");
+// INVARIANTE: Extrahiert die MAC-Adresse nun aus dem Payload-Header des Client-Descriptors
+static std::string extract_dynamic_mac_from_payload(int client_fd) {
+    std::uint8_t mac_bytes[6] = {0};
+    
+    // Da der Proxy die MAC synchron sendet, bevor er auf NONBLOCK schaltet,
+    // lesen wir hier exakt 6 Bytes blockierend aus dem Stream.
+    // Dazu temporaer NONBLOCK fuer diesen Lese-Schritt deaktivieren.
+    int flags = ::fcntl(client_fd, F_GETFL, 0);
+    ::fcntl(client_fd, F_SETFL, flags & ~O_NONBLOCK);
+    
+    ssize_t n = ::recv(client_fd, mac_bytes, 6, MSG_WAITALL | MSG_NOSIGNAL);
+    
+    // NONBLOCK-Zustand sofort wiederherstellen
+    ::fcntl(client_fd, F_SETFL, flags);
+
+    if (n != 6) {
+        fprintf(stderr, "vDS-CORE: ERROR - Proxy hat das Payload-Namensschema verletzt (Keine 6 Bytes MAC)!\n");
         fflush(stderr);
         return "00:00:00:00:00:00";
     }
 
-    size_t path_len = len - offsetof(struct sockaddr_un, sun_path);
-    
-    // Invariante: Tolerante Prüfung ab 15 Bytes fängt ungenaue Kernel-Längenpaddings ab
-    if (path_len >= 15) {
-        // Überspringe \0 und Präfix ("v_c_"), lese die 12 Hex-Zeichen ab Index 4 ein
-        std::string raw_hex(&peer.sun_path[4], 12);
-        
-        std::stringstream ss;
-        for (size_t i = 0; i < 12; i += 2) {
-            if (i + 1 < raw_hex.length()) {
-                ss << raw_hex.substr(i, 2);
-                if (i < 10) ss << ":";
-            }
-        }
-        return ss.str();
+    std::stringstream ss;
+    for (size_t i = 0; i < 6; ++i) {
+        ss << std::hex << std::setw(2) << std::setfill('0') << std::uppercase << static_cast<int>(mac_bytes[i]);
+        if (i < 5) ss << ":";
     }
-
-    fprintf(stderr, "vDS-CORE: ERROR - Proxy hat das Namensschema verletzt. Pfad-Laenge war %zu Bytes!\n", path_len);
-    fflush(stderr);
-    return "00:00:00:00:00:00"; 
+    return ss.str();
 }
 
 BtL2capAcceptor::BtL2capAcceptor() 
@@ -101,7 +101,7 @@ std::optional<BtAcceptedChannel> BtL2capAcceptor::accept_control() {
         return std::nullopt;
     }
     
-    std::string mac = extract_dynamic_mac(peer, len);
+    std::string mac = extract_dynamic_mac_from_payload(fd);
     fprintf(stderr, "vDS-CORE: Control-Kanal erfolgreich extrahiert. Controller-MAC: %s\n", mac.c_str());
     fflush(stderr);
     
@@ -124,7 +124,7 @@ std::optional<BtAcceptedChannel> BtL2capAcceptor::accept_interrupt() {
         return std::nullopt;
     }
     
-    std::string mac = extract_dynamic_mac(peer, len);
+    std::string mac = extract_dynamic_mac_from_payload(fd);
     fprintf(stderr, "vDS-CORE: Interrupt-Kanal erfolgreich extrahiert. Controller-MAC: %s\n", mac.c_str());
     fflush(stderr);
     
@@ -196,7 +196,7 @@ std::optional<std::vector<std::uint8_t>> BtL2capBackend::read_feature_report() {
     
     // HID-Header-Shift Alignment
     fake_report[0] = 0xA3; // DATA | FEATURE
-    fake_report[1] = 0x05; // Report ID rückt auf Byte 1
+    fake_report[1] = 0x05; // Report ID rueckt auf Byte 1
     
     // MAC-Adresse parsen (Format: XX:XX:XX:XX:XX:XX)
     std::uint8_t mac_bytes[6] = {0};
@@ -249,7 +249,7 @@ std::optional<std::vector<std::uint8_t>> BtL2capBackend::read_interrupt_packet()
             fflush(stderr);
             return std::nullopt; 
         }
-        // Offene, aber leere asynchrone Iteration überspringen ohne zu schließen
+        // Offene, aber leere asynchrone Iteration ueberspringen ohne zu schliessen
         return std::nullopt; 
     }
     
