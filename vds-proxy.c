@@ -139,7 +139,7 @@ int main(void) {
             if (errno == EINTR) continue;
             break;
         }
-
+        
         if (fds[IDX_SRV_CTRL].fd >= 0 && (fds[IDX_SRV_CTRL].revents & POLLIN)) {
             struct custom_sockaddr_l2 saddr;
             socklen_t slen = sizeof(saddr);
@@ -247,6 +247,8 @@ int main(void) {
         continue;
 
     shutdown_control:
+        fprintf(stderr, "vDS-Proxy: DIAGNOSE [Control] - revents CLI: 0x%X, VDSD: 0x%X | Letzte errno: %d (%s)\n", 
+                fds[IDX_CLI_CTRL].revents, fds[IDX_VDSD_CTRL].revents, errno, strerror(errno));
         printf("vDS-Proxy: Control-Pipeline getrennt.\n");
         if (client_ctrl >= 0) close(client_ctrl);
         if (vdsd_ctrl >= 0) close(vdsd_ctrl);
@@ -254,6 +256,8 @@ int main(void) {
         continue;
 
     shutdown_interrupt:
+        fprintf(stderr, "vDS-Proxy: DIAGNOSE [Interrupt] - revents CLI: 0x%X, VDSD: 0x%X | Letzte errno: %d (%s)\n", 
+                fds[IDX_CLI_INTR].revents, fds[IDX_VDSD_INTR].revents, errno, strerror(errno));
         printf("vDS-Proxy: Interrupt-Pipeline getrennt.\n");
         if (client_intr >= 0) close(client_intr);
         if (vdsd_intr >= 0) close(vdsd_intr);
