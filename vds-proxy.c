@@ -181,6 +181,9 @@ int main(void) {
         if (client_intr >= 0 && (fds[IDX_CLI_INTR].revents & (POLLERR | POLLNVAL))) goto shutdown_interrupt;
         if (vdsd_intr >= 0   && (fds[IDX_VDSD_INTR].revents & (POLLERR | POLLNVAL))) goto shutdown_interrupt;
 
+        // ==========================================
+        // 1. CLIENT CONTROL -> VDSD CONTROL
+        // ==========================================
         if (client_ctrl >= 0 && (fds[IDX_CLI_CTRL].revents & POLLIN)) {
             ssize_t len = recv(client_ctrl, heap_buffer, 1024, MSG_DONTWAIT | MSG_NOSIGNAL);
             if (len > 0) {
@@ -198,13 +201,20 @@ int main(void) {
                 if (vdsd_ctrl >= 0) send(vdsd_ctrl, heap_buffer, len, MSG_DONTWAIT | MSG_NOSIGNAL);
             } else if (len == 0) {
                 char test_ch;
+                // STRIKTE INVARIANTE: PEEK-Schutz prüft, ob die Leitung wirklich tot ist
                 ssize_t check = recv(client_ctrl, &test_ch, 1, MSG_PEEK | MSG_DONTWAIT | MSG_NOSIGNAL);
-                if (check == 0 && (fds[IDX_CLI_CTRL].revents & POLLHUP)) goto shutdown_control;
+                // Nur trennen, wenn der Puffer wirklich leer ist UND der Kernel reines HUP (ohne verbleibendes IN) meldet
+                if (check == 0 && (fds[IDX_CLI_CTRL].revents & POLLHUP) && !(fds[IDX_CLI_CTRL].revents & POLLIN)) {
+                    goto shutdown_control;
+                }
             } else if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
                 goto shutdown_control; 
             }
         }
 
+        // ==========================================
+        // 2. VDSD CONTROL -> CLIENT CONTROL
+        // ==========================================
         if (vdsd_ctrl >= 0 && (fds[IDX_VDSD_CTRL].revents & POLLIN)) {
             ssize_t len = recv(vdsd_ctrl, heap_buffer, 1024, MSG_DONTWAIT | MSG_NOSIGNAL);
             if (len > 0) {
@@ -212,12 +222,18 @@ int main(void) {
             } else if (len == 0) {
                 char test_ch;
                 ssize_t check = recv(vdsd_ctrl, &test_ch, 1, MSG_PEEK | MSG_DONTWAIT | MSG_NOSIGNAL);
-                if (check == 0 && (fds[IDX_VDSD_CTRL].revents & POLLHUP)) goto shutdown_control;
+                // Verhindert den verfrühten Abbruch bei Kernel-Padding (0x11)
+                if (check == 0 && (fds[IDX_VDSD_CTRL].revents & POLLHUP) && !(fds[IDX_VDSD_CTRL].revents & POLLIN)) {
+                    goto shutdown_control;
+                }
             } else if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
                 goto shutdown_control; 
             }
         }
 
+        // ==========================================
+        // 3. CLIENT INTERRUPT -> VDSD INTERRUPT
+        // ==========================================
         if (client_intr >= 0 && (fds[IDX_CLI_INTR].revents & POLLIN)) {
             ssize_t len = recv(client_intr, heap_buffer, 1024, MSG_DONTWAIT | MSG_NOSIGNAL);
             if (len > 0) {
@@ -225,12 +241,17 @@ int main(void) {
             } else if (len == 0) {
                 char test_ch;
                 ssize_t check = recv(client_intr, &test_ch, 1, MSG_PEEK | MSG_DONTWAIT | MSG_NOSIGNAL);
-                if (check == 0 && (fds[IDX_CLI_INTR].revents & POLLHUP)) goto shutdown_interrupt;
+                if (check == 0 && (fds[IDX_CLI_INTR].revents & POLLHUP) && !(fds[IDX_CLI_INTR].revents & POLLIN)) {
+                    goto shutdown_interrupt;
+                }
             } else if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
                 goto shutdown_interrupt;
             }
         }
 
+        // ==========================================
+        // 4. VDSD INTERRUPT -> CLIENT INTERRUPT
+        // ==========================================
         if (vdsd_intr >= 0 && (fds[IDX_VDSD_INTR].revents & POLLIN)) {
             ssize_t len = recv(vdsd_intr, heap_buffer, 1024, MSG_DONTWAIT | MSG_NOSIGNAL);
             if (len > 0) {
@@ -238,7 +259,9 @@ int main(void) {
             } else if (len == 0) {
                 char test_ch;
                 ssize_t check = recv(vdsd_intr, &test_ch, 1, MSG_PEEK | MSG_DONTWAIT | MSG_NOSIGNAL);
-                if (check == 0 && (fds[IDX_VDSD_INTR].revents & POLLHUP)) goto shutdown_interrupt;
+                if (check == 0 && (fds[IDX_VDSD_INTR].revents & POLLHUP) && !(fds[IDX_VDSD_INTR].revents & POLLIN)) {
+                    goto shutdown_interrupt;
+                }
             } else if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
                 goto shutdown_interrupt;
             }
