@@ -188,7 +188,7 @@ int main(void) {
             } else if (len == 0) {
                 char test_ch;
                 ssize_t check = recv(client_ctrl, &test_ch, 1, MSG_PEEK | MSG_DONTWAIT | MSG_NOSIGNAL);
-                if (check == 0) goto shutdown_control;
+                if (check == 0 && (fds[IDX_CLI_CTRL].revents & POLLHUP)) goto shutdown_control;
             } else if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
                 goto shutdown_control; 
             }
@@ -201,7 +201,7 @@ int main(void) {
             } else if (len == 0) {
                 char test_ch;
                 ssize_t check = recv(vdsd_ctrl, &test_ch, 1, MSG_PEEK | MSG_DONTWAIT | MSG_NOSIGNAL);
-                if (check == 0) goto shutdown_control;
+                if (check == 0 && (fds[IDX_VDSD_CTRL].revents & POLLHUP)) goto shutdown_control;
             } else if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
                 goto shutdown_control; 
             }
@@ -214,7 +214,7 @@ int main(void) {
             } else if (len == 0) {
                 char test_ch;
                 ssize_t check = recv(client_intr, &test_ch, 1, MSG_PEEK | MSG_DONTWAIT | MSG_NOSIGNAL);
-                if (check == 0) goto shutdown_interrupt;
+                if (check == 0 && (fds[IDX_CLI_INTR].revents & POLLHUP)) goto shutdown_interrupt;
             } else if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
                 goto shutdown_interrupt;
             }
@@ -227,7 +227,7 @@ int main(void) {
             } else if (len == 0) {
                 char test_ch;
                 ssize_t check = recv(vdsd_intr, &test_ch, 1, MSG_PEEK | MSG_DONTWAIT | MSG_NOSIGNAL);
-                if (check == 0) goto shutdown_interrupt;
+                if (check == 0 && (fds[IDX_VDSD_INTR].revents & POLLHUP)) goto shutdown_interrupt;
             } else if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
                 goto shutdown_interrupt;
             }
