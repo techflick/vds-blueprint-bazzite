@@ -7,7 +7,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-// ◼ C++ STANDARD-HEADER FÜR DIE VOM COMPILER VERMISSTEN TYPEN
 #include <cstdint>
 #include <cstring>
 #include <cstddef>
@@ -19,6 +18,8 @@
 #include <optional>
 #include <span>
 
+// ◼ FIX: Diese Klassen und Hilfs-Strukturen müssen zwingend global oder 
+// typengleich mit dem vds_bt.hh Header übereinstimmen.
 struct UniqueFd {
     int fd;
     UniqueFd() : fd(-1) {}
@@ -33,6 +34,8 @@ struct BtAcceptedChannel {
     UniqueFd fd;
 };
 
+// ◼ LINKER-FIX: Vorwärtsdeklaration muss sich außerhalb oder innerhalb 
+// entsprechend der Definition im Projekt befinden (hier global deklariert)
 extern std::optional<std::vector<std::uint8_t>> bt_feature_to_usb_feature_reply(std::span<const std::uint8_t> data);
 
 namespace vds {
@@ -40,7 +43,7 @@ namespace vds {
 static void setup_abstract_un(struct sockaddr_un &addr, const char *name) {
     ::memset(&addr, 0, sizeof(struct sockaddr_un));
     addr.sun_family = AF_UNIX;
-    addr.sun_path[0] = '\0';
+    addr.sun_path = '\0';
     ::memcpy(addr.sun_path + 1, name, ::strlen(name));
 }
 
@@ -74,7 +77,7 @@ static UniqueFd create_ipc_listener(const char *name) {
 }
 
 static std::string extract_dynamic_mac_from_payload(int client_fd) {
-    std::uint8_t mac_bytes[6] = {0}; // ◼ TYP-FIX & ARRAY-SYNTAX KORRIGIERT
+    std::uint8_t mac_bytes[6] = {0};
     
     int flags = ::fcntl(client_fd, F_GETFL, 0);
     ::fcntl(client_fd, F_SETFL, flags & ~O_NONBLOCK);
@@ -96,6 +99,9 @@ static std::string extract_dynamic_mac_from_payload(int client_fd) {
     }
     return ss.str();
 }
+
+// ◼ NAMESPACE-FIX: Die Klassen-Implementierungen müssen zwingend 
+// innerhalb des Namespaces vds liegen, damit der Linker die Symbole auflösen kann!
 
 class BtL2capAcceptor {
     UniqueFd control_listener_fd_;
@@ -159,8 +165,7 @@ public:
 };
 
 BtL2capBackend::BtL2capBackend(std::string addr, UniqueFd c, UniqueFd i) 
-    : address_(addr), control_fd_(c.release()), interrupt_fd_(i.release()) {
-    // ◼ COMPILER-FIX: Aufruf in den globalen POSIX-Namespace verschoben (ohne std::)
+    : address_(std::move(addr)), control_fd_(c.release()), interrupt_fd_(i.release()) {
     ::signal(SIGPIPE, SIG_IGN);
 }
 
@@ -199,7 +204,7 @@ bool BtL2capBackend::try_send_output_report(std::span<const std::uint8_t> r) {
 
 void BtL2capBackend::send_feature_get(std::uint8_t id) {
     if (control_fd_ >= 0) {
-        std::uint8_t cmd[2] = {0x43, id}; // ◼ SYNTAX-FIX: Als echtes C-Array deklariert
+        std::uint8_t cmd[2] = {0x43, id}; 
         ::send(control_fd_, cmd, 2, MSG_NOSIGNAL);
     }
 }
@@ -235,10 +240,11 @@ std::optional<std::vector<std::uint8_t>> BtL2capBackend::read_feature_report() {
 
     rx_buffer.resize(n);
 
+    // ◼ LINKER-FIX: Expliziter Aufruf der externen globalen Konvertierungsfunktion
     if (rx_buffer.size() > 1 && rx_buffer[0] == 0xA3) {
-        return bt_feature_to_usb_feature_reply(std::span(rx_buffer.data() + 1, rx_buffer.size() - 1));
+        return ::bt_feature_to_usb_feature_reply(std::span<const std::uint8_t>(rx_buffer.data() + 1, rx_buffer.size() - 1));
     }
-    return bt_feature_to_usb_feature_reply(std::span(rx_buffer.data(), rx_buffer.size()));
+    return ::bt_feature_to_usb_feature_reply(std::span<const std::uint8_t>(rx_buffer.data(), rx_buffer.size()));
 }
 
 std::optional<std::vector<std::uint8_t>> BtL2capBackend::read_interrupt_packet() {
