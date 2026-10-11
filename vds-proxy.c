@@ -5,6 +5,7 @@
 #include <sys/poll.h>
 #include <sys/socket.h>
 #include <sys/un.h>
+#include <arpa/inet.h>
 #include <unistd.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -69,18 +70,18 @@ int open_bt_server_link(uint16_t psm) {
 }
 
 int connect_unix_pipe(const char *pipe_name, const uint8_t *mac_bytes) {
-    int sock = socket(AF_UNIX, SOCK_SEQPACKET, 0); // Synchroner Connect ohne Flags
+    // GEÄNDERT: SOCK_STREAM sorgt für zuverlässigen, unterbrechungsfreien Bytestrom
+    int sock = socket(AF_UNIX, SOCK_STREAM, 0); 
     if (sock < 0) return -1;
     
     struct sockaddr_un addr;
     memset(&addr, 0, sizeof(struct sockaddr_un));
     addr.sun_family = AF_UNIX;
-    addr.sun_path[0] = '\0'; // Abstraktes Namespace-Präfix
+    addr.sun_path[0] = '\0'; 
     
     size_t name_len = strlen(pipe_name);
     memcpy(&addr.sun_path[1], pipe_name, name_len);
     
-    // Kernel-Längenformel exakt einhalten
     socklen_t len = offsetof(struct sockaddr_un, sun_path) + 1 + name_len;
     
     if (connect(sock, (struct sockaddr *)&addr, len) < 0) {
@@ -98,6 +99,35 @@ int connect_unix_pipe(const char *pipe_name, const uint8_t *mac_bytes) {
         return -1;
     }
     return sock;
+}
+
+// Hilfsfunktion zum Lesen aus dem Stream-Socket mit transparentem 2-Byte-Präfix
+ssize_t recv_stream_packet(int stream_fd, uint8_t *out_buf, size_t max_len) {
+    uint16_t len_be;
+    // 1. Prüfen, ob der 2-Byte-Header vollständig im Kernel-Puffer liegt
+    ssize_t n = recv(stream_fd, &len_be, 2, MSG_PEEK | MSG_DONTWAIT | MSG_NOSIGNAL);
+    if (n < 2) return (n == 0) ? 0 : -1; 
+
+    uint16_t packet_len = ntohs(len_be);
+    if (packet_len > max_len) return -1; 
+
+    // 2. Prüfen, ob das gesamte Paket (Header + Payload) angekommen ist
+    n = recv(stream_fd, out_buf, 2 + packet_len, MSG_PEEK | MSG_DONTWAIT | MSG_NOSIGNAL);
+    if (n < (2 + packet_len)) return -1; 
+
+    // 3. Paket final aus der Kernel-Queue konsumieren
+    recv(stream_fd, out_buf, 2 + packet_len, MSG_DONTWAIT | MSG_NOSIGNAL);
+    
+    // Header entfernen: Payload an den Pufferanfang verschieben
+    memmove(out_buf, out_buf + 2, packet_len);
+    return packet_len;
+}
+
+// Hilfsfunktion zum Senden in den Stream-Socket mit vorangestelltem 2-Byte-Header
+ssize_t send_stream_packet(int stream_fd, const uint8_t *payload, size_t len) {
+    uint16_t len_be = htons((uint16_t)len);
+    if (send(stream_fd, &len_be, 2, MSG_DONTWAIT | MSG_NOSIGNAL) != 2) return -1;
+    return send(stream_fd, payload, len, MSG_DONTWAIT | MSG_NOSIGNAL);
 }
 
 int main(void) {
@@ -183,7 +213,7 @@ int main(void) {
             }
         }
 
-        // Fehler-Evaluierung
+        // Fehler-Evaluierung (FD-Filter-Gate)
         if (client_ctrl >= 0 && fds[IDX_CLI_CTRL].fd >= 0 && (fds[IDX_CLI_CTRL].revents & (POLLERR | POLLNVAL))) goto shutdown_control;
         if (vdsd_ctrl >= 0   && fds[IDX_VDSD_CTRL].fd >= 0 && (fds[IDX_VDSD_CTRL].revents & (POLLERR | POLLNVAL))) goto shutdown_control;
         if (client_intr >= 0 && fds[IDX_CLI_INTR].fd >= 0 && (fds[IDX_CLI_INTR].revents & (POLLERR | POLLNVAL))) goto shutdown_interrupt;
@@ -193,6 +223,7 @@ int main(void) {
         if (client_ctrl >= 0 && fds[IDX_CLI_CTRL].fd >= 0) {
             short rev = fds[IDX_CLI_CTRL].revents;
             if (rev & POLLIN) {
+                // Bluetooth liefert native Pakete -> normales recv
                 ssize_t len = recv(client_ctrl, heap_buffer, 1024, MSG_DONTWAIT | MSG_NOSIGNAL);
                 if (len > 0) {
                     uint8_t *ptr = (uint8_t *)heap_buffer;
@@ -206,7 +237,7 @@ int main(void) {
                             if (!ds4_logged) { printf("vDS-Proxy: HIERARCHIE-DETEKTION - DualShock Hardware erkannt (Len: %ld).\n", len); ds4_logged = 1; }
                         }
                     }
-                    if (vdsd_ctrl >= 0) send(vdsd_ctrl, heap_buffer, len, MSG_DONTWAIT | MSG_NOSIGNAL);
+                    if (vdsd_ctrl >= 0) send_stream_packet(vdsd_ctrl, heap_buffer, len);
                 } else if (len == 0 || (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK)) {
                     goto shutdown_control;
                 }
@@ -220,18 +251,17 @@ int main(void) {
         if (vdsd_ctrl >= 0 && fds[IDX_VDSD_CTRL].fd >= 0) {
             short rev = fds[IDX_VDSD_CTRL].revents;
             if (rev & POLLIN) {
-                ssize_t len = recv(vdsd_ctrl, heap_buffer, 1024, MSG_DONTWAIT | MSG_NOSIGNAL);
+                // GEÄNDERT: Nutzung des Stream-Paket-Parsers für die UNIX-Pipe
+                ssize_t len = recv_stream_packet(vdsd_ctrl, heap_buffer, 1024);
                 if (len > 0) {
                     if (client_ctrl >= 0) send(client_ctrl, heap_buffer, len, MSG_DONTWAIT | MSG_NOSIGNAL);
                 } else if (len == 0) {
-                    if (client_ctrl < 0) goto shutdown_control;
-                } else if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
                     goto shutdown_control; 
                 }
             }
             if ((rev & POLLHUP) && !(rev & POLLIN)) {
                 char test_ch;
-                if (recv(vdsd_ctrl, &test_ch, 1, MSG_PEEK | MSG_DONTWAIT | MSG_NOSIGNAL) == 0 && client_ctrl < 0) goto shutdown_control;
+                if (recv(vdsd_ctrl, &test_ch, 1, MSG_PEEK | MSG_DONTWAIT | MSG_NOSIGNAL) == 0) goto shutdown_control;
             }
         }
 
@@ -241,7 +271,7 @@ int main(void) {
             if (rev & POLLIN) {
                 ssize_t len = recv(client_intr, heap_buffer, 1024, MSG_DONTWAIT | MSG_NOSIGNAL);
                 if (len > 0) {
-                    if (vdsd_intr >= 0) send(vdsd_intr, heap_buffer, len, MSG_DONTWAIT | MSG_NOSIGNAL);
+                    if (vdsd_intr >= 0) send_stream_packet(vdsd_intr, heap_buffer, len);
                 } else if (len == 0 || (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK)) {
                     goto shutdown_interrupt;
                 }
@@ -255,18 +285,17 @@ int main(void) {
         if (vdsd_intr >= 0 && fds[IDX_VDSD_INTR].fd >= 0) {
             short rev = fds[IDX_VDSD_INTR].revents;
             if (rev & POLLIN) {
-                ssize_t len = recv(vdsd_intr, heap_buffer, 1024, MSG_DONTWAIT | MSG_NOSIGNAL);
+                // GEÄNDERT: Nutzung des Stream-Paket-Parsers für die UNIX-Pipe
+                ssize_t len = recv_stream_packet(vdsd_intr, heap_buffer, 1024);
                 if (len > 0) {
                     if (client_intr >= 0) send(client_intr, heap_buffer, len, MSG_DONTWAIT | MSG_NOSIGNAL);
                 } else if (len == 0) {
-                    if (client_intr < 0) goto shutdown_interrupt;
-                } else if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
                     goto shutdown_interrupt;
                 }
             }
             if ((rev & POLLHUP) && !(rev & POLLIN)) {
                 char test_ch;
-                if (recv(vdsd_intr, &test_ch, 1, MSG_PEEK | MSG_DONTWAIT | MSG_NOSIGNAL) == 0 && client_intr < 0) goto shutdown_interrupt;
+                if (recv(vdsd_intr, &test_ch, 1, MSG_PEEK | MSG_DONTWAIT | MSG_NOSIGNAL) == 0) goto shutdown_interrupt;
             }
         }
         continue;
