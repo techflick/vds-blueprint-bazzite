@@ -74,6 +74,7 @@ static UniqueFd create_ipc_listener(const char *name) {
 static std::string extract_dynamic_mac_from_payload(int client_fd) {
     std::uint8_t mac_bytes[6] = {0};
     
+    // Die MAC-Adresse wird einmalig blockierend ausgelesen (Systemidentität)
     int flags = ::fcntl(client_fd, F_GETFL, 0);
     ::fcntl(client_fd, F_SETFL, flags & ~O_NONBLOCK);
     
@@ -177,7 +178,7 @@ BtL2capBackend &BtL2capBackend::operator=(BtL2capBackend &&other) noexcept {
         if(control_fd_ >= 0) ::close(control_fd_);
         if(interrupt_fd_ >= 0) ::close(interrupt_fd_);
         address_ = std::move(other.address_); 
-        control_fd_ = other.control_fd_;    
+        control_fd = other.control_fd_;    
         interrupt_fd_ = other.interrupt_fd_;
         other.control_fd_ = -1;
         other.interrupt_fd_ = -1;
@@ -207,26 +208,31 @@ void BtL2capBackend::send_feature_set(std::span<const std::uint8_t> r) {
     }
 }
 
+// ◼ FIX: VOLL-ASYNCHRONES EINLESEN OHNE BLOCKIERENDES FCNTL
 std::optional<std::vector<std::uint8_t>> BtL2capBackend::read_feature_report() { 
     if (control_fd_ < 0) return std::nullopt;
-    int flags = ::fcntl(control_fd_, F_GETFL, 0);
-    if (flags >= 0) ::fcntl(control_fd_, F_SETFL, flags & ~O_NONBLOCK);
 
     std::vector<std::uint8_t> rx_buffer(1024);
-    ssize_t n = ::recv(control_fd_, rx_buffer.data(), rx_buffer.size(), MSG_NOSIGNAL);
-    if (flags >= 0) ::fcntl(control_fd_, F_SETFL, flags);
+    // Nativer asynchroner Leseversuch über den Proxy-Tunnel
+    ssize_t n = ::recv(control_fd_, rx_buffer.data(), rx_buffer.size(), MSG_DONTWAIT | MSG_NOSIGNAL);
 
-    if (n <= 0) {
-        if (n == 0) {
-            std::uint8_t peek_dummy;
-            ssize_t peek_n = ::recv(control_fd_, &peek_dummy, 1, MSG_PEEK | MSG_DONTWAIT | MSG_NOSIGNAL);
-            if (peek_n == 0) {
-                fprintf(stderr, "vDS-CORE: Control-Pipeline physisch geschlossen (EOF).\n");
-                fflush(stderr);
-            }
+    if (n < 0) {
+        if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
+            return std::nullopt; // Wenn Puffer leer: direkt zurückgehen (Keine Blockade)
         }
         return std::nullopt; 
     }
+
+    if (n == 0) {
+        std::uint8_t peek_dummy;
+        ssize_t peek_n = ::recv(control_fd_, &peek_dummy, 1, MSG_PEEK | MSG_DONTWAIT | MSG_NOSIGNAL);
+        if (peek_n == 0) {
+            fprintf(stderr, "vDS-CORE: Control-Pipeline physisch geschlossen (EOF).\n");
+            fflush(stderr);
+        }
+        return std::nullopt; 
+    }
+
     rx_buffer.resize(n);
 
     if (rx_buffer.size() > 1 && rx_buffer[0] == 0xA3) {
@@ -237,11 +243,12 @@ std::optional<std::vector<std::uint8_t>> BtL2capBackend::read_feature_report() {
 
 std::optional<std::vector<std::uint8_t>> BtL2capBackend::read_interrupt_packet() {
     if (interrupt_fd_ < 0) return std::nullopt;
+
     std::vector<std::uint8_t> buf(1024);
     ssize_t n = ::recv(interrupt_fd_, buf.data(), buf.size(), MSG_DONTWAIT | MSG_NOSIGNAL);
     
     if (n < 0) {
-        if (errno == EAGAIN || errno == EWOULDBLOCK) return std::nullopt;
+        if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) return std::nullopt;
         return std::nullopt;
     }
     if (n == 0) {
