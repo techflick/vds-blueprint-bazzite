@@ -3,12 +3,14 @@
 #include <sys/un.h>
 #include <unistd.h>
 #include <fcntl.h>
-#include <string.h>
-#include <stdint.h>
-#include <errno.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
+
+// ◼ C++ STANDARD-HEADER FÜR DIE VOM COMPILER VERMISSTEN TYPEN
+#include <cstdint>
+#include <cstring>
+#include <cstddef>
 #include <stdexcept>
 #include <string>
 #include <sstream>
@@ -36,10 +38,10 @@ extern std::optional<std::vector<std::uint8_t>> bt_feature_to_usb_feature_reply(
 namespace vds {
 
 static void setup_abstract_un(struct sockaddr_un &addr, const char *name) {
-    std::memset(&addr, 0, sizeof(struct sockaddr_un));
+    ::memset(&addr, 0, sizeof(struct sockaddr_un));
     addr.sun_family = AF_UNIX;
     addr.sun_path[0] = '\0';
-    std::memcpy(addr.sun_path + 1, name, std::strlen(name));
+    ::memcpy(addr.sun_path + 1, name, ::strlen(name));
 }
 
 static UniqueFd create_ipc_listener(const char *name) {
@@ -55,10 +57,10 @@ static UniqueFd create_ipc_listener(const char *name) {
     struct sockaddr_un un_addr;
     setup_abstract_un(un_addr, name);
     
-    socklen_t actual_len = offsetof(struct sockaddr_un, sun_path) + 1 + std::strlen(name);
+    socklen_t actual_len = offsetof(struct sockaddr_un, sun_path) + 1 + ::strlen(name);
     
     if (::bind(fd, reinterpret_cast<const struct sockaddr*>(&un_addr), actual_len) < 0) {
-        fprintf(stderr, "vDS-CORE: FATAL - Bind fuer @%s failed: %s\n", name, std::strerror(errno));
+        fprintf(stderr, "vDS-CORE: FATAL - Bind fuer @%s failed: %s\n", name, ::strerror(errno));
         fflush(stderr);
         ::close(fd);
         throw std::runtime_error("IPC Bind Failed");
@@ -72,9 +74,8 @@ static UniqueFd create_ipc_listener(const char *name) {
 }
 
 static std::string extract_dynamic_mac_from_payload(int client_fd) {
-    std::uint8_t mac_bytes[6] = {0};
+    std::uint8_t mac_bytes[6] = {0}; // ◼ TYP-FIX & ARRAY-SYNTAX KORRIGIERT
     
-    // Die MAC-Adresse wird einmalig blockierend ausgelesen (Systemidentität)
     int flags = ::fcntl(client_fd, F_GETFL, 0);
     ::fcntl(client_fd, F_SETFL, flags & ~O_NONBLOCK);
     
@@ -112,7 +113,7 @@ BtL2capAcceptor::BtL2capAcceptor()
 std::optional<BtAcceptedChannel> BtL2capAcceptor::accept_control() {
     struct sockaddr_un peer;
     socklen_t len = sizeof(struct sockaddr_un);
-    std::memset(&peer, 0, sizeof(struct sockaddr_un));
+    ::memset(&peer, 0, sizeof(struct sockaddr_un));
 
     int fd = ::accept4(control_listener_fd_.get(), reinterpret_cast<struct sockaddr*>(&peer), &len, SOCK_NONBLOCK | SOCK_CLOEXEC);
     if (fd < 0) return std::nullopt;
@@ -127,7 +128,7 @@ std::optional<BtAcceptedChannel> BtL2capAcceptor::accept_control() {
 std::optional<BtAcceptedChannel> BtL2capAcceptor::accept_interrupt() {
     struct sockaddr_un peer;
     socklen_t len = sizeof(struct sockaddr_un);
-    std::memset(&peer, 0, sizeof(struct sockaddr_un));
+    ::memset(&peer, 0, sizeof(struct sockaddr_un));
 
     int fd = ::accept4(interrupt_listener_fd_.get(), reinterpret_cast<struct sockaddr*>(&peer), &len, SOCK_NONBLOCK | SOCK_CLOEXEC);
     if (fd < 0) return std::nullopt;
@@ -178,7 +179,7 @@ BtL2capBackend &BtL2capBackend::operator=(BtL2capBackend &&other) noexcept {
         if(control_fd_ >= 0) ::close(control_fd_);
         if(interrupt_fd_ >= 0) ::close(interrupt_fd_);
         address_ = std::move(other.address_); 
-        control_fd = other.control_fd_;    
+        control_fd_ = other.control_fd_;    
         interrupt_fd_ = other.interrupt_fd_;
         other.control_fd_ = -1;
         other.interrupt_fd_ = -1;
@@ -208,17 +209,15 @@ void BtL2capBackend::send_feature_set(std::span<const std::uint8_t> r) {
     }
 }
 
-// ◼ FIX: VOLL-ASYNCHRONES EINLESEN OHNE BLOCKIERENDES FCNTL
 std::optional<std::vector<std::uint8_t>> BtL2capBackend::read_feature_report() { 
     if (control_fd_ < 0) return std::nullopt;
 
     std::vector<std::uint8_t> rx_buffer(1024);
-    // Nativer asynchroner Leseversuch über den Proxy-Tunnel
     ssize_t n = ::recv(control_fd_, rx_buffer.data(), rx_buffer.size(), MSG_DONTWAIT | MSG_NOSIGNAL);
 
     if (n < 0) {
         if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
-            return std::nullopt; // Wenn Puffer leer: direkt zurückgehen (Keine Blockade)
+            return std::nullopt;
         }
         return std::nullopt; 
     }
