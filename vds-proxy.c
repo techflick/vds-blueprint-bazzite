@@ -73,32 +73,26 @@ int connect_unix_pipe(const char *pipe_name, const uint8_t *mac_bytes) {
     int sock = socket(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0);
     if (sock < 0) return -1;
     
-    // ◼ ABSTRAKTE PFADE: STRUCT VOR NUTZUNG PER MEMSET NULLEN
     struct sockaddr_un addr;
     memset(&addr, 0, sizeof(struct sockaddr_un));
     addr.sun_family = AF_UNIX;
     addr.sun_path[0] = '\0';
     
-    // ◼ PFADE OHNE \0-TERMINIERUNG KOPIEREN
     size_t name_len = strlen(pipe_name);
     memcpy(&addr.sun_path[1], pipe_name, name_len);
     
-    // ◼ KERNEL-LÄNGENFORMEL EXAKT ABGEBILDET
     socklen_t len = offsetof(struct sockaddr_un, sun_path) + 1 + name_len;
     
-    // ◼ VERBINDUNGSAUFBAU: ZWINGEND BLOCKIEREND (ANTI-EINPROGRESS)
     if (connect(sock, (struct sockaddr *)&addr, len) < 0) {
         close(sock);
         return -1;
     }
     
-    // ◼ IDENTITÄT: MAC-PAYLOAD SOFORT VERSENDEN (SIGNAL-SCHUTZ VIA MSG_NOSIGNAL)
     if (send(sock, mac_bytes, 6, MSG_NOSIGNAL) != 6) {
         close(sock);
         return -1;
     }
     
-    // ◼ ERST DANACH UND NACH VERSAND AUF NONBLOCK SETZEN
     if (set_nonblocking_fd(sock) < 0) {
         close(sock);
         return -1;
@@ -107,7 +101,6 @@ int connect_unix_pipe(const char *pipe_name, const uint8_t *mac_bytes) {
 }
 
 int main(void) {
-    // ◼ SIGNAL-SCHUTZ ERZWINGEN & SETUP DIAGNOSTIK
     signal(SIGPIPE, SIG_IGN);
     setvbuf(stdout, NULL, _IOLBF, 0);
     setvbuf(stderr, NULL, _IOLBF, 0);
@@ -129,7 +122,7 @@ int main(void) {
     if (!heap_buffer) return 1;
 
     printf("vDS-Proxy: Initialisierung erfolgreich. Warte auf DualSense-Controller...\n");
-    fflush(stderr); // ◼ FFLUSH NACH SETUP ERZWINGEN
+    fflush(stderr);
 
     struct pollfd fds[TOTAL_FDS];
 
@@ -142,7 +135,6 @@ int main(void) {
         fds[IDX_SRV_INTR].fd = (client_intr < 0) ? srv_intr : -1;
         fds[IDX_SRV_INTR].events = POLLIN;
 
-        // ◼ ENTKOPPELTE POLL-ZUWEISUNG (ANTI-0X11-BUG): NIEMALS POLLHUP GEGENUEBER KERNEL ANFORDERN
         fds[IDX_CLI_CTRL].fd  = client_ctrl;  fds[IDX_CLI_CTRL].events  = (client_ctrl >= 0)  ? POLLIN : 0;
         fds[IDX_VDSD_CTRL].fd = vdsd_ctrl;    fds[IDX_VDSD_CTRL].events = (vdsd_ctrl >= 0)    ? POLLIN : 0;
         fds[IDX_CLI_INTR].fd  = client_intr;  fds[IDX_CLI_INTR].events  = (client_intr >= 0)  ? POLLIN : 0;
@@ -154,16 +146,13 @@ int main(void) {
             break;
         }
 
-        // ◼ EINGEHENDE BLUETOOTH-VERBINDUNGEN ABFANGEN
         if (fds[IDX_SRV_CTRL].fd >= 0 && (fds[IDX_SRV_CTRL].revents & POLLIN)) {
             struct custom_sockaddr_l2 saddr;
             socklen_t slen = sizeof(saddr);
-            // ◼ EXTRAKTION VIA accept4 MIT NONBLOCK UND CLOEXEC
             int tmp = accept4(srv_ctrl, (struct sockaddr *)&saddr, &slen, SOCK_NONBLOCK | SOCK_CLOEXEC);
             if (tmp >= 0) {
                 client_ctrl = tmp;
                 printf("vDS-Proxy: Controller Control-Kanal aktiv abgefangen.\n");
-                
                 vdsd_ctrl = connect_unix_pipe("v_c", saddr.l2_bdaddr);
                 if (vdsd_ctrl >= 0) {
                     printf("vDS-Proxy: Control-Pipeline erfolgreich aktiv geschaltet.\n");
@@ -181,7 +170,6 @@ int main(void) {
             if (tmp >= 0) {
                 client_intr = tmp;
                 printf("vDS-Proxy: Controller Interrupt-Kanal aktiv abgefangen.\n");
-                
                 vdsd_intr = connect_unix_pipe("v_i", saddr.l2_bdaddr);
                 if (vdsd_intr >= 0) {
                     printf("vDS-Proxy: Interrupt-Pipeline erfolgreich aktiv geschaltet.\n");
@@ -192,13 +180,11 @@ int main(void) {
             }
         }
 
-        // ◼ STRIKTE FEHLER-INDIKATOREN (ABBRUCH NUR BEI ECHTEN HARDWARE-DEFEKTEN)
         if (client_ctrl >= 0 && (fds[IDX_CLI_CTRL].revents & (POLLERR | POLLNVAL))) goto shutdown_control;
         if (vdsd_ctrl >= 0   && (fds[IDX_VDSD_CTRL].revents & (POLLERR | POLLNVAL))) goto shutdown_control;
         if (client_intr >= 0 && (fds[IDX_CLI_INTR].revents & (POLLERR | POLLNVAL))) goto shutdown_interrupt;
         if (vdsd_intr >= 0   && (fds[IDX_VDSD_INTR].revents & (POLLERR | POLLNVAL))) goto shutdown_interrupt;
 
-        // ◼ CLIENT CONTROL PIPELINE (Echte L2CAP-Controller-Pakete lesen)
         if (client_ctrl >= 0) {
             short rev = fds[IDX_CLI_CTRL].revents;
             if (rev & POLLIN) {
@@ -222,23 +208,19 @@ int main(void) {
                     goto shutdown_control; 
                 }
             }
-            // ◼ WASSERDICHTER PEEK-SCHUTZ: Auswertung NUR wenn POLLHUP OHNE POLLIN anliegt (Anti-0x11-Bug)
             if ((rev & POLLHUP) && !(rev & POLLIN)) {
                 char test_ch;
-                if (recv(client_ctrl, &test_ch, 1, MSG_PEEK | MSG_DONTWAIT | MSG_NOSIGNAL) == 0) {
-                    goto shutdown_control;
-                }
+                if (recv(client_ctrl, &test_ch, 1, MSG_PEEK | MSG_DONTWAIT | MSG_NOSIGNAL) == 0) goto shutdown_control;
             }
         }
 
-        // ◼ VDSD CONTROL PIPELINE (Anti-0x11-Fix: Entkoppelter Lese- und HUP-Pfad)
         if (vdsd_ctrl >= 0) {
             short rev = fds[IDX_VDSD_CTRL].revents;
             if (rev & POLLIN) {
                 ssize_t len = recv(vdsd_ctrl, heap_buffer, 1024, MSG_DONTWAIT | MSG_NOSIGNAL);
                 if (len > 0) {
                     if (client_ctrl >= 0) send(client_ctrl, heap_buffer, len, MSG_DONTWAIT | MSG_NOSIGNAL);
-                } else if (len == 0) {
+                } else if (len == 0 && client_ctrl < 0) {
                     goto shutdown_control;
                 } else if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
                     goto shutdown_control; 
@@ -246,13 +228,10 @@ int main(void) {
             }
             if ((rev & POLLHUP) && !(rev & POLLIN)) {
                 char test_ch;
-                if (recv(vdsd_ctrl, &test_ch, 1, MSG_PEEK | MSG_DONTWAIT | MSG_NOSIGNAL) == 0) {
-                    goto shutdown_control;
-                }
+                if (recv(vdsd_ctrl, &test_ch, 1, MSG_PEEK | MSG_DONTWAIT | MSG_NOSIGNAL) == 0 && client_ctrl < 0) goto shutdown_control;
             }
         }
 
-        // ◼ CLIENT INTERRUPT PIPELINE
         if (client_intr >= 0) {
             short rev = fds[IDX_CLI_INTR].revents;
             if (rev & POLLIN) {
@@ -267,20 +246,17 @@ int main(void) {
             }
             if ((rev & POLLHUP) && !(rev & POLLIN)) {
                 char test_ch;
-                if (recv(client_intr, &test_ch, 1, MSG_PEEK | MSG_DONTWAIT | MSG_NOSIGNAL) == 0) {
-                    goto shutdown_interrupt;
-                }
+                if (recv(client_intr, &test_ch, 1, MSG_PEEK | MSG_DONTWAIT | MSG_NOSIGNAL) == 0) goto shutdown_interrupt;
             }
         }
 
-        // ◼ VDSD INTERRUPT PIPELINE
         if (vdsd_intr >= 0) {
             short rev = fds[IDX_VDSD_INTR].revents;
             if (rev & POLLIN) {
                 ssize_t len = recv(vdsd_intr, heap_buffer, 1024, MSG_DONTWAIT | MSG_NOSIGNAL);
                 if (len > 0) {
                     if (client_intr >= 0) send(client_intr, heap_buffer, len, MSG_DONTWAIT | MSG_NOSIGNAL);
-                } else if (len == 0) {
+                } else if (len == 0 && client_intr < 0) {
                     goto shutdown_interrupt;
                 } else if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
                     goto shutdown_interrupt;
@@ -288,35 +264,24 @@ int main(void) {
             }
             if ((rev & POLLHUP) && !(rev & POLLIN)) {
                 char test_ch;
-                if (recv(vdsd_intr, &test_ch, 1, MSG_PEEK | MSG_DONTWAIT | MSG_NOSIGNAL) == 0) {
-                    goto shutdown_interrupt;
-                }
+                if (recv(vdsd_intr, &test_ch, 1, MSG_PEEK | MSG_DONTWAIT | MSG_NOSIGNAL) == 0 && client_intr < 0) goto shutdown_interrupt;
             }
         }
-        
         continue;
 
     shutdown_control:
-        fprintf(stderr, "vDS-Proxy: DIAGNOSE [Control] - revents CLI: 0x%X, VDSD: 0x%X | Letzte errno: %d (%s)\n", 
-                fds[IDX_CLI_CTRL].revents, fds[IDX_VDSD_CTRL].revents, errno, strerror(errno));
-        printf("vDS-Proxy: Control-Pipeline getrennt.\n");
+        fprintf(stderr, "vDS-Proxy: DIAGNOSE [Control] - revents CLI: 0x%X, VDSD: 0x%X | Letzte errno: %d (%s)\n", fds[IDX_CLI_CTRL].revents, fds[IDX_VDSD_CTRL].revents, errno, strerror(errno));
         if (client_ctrl >= 0) close(client_ctrl);
         if (vdsd_ctrl >= 0) close(vdsd_ctrl);
         client_ctrl = -1; vdsd_ctrl = -1;
         continue;
 
     shutdown_interrupt:
-        fprintf(stderr, "vDS-Proxy: DIAGNOSE [Interrupt] - revents CLI: 0x%X, VDSD: 0x%X | Letzte errno: %d (%s)\n", 
-                fds[IDX_CLI_INTR].revents, fds[IDX_VDSD_INTR].revents, errno, strerror(errno));
-        printf("vDS-Proxy: Interrupt-Pipeline getrennt.\n");
+        fprintf(stderr, "vDS-Proxy: DIAGNOSE [Interrupt] - revents CLI: 0x%X, VDSD: 0x%X | Letzte errno: %d (%s)\n", fds[IDX_CLI_INTR].revents, fds[IDX_VDSD_INTR].revents, errno, strerror(errno));
         if (client_intr >= 0) close(client_intr);
         if (vdsd_intr >= 0) close(vdsd_intr);
         client_intr = -1; vdsd_intr = -1;
         continue;
     }
-
-    free(heap_buffer);
-    close(srv_ctrl);
-    close(srv_intr);
-    return 0;
+    free(heap_buffer); close(srv_ctrl); close(srv_intr); return 0;
 }
