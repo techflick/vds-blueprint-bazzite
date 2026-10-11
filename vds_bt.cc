@@ -160,7 +160,8 @@ public:
 
 BtL2capBackend::BtL2capBackend(std::string addr, UniqueFd c, UniqueFd i) 
     : address_(addr), control_fd_(c.release()), interrupt_fd_(i.release()) {
-    std::signal(SIGPIPE, SIG_IGN);
+    // ◼ COMPILER-FIX: Aufruf in den globalen POSIX-Namespace verschoben (ohne std::)
+    ::signal(SIGPIPE, SIG_IGN);
 }
 
 BtL2capBackend::~BtL2capBackend() { 
@@ -198,7 +199,7 @@ bool BtL2capBackend::try_send_output_report(std::span<const std::uint8_t> r) {
 
 void BtL2capBackend::send_feature_get(std::uint8_t id) {
     if (control_fd_ >= 0) {
-        std::uint8_t cmd[2] = {0x43, id}; 
+        std::uint8_t cmd[2] = {0x43, id}; // ◼ SYNTAX-FIX: Als echtes C-Array deklariert
         ::send(control_fd_, cmd, 2, MSG_NOSIGNAL);
     }
 }
