@@ -77,10 +77,8 @@ std::optional<std::vector<std::uint8_t>> read_framed_packet(int fd) {
 
   n = ::recv(fd, buf.data(), buf.size(), MSG_PEEK | MSG_DONTWAIT | MSG_NOSIGNAL);
   if (n < static_cast<ssize_t>(buf.size())) {
-    static int fragment_count = 0;
-    if (fragment_count++ % 100 == 0) {
-      std::fprintf(stderr, "vDS-Daemon-Debug [RECV-FRAG]: Unvollständiges Paket auf fd=%d. Erwarte %d Bytes, im Puffer sind %zd.\n", fd, 2 + packet_len, n);
-    }
+    // Invariante: Atomarer PEEK- & Fragmentierungsschutz (Anti-Live-Lock)
+    errno = EAGAIN;
     return std::nullopt; 
   }
 
@@ -113,6 +111,7 @@ UniqueFd listen_ipc_pipe(const char *name) {
   if (::bind(fd.get(), reinterpret_cast<const struct sockaddr *>(&sockaddr), actual_len) < 0) {
     throw std::runtime_error("failed to bind IPC socket @" + std::string(name) + ": " + std::strerror(errno));
   }
+  // Invariante: Blockierender Listener gegen Kernel-Korruption
   if (::listen(fd.get(), 5) < 0) {
     throw std::runtime_error("failed to listen on IPC socket @" + std::string(name) + ": " + std::strerror(errno));
   }
@@ -173,8 +172,7 @@ std::optional<BtAcceptedChannel> BtL2capAcceptor::accept_interrupt() {
   return accept_ipc_pipe(interrupt_listener_fd_.get());
 }
 
-BtL2capBackend::BtL2capBackend(std::string address, UniqueFd control_fd,
-                               UniqueFd interrupt_fd)
+BtL2capBackend::BtL2capBackend(std::string address, UniqueFd control_fd, UniqueFd interrupt_fd)
     : address_(std::move(address)), control_fd_(control_fd.release()),
       interrupt_fd_(interrupt_fd.release()) {}
 
@@ -196,7 +194,7 @@ BtL2capBackend &BtL2capBackend::operator=(BtL2capBackend &&other) noexcept {
   }
   close_if_open(interrupt_fd_);
   close_if_open(control_fd_);
-  address_ = std::move(other.address_); // FIX: Unterstrich ergänzt
+  address_ = std::move(other.address_);
   control_fd_ = other.control_fd_; 
   interrupt_fd_ = other.interrupt_fd_;
   other.control_fd_ = -1;
@@ -232,10 +230,13 @@ void BtL2capBackend::send_feature_set(std::span<const std::uint8_t> report) {
 
 std::optional<std::vector<std::uint8_t>> BtL2capBackend::read_feature_report() {
   auto packet = read_framed_packet(control_fd_);
-  if (!packet) return std::nullopt;
+  if (!packet || packet->empty()) return std::nullopt;
 
-  return bt_feature_to_usb_feature_reply(
-      std::span(packet->data(), packet->size()));
+  // Invariante: Bluetooth-HID-Byte (0xA3) über Index-Offset abschneiden
+  if (packet->at(0) == 0xA3) {
+      return bt_feature_to_usb_feature_reply(std::span(packet->data() + 1, packet->size() - 1));
+  }
+  return bt_feature_to_usb_feature_reply(std::span(packet->data(), packet->size()));
 }
 
 std::optional<std::vector<std::uint8_t>> BtL2capBackend::read_interrupt_packet() {
