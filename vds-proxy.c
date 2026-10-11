@@ -29,11 +29,17 @@
 
 struct custom_sockaddr_l2 {
     uint16_t    l2_family;
-    uint16_t    l2_psm;
+    uint16_t    l2_psm;       
     uint8_t     l2_bdaddr[6];
     uint16_t    l2_cid;
     uint8_t     l2_bdaddr_type;
 };
+
+#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+#define HTOBS(n) (uint16_t)((((uint16_t)(n) & 0xff00) >> 8) | (((uint16_t)(n) & 0x00ff) << 8))
+#else
+#define HTOBS(n) (uint16_t)(n)
+#endif
 
 int set_nonblocking_fd(int fd) {
     if (fd < 0) return -1;
@@ -45,6 +51,7 @@ int set_nonblocking_fd(int fd) {
 int open_bt_server_link(uint16_t psm) {
     int sock = socket(BT_AF_BLUETOOTH, BT_SOCK_SEQPACKET, BT_BTPROTO_L2CAP);
     if (sock < 0) return -1;
+    
     int opt = 1;
     setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
     if (set_nonblocking_fd(sock) < 0) {
@@ -55,7 +62,7 @@ int open_bt_server_link(uint16_t psm) {
     struct custom_sockaddr_l2 addr;
     memset(&addr, 0, sizeof(addr));
     addr.l2_family = BT_AF_BLUETOOTH;
-    addr.l2_psm = psm; 
+    addr.l2_psm = HTOBS(psm); 
     addr.l2_bdaddr_type = 0;
 
     if (bind(sock, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
@@ -70,7 +77,6 @@ int open_bt_server_link(uint16_t psm) {
 }
 
 int connect_unix_pipe(const char *pipe_name, const uint8_t *mac_bytes) {
-    // GEÄNDERT: SOCK_STREAM sorgt für zuverlässigen, unterbrechungsfreien Bytestrom
     int sock = socket(AF_UNIX, SOCK_STREAM, 0); 
     if (sock < 0) return -1;
     
@@ -101,29 +107,23 @@ int connect_unix_pipe(const char *pipe_name, const uint8_t *mac_bytes) {
     return sock;
 }
 
-// Hilfsfunktion zum Lesen aus dem Stream-Socket mit transparentem 2-Byte-Präfix
 ssize_t recv_stream_packet(int stream_fd, uint8_t *out_buf, size_t max_len) {
     uint16_t len_be;
-    // 1. Prüfen, ob der 2-Byte-Header vollständig im Kernel-Puffer liegt
     ssize_t n = recv(stream_fd, &len_be, 2, MSG_PEEK | MSG_DONTWAIT | MSG_NOSIGNAL);
     if (n < 2) return (n == 0) ? 0 : -1; 
 
     uint16_t packet_len = ntohs(len_be);
     if (packet_len > max_len) return -1; 
 
-    // 2. Prüfen, ob das gesamte Paket (Header + Payload) angekommen ist
     n = recv(stream_fd, out_buf, 2 + packet_len, MSG_PEEK | MSG_DONTWAIT | MSG_NOSIGNAL);
     if (n < (2 + packet_len)) return -1; 
 
-    // 3. Paket final aus der Kernel-Queue konsumieren
     recv(stream_fd, out_buf, 2 + packet_len, MSG_DONTWAIT | MSG_NOSIGNAL);
     
-    // Header entfernen: Payload an den Pufferanfang verschieben
     memmove(out_buf, out_buf + 2, packet_len);
     return packet_len;
 }
 
-// Hilfsfunktion zum Senden in den Stream-Socket mit vorangestelltem 2-Byte-Header
 ssize_t send_stream_packet(int stream_fd, const uint8_t *payload, size_t len) {
     uint16_t len_be = htons((uint16_t)len);
     if (send(stream_fd, &len_be, 2, MSG_DONTWAIT | MSG_NOSIGNAL) != 2) return -1;
@@ -223,7 +223,6 @@ int main(void) {
         if (client_ctrl >= 0 && fds[IDX_CLI_CTRL].fd >= 0) {
             short rev = fds[IDX_CLI_CTRL].revents;
             if (rev & POLLIN) {
-                // Bluetooth liefert native Pakete -> normales recv
                 ssize_t len = recv(client_ctrl, heap_buffer, 1024, MSG_DONTWAIT | MSG_NOSIGNAL);
                 if (len > 0) {
                     uint8_t *ptr = (uint8_t *)heap_buffer;
@@ -237,7 +236,8 @@ int main(void) {
                             if (!ds4_logged) { printf("vDS-Proxy: HIERARCHIE-DETEKTION - DualShock Hardware erkannt (Len: %ld).\n", len); ds4_logged = 1; }
                         }
                     }
-                    if (vdsd_ctrl >= 0) send_stream_packet(vdsd_ctrl, heap_buffer, len);
+                    // KORREKTUR: Expliziter Cast von void* zu const uint8_t* für g++
+                    if (vdsd_ctrl >= 0) send_stream_packet(vdsd_ctrl, (const uint8_t *)heap_buffer, len);
                 } else if (len == 0 || (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK)) {
                     goto shutdown_control;
                 }
@@ -251,8 +251,8 @@ int main(void) {
         if (vdsd_ctrl >= 0 && fds[IDX_VDSD_CTRL].fd >= 0) {
             short rev = fds[IDX_VDSD_CTRL].revents;
             if (rev & POLLIN) {
-                // GEÄNDERT: Nutzung des Stream-Paket-Parsers für die UNIX-Pipe
-                ssize_t len = recv_stream_packet(vdsd_ctrl, heap_buffer, 1024);
+                // KORREKTUR: Expliziter Cast von void* zu uint8_t* für g++
+                ssize_t len = recv_stream_packet(vdsd_ctrl, (uint8_t *)heap_buffer, 1024);
                 if (len > 0) {
                     if (client_ctrl >= 0) send(client_ctrl, heap_buffer, len, MSG_DONTWAIT | MSG_NOSIGNAL);
                 } else if (len == 0) {
@@ -271,7 +271,8 @@ int main(void) {
             if (rev & POLLIN) {
                 ssize_t len = recv(client_intr, heap_buffer, 1024, MSG_DONTWAIT | MSG_NOSIGNAL);
                 if (len > 0) {
-                    if (vdsd_intr >= 0) send_stream_packet(vdsd_intr, heap_buffer, len);
+                    // KORREKTUR: Expliziter Cast von void* zu const uint8_t* für g++
+                    if (vdsd_intr >= 0) send_stream_packet(vdsd_intr, (const uint8_t *)heap_buffer, len);
                 } else if (len == 0 || (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK)) {
                     goto shutdown_interrupt;
                 }
@@ -285,8 +286,8 @@ int main(void) {
         if (vdsd_intr >= 0 && fds[IDX_VDSD_INTR].fd >= 0) {
             short rev = fds[IDX_VDSD_INTR].revents;
             if (rev & POLLIN) {
-                // GEÄNDERT: Nutzung des Stream-Paket-Parsers für die UNIX-Pipe
-                ssize_t len = recv_stream_packet(vdsd_intr, heap_buffer, 1024);
+                // KORREKTUR: Expliziter Cast von void* zu uint8_t* für g++
+                ssize_t len = recv_stream_packet(vdsd_intr, (uint8_t *)heap_buffer, 1024);
                 if (len > 0) {
                     if (client_intr >= 0) send(client_intr, heap_buffer, len, MSG_DONTWAIT | MSG_NOSIGNAL);
                 } else if (len == 0) {
