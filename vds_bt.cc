@@ -37,20 +37,17 @@ void close_if_open(int &fd) {
   }
 }
 
-// Hilfsfunktion für das Senden über das 2-Byte-Stream-Framing mit Debugging
 bool send_framed_packet(int fd, std::span<const std::uint8_t> data) {
   if (fd < 0) return false;
   std::uint16_t len_be = htons(static_cast<std::uint16_t>(data.size()));
   
   std::fprintf(stderr, "vDS-Daemon-Debug [SEND]: Versuche %zu Bytes zu senden (Framed-Header: %u)...\n", data.size(), (unsigned int)data.size());
 
-  // 1. Sende den 2-Byte-Längen-Header (Big Endian)
   if (::send(fd, &len_be, 2, MSG_DONTWAIT | MSG_NOSIGNAL) != 2) {
     std::fprintf(stderr, "vDS-Daemon-Debug [SEND-ERR]: Header-Versand fehlgeschlagen auf fd=%d, errno=%d\n", fd, errno);
     return false;
   }
   
-  // 2. Sende die eigentliche Payload
   ssize_t n = ::send(fd, data.data(), data.size(), MSG_DONTWAIT | MSG_NOSIGNAL);
   if (n != static_cast<ssize_t>(data.size())) {
     std::fprintf(stderr, "vDS-Daemon-Debug [SEND-ERR]: Payload-Versand unvollständig auf fd=%d (%zd/%zu Bytes), errno=%d\n", fd, n, data.size(), errno);
@@ -61,12 +58,10 @@ bool send_framed_packet(int fd, std::span<const std::uint8_t> data) {
   return true;
 }
 
-// Hilfsfunktion für das atomare Lesen eines Stream-Pakets via MSG_PEEK mit Debugging
 std::optional<std::vector<std::uint8_t>> read_framed_packet(int fd) {
   if (fd < 0) return std::nullopt;
 
   std::uint16_t len_be;
-  // Prüfen, ob der Header da ist
   ssize_t n = ::recv(fd, &len_be, 2, MSG_PEEK | MSG_DONTWAIT | MSG_NOSIGNAL);
   if (n < 2) {
     if (n == 0) {
@@ -80,7 +75,6 @@ std::optional<std::vector<std::uint8_t>> read_framed_packet(int fd) {
   std::uint16_t packet_len = ntohs(len_be);
   std::vector<std::uint8_t> buf(2 + packet_len);
 
-  // Prüfen, ob das gesamte Paket im Kernel-Puffer liegt
   n = ::recv(fd, buf.data(), buf.size(), MSG_PEEK | MSG_DONTWAIT | MSG_NOSIGNAL);
   if (n < static_cast<ssize_t>(buf.size())) {
     static int fragment_count = 0;
@@ -90,7 +84,6 @@ std::optional<std::vector<std::uint8_t>> read_framed_packet(int fd) {
     return std::nullopt; 
   }
 
-  // Paket endgültig aus der Pipeline konsumieren
   ::recv(fd, buf.data(), buf.size(), MSG_DONTWAIT | MSG_NOSIGNAL);
   std::fprintf(stderr, "vDS-Daemon-Debug [RECV-OK]: Stream-Paket komplett konsumiert (fd=%d, Payload: %u Bytes).\n", fd, packet_len);
 
@@ -105,11 +98,11 @@ static void setup_abstract_un(struct sockaddr_un &addr, const char *name) {
 }
 
 UniqueFd listen_ipc_pipe(const char *name) {
+  // Modifikation: Reiner blockierender SOCK_STREAM beim Initialisieren um Race-Conditions im Daemon-Loop zu unterbinden
   UniqueFd fd(::socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0));
   if (!fd) {
     throw std::runtime_error("failed to open IPC Unix socket: " + std::string(std::strerror(errno)));
   }
-  set_nonblocking(fd.get(), "socket");
 
   const int reuse = 1;
   ::setsockopt(fd.get(), SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
@@ -132,8 +125,10 @@ std::optional<BtAcceptedChannel> accept_ipc_pipe(int listener_fd) {
   socklen_t peer_size = sizeof(peer);
   
   std::fprintf(stderr, "vDS-Daemon-Debug [INIT]: Warte auf incoming accept() vom Proxy auf listener_fd=%d...\n", listener_fd);
-  UniqueFd fd(::accept(listener_fd, reinterpret_cast<struct sockaddr *>(&peer), &peer_size));
-  if (!fd) {
+  
+  // Modifikation: Verwendung des atomaren accept4
+  int raw_fd = ::accept4(listener_fd, reinterpret_cast<struct sockaddr *>(&peer), &peer_size, SOCK_CLOEXEC);
+  if (raw_fd < 0) {
     const int error = errno;
     if (error == EAGAIN || error == EWOULDBLOCK || error == EINTR) {
       return {};
@@ -142,11 +137,8 @@ std::optional<BtAcceptedChannel> accept_ipc_pipe(int listener_fd) {
     throw std::runtime_error("failed to accept incoming IPC connection: " + std::string(std::strerror(error)));
   }
 
+  UniqueFd fd(raw_fd);
   std::fprintf(stderr, "vDS-Daemon-Debug [INIT]: Verbindung akzeptiert (fd=%d). Starte blockierende Identitäts-Phase (Warte auf 6-Byte MAC)...\n", fd.get());
-
-  if (::fcntl(fd.get(), F_SETFD, FD_CLOEXEC) < 0) {
-    throw std::runtime_error("failed to set close-on-exec for IPC pipe: " + std::string(std::strerror(errno)));
-  }
 
   // Identitäts-Phase: Auslesen der 6-Byte-MAC im blockierenden Zustand
   std::uint8_t mac_bytes[6] = {0};
@@ -156,13 +148,13 @@ std::optional<BtAcceptedChannel> accept_ipc_pipe(int listener_fd) {
     return {}; 
   }
 
-  // MAC in Text umwandeln
   char mac_str[18]{};
   std::snprintf(mac_str, sizeof(mac_str), "%02x:%02x:%02x:%02x:%02x:%02x",
                 mac_bytes[0], mac_bytes[1], mac_bytes[2], mac_bytes[3], mac_bytes[4], mac_bytes[5]);
 
   std::fprintf(stderr, "vDS-Daemon-Debug [INIT-OK]: Handshake erfolgreich. Controller-MAC: %s. Schalte Socket auf asynchron.\n", mac_str);
 
+  // Erst NACH erfolgreicher Identitäts-Phase asynchron schalten
   set_nonblocking(fd.get(), "socket");
 
   return BtAcceptedChannel{
@@ -199,7 +191,7 @@ BtL2capBackend::BtL2capBackend(BtL2capBackend &&other) noexcept
     : address_(std::move(other.address_)), control_fd_(other.control_fd_),
       interrupt_fd_(other.interrupt_fd_) {
   other.control_fd_ = -1;
-  other.interrupt_fd_ = -1; // KORRIGIERT: Unterstrich hinzugefügt
+  other.interrupt_fd_ = -1; 
 }
 
 BtL2capBackend &BtL2capBackend::operator=(BtL2capBackend &&other) noexcept {
@@ -208,8 +200,8 @@ BtL2capBackend &BtL2capBackend::operator=(BtL2capBackend &&other) noexcept {
   }
   close_if_open(interrupt_fd_);
   close_if_open(control_fd_);
-  address_ = std::move(other.address_);
-  control_fd_ = other.control_fd_; // KORRIGIERT: Unterstrich hinzugefügt
+  address = std::move(other.address_);
+  control_fd_ = other.control_fd_; 
   interrupt_fd_ = other.interrupt_fd_;
   other.control_fd_ = -1;
   other.interrupt_fd_ = -1;
