@@ -98,7 +98,6 @@ static void setup_abstract_un(struct sockaddr_un &addr, const char *name) {
 }
 
 UniqueFd listen_ipc_pipe(const char *name) {
-  // Modifikation: Reiner blockierender SOCK_STREAM beim Initialisieren um Race-Conditions im Daemon-Loop zu unterbinden
   UniqueFd fd(::socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0));
   if (!fd) {
     throw std::runtime_error("failed to open IPC Unix socket: " + std::string(std::strerror(errno)));
@@ -126,7 +125,6 @@ std::optional<BtAcceptedChannel> accept_ipc_pipe(int listener_fd) {
   
   std::fprintf(stderr, "vDS-Daemon-Debug [INIT]: Warte auf incoming accept() vom Proxy auf listener_fd=%d...\n", listener_fd);
   
-  // Modifikation: Verwendung des atomaren accept4
   int raw_fd = ::accept4(listener_fd, reinterpret_cast<struct sockaddr *>(&peer), &peer_size, SOCK_CLOEXEC);
   if (raw_fd < 0) {
     const int error = errno;
@@ -140,7 +138,6 @@ std::optional<BtAcceptedChannel> accept_ipc_pipe(int listener_fd) {
   UniqueFd fd(raw_fd);
   std::fprintf(stderr, "vDS-Daemon-Debug [INIT]: Verbindung akzeptiert (fd=%d). Starte blockierende Identitäts-Phase (Warte auf 6-Byte MAC)...\n", fd.get());
 
-  // Identitäts-Phase: Auslesen der 6-Byte-MAC im blockierenden Zustand
   std::uint8_t mac_bytes[6] = {0};
   ssize_t n = ::recv(fd.get(), mac_bytes, 6, MSG_WAITALL | MSG_NOSIGNAL);
   if (n != 6) {
@@ -154,7 +151,6 @@ std::optional<BtAcceptedChannel> accept_ipc_pipe(int listener_fd) {
 
   std::fprintf(stderr, "vDS-Daemon-Debug [INIT-OK]: Handshake erfolgreich. Controller-MAC: %s. Schalte Socket auf asynchron.\n", mac_str);
 
-  // Erst NACH erfolgreicher Identitäts-Phase asynchron schalten
   set_nonblocking(fd.get(), "socket");
 
   return BtAcceptedChannel{
@@ -200,7 +196,7 @@ BtL2capBackend &BtL2capBackend::operator=(BtL2capBackend &&other) noexcept {
   }
   close_if_open(interrupt_fd_);
   close_if_open(control_fd_);
-  address = std::move(other.address_);
+  address_ = std::move(other.address_); // FIX: Unterstrich ergänzt
   control_fd_ = other.control_fd_; 
   interrupt_fd_ = other.interrupt_fd_;
   other.control_fd_ = -1;
