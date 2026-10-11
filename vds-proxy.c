@@ -109,32 +109,20 @@ int connect_unix_pipe(const char *pipe_name, const uint8_t *mac_bytes) {
 
 ssize_t recv_stream_packet(int stream_fd, uint8_t *out_buf, size_t max_len) {
     uint16_t len_be;
-    // 1. Prüfen, ob der 2-Byte-Header im Kernel-Puffer liegt
     ssize_t n = recv(stream_fd, &len_be, 2, MSG_PEEK | MSG_DONTWAIT | MSG_NOSIGNAL);
-    if (n < 2) {
-        if (n == 0) return 0; // Physisches Verbindung-Aus (EOF)
-        return -1; // Kernel setzt errno auf EAGAIN
-    } 
+    if (n < 2) return (n == 0) ? 0 : -1; 
 
     uint16_t packet_len = ntohs(len_be);
-    if (packet_len > max_len) {
-        errno = EMSGSIZE;
+    if (packet_len > max_len) return -1; 
+
+    n = recv(stream_fd, out_buf, 2 + packet_len, MSG_PEEK | MSG_DONTWAIT | MSG_NOSIGNAL);
+    if (n < (2 + packet_len)) {
+        errno = EAGAIN; // Modifikation: Live-Lock-Schutz bei Teilfragmenten
         return -1; 
     }
 
-    // 2. Prüfen, ob das gesamte Paket (Header + Payload) vollständig im Puffer liegt
-    n = recv(stream_fd, out_buf, 2 + packet_len, MSG_PEEK | MSG_DONTWAIT | MSG_NOSIGNAL);
-    if (n < (2 + packet_len)) {
-        // ZWECKS HARMONISIERUNG: Paket ist unvollständig fragmentiert.
-        // Wir erzwingen EAGAIN, damit die Hauptschleife einfach weiterpollt.
-        errno = EAGAIN; 
-        return -1; 
-    } 
-
-    // 3. Erst jetzt das Paket final aus dem Kernel-Buffer absaugen
     recv(stream_fd, out_buf, 2 + packet_len, MSG_DONTWAIT | MSG_NOSIGNAL);
     
-    // Header abschneiden, damit die reine HID-Payload übrig bleibt
     memmove(out_buf, out_buf + 2, packet_len);
     return packet_len;
 }
@@ -222,19 +210,15 @@ int main(void) {
                 printf("vDS-Proxy: [IPC] Control- & Interrupt-Pipeline erfolgreich aktiv geschaltet.\n");
             } else {
                 fprintf(stderr, "vDS-Proxy: [IPC-ERR] Fehler beim Verbinden mit vdsd Daemon (ctrl: %d, intr: %d)\n", vdsd_ctrl, vdsd_intr);
-                if (vdsd_ctrl >= 0) { close(vdsd_ctrl); vdsd_ctrl = -1; }
-                if (vdsd_intr >= 0) { close(vdsd_intr); vdsd_intr = -1; }
-                close(client_ctrl); client_ctrl = -1;
-                close(client_intr); client_intr = -1;
-                continue;
+                goto shutdown_global;
             }
         }
 
         // Fehler-Evaluierung (FD-Filter-Gate)
-        if (client_ctrl >= 0 && fds[IDX_CLI_CTRL].fd >= 0 && (fds[IDX_CLI_CTRL].revents & (POLLERR | POLLNVAL))) { printf("vDS-Proxy: [ERR] POLLERR auf client_ctrl\n"); goto shutdown_control; }
-        if (vdsd_ctrl >= 0   && fds[IDX_VDSD_CTRL].fd >= 0 && (fds[IDX_VDSD_CTRL].revents & (POLLERR | POLLNVAL))) { printf("vDS-Proxy: [ERR] POLLERR auf vdsd_ctrl\n"); goto shutdown_control; }
-        if (client_intr >= 0 && fds[IDX_CLI_INTR].fd >= 0 && (fds[IDX_CLI_INTR].revents & (POLLERR | POLLNVAL))) { printf("vDS-Proxy: [ERR] POLLERR auf client_intr\n"); goto shutdown_interrupt; }
-        if (vdsd_intr >= 0   && fds[IDX_VDSD_INTR].fd >= 0 && (fds[IDX_VDSD_INTR].revents & (POLLERR | POLLNVAL))) { printf("vDS-Proxy: [ERR] POLLERR auf vdsd_intr\n"); goto shutdown_interrupt; }
+        if (client_ctrl >= 0 && fds[IDX_CLI_CTRL].fd >= 0 && (fds[IDX_CLI_CTRL].revents & (POLLERR | POLLNVAL))) { printf("vDS-Proxy: [ERR] POLLERR auf client_ctrl\n"); goto shutdown_global; }
+        if (vdsd_ctrl >= 0   && fds[IDX_VDSD_CTRL].fd >= 0 && (fds[IDX_VDSD_CTRL].revents & (POLLERR | POLLNVAL))) { printf("vDS-Proxy: [ERR] POLLERR auf vdsd_ctrl\n"); goto shutdown_global; }
+        if (client_intr >= 0 && fds[IDX_CLI_INTR].fd >= 0 && (fds[IDX_CLI_INTR].revents & (POLLERR | POLLNVAL))) { printf("vDS-Proxy: [ERR] POLLERR auf client_intr\n"); goto shutdown_global; }
+        if (vdsd_intr >= 0   && fds[IDX_VDSD_INTR].fd >= 0 && (fds[IDX_VDSD_INTR].revents & (POLLERR | POLLNVAL))) { printf("vDS-Proxy: [ERR] POLLERR auf vdsd_intr\n"); goto shutdown_global; }
 
         // Routing Control (Vom echten Controller -> Zum Daemon vdsd)
         if (client_ctrl >= 0 && fds[IDX_CLI_CTRL].fd >= 0) {
@@ -244,7 +228,7 @@ int main(void) {
                 if (len > 0) {
                     uint8_t *ptr = (uint8_t *)heap_buffer;
                     packet_counter++;
-                    if (packet_counter % 20 == 0 || ptr[0] == 0xA3) { // Jedes 20. Paket oder wichtige Feature-Anfragen loggen
+                    if (packet_counter % 20 == 0 || ptr[0] == 0xA3) {
                         printf("vDS-Proxy: [BT->IPC CTRL] Paket #%lu | Len: %ld | HID-Typ: 0x%02X | Report-ID: 0x%02X\n", 
                                packet_counter, len, ptr[0], (len > 1 ? ptr[1] : 00));
                     }
@@ -254,14 +238,14 @@ int main(void) {
                     }
                 } else if (len == 0 || (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK)) {
                     printf("vDS-Proxy: [DISCONN] client_ctrl geschlossen oder Fehler: %s\n", strerror(errno));
-                    goto shutdown_control;
+                    goto shutdown_global;
                 }
             }
             if ((rev & POLLHUP) && !(rev & POLLIN)) {
                 char test_ch;
                 if (recv(client_ctrl, &test_ch, 1, MSG_PEEK | MSG_DONTWAIT | MSG_NOSIGNAL) == 0) {
                     printf("vDS-Proxy: [DISCONN] PEEK-Bestätigung für POLLHUP auf client_ctrl.\n");
-                    goto shutdown_control;
+                    goto shutdown_global;
                 }
             }
         }
@@ -277,9 +261,8 @@ int main(void) {
                     if (client_ctrl >= 0) send(client_ctrl, heap_buffer, len, MSG_DONTWAIT | MSG_NOSIGNAL);
                 } else if (len == 0) {
                     printf("vDS-Proxy: [DISCONN] vdsd_ctrl Stream sauber beendet.\n");
-                    goto shutdown_control; 
+                    goto shutdown_global; 
                 } else if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
-                    // Fragmentierungs-Warnung ausgeben um Infinite-Loops zu sehen
                     static int err_count = 0;
                     if (err_count++ % 100 == 0) {
                         printf("vDS-Proxy: [STREAM-PEEK] Warte auf vollständiges Paket-Framing auf vdsd_ctrl...\n");
@@ -288,7 +271,7 @@ int main(void) {
             }
             if ((rev & POLLHUP) && !(rev & POLLIN)) {
                 char test_ch;
-                if (recv(vdsd_ctrl, &test_ch, 1, MSG_PEEK | MSG_DONTWAIT | MSG_NOSIGNAL) == 0) goto shutdown_control;
+                if (recv(vdsd_ctrl, &test_ch, 1, MSG_PEEK | MSG_DONTWAIT | MSG_NOSIGNAL) == 0) goto shutdown_global;
             }
         }
 
@@ -301,12 +284,12 @@ int main(void) {
                     if (vdsd_intr >= 0) send_stream_packet(vdsd_intr, (const uint8_t *)heap_buffer, len);
                 } else if (len == 0 || (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK)) {
                     printf("vDS-Proxy: [DISCONN] client_intr geschlossen.\n");
-                    goto shutdown_interrupt;
+                    goto shutdown_global;
                 }
             }
             if ((rev & POLLHUP) && !(rev & POLLIN)) {
                 char test_ch;
-                if (recv(client_intr, &test_ch, 1, MSG_PEEK | MSG_DONTWAIT | MSG_NOSIGNAL) == 0) goto shutdown_interrupt;
+                if (recv(client_intr, &test_ch, 1, MSG_PEEK | MSG_DONTWAIT | MSG_NOSIGNAL) == 0) goto shutdown_global;
             }
         }
 
@@ -319,26 +302,25 @@ int main(void) {
                     if (client_intr >= 0) send(client_intr, heap_buffer, len, MSG_DONTWAIT | MSG_NOSIGNAL);
                 } else if (len == 0) {
                     printf("vDS-Proxy: [DISCONN] vdsd_intr Stream sauber beendet.\n");
-                    goto shutdown_interrupt;
+                    goto shutdown_global;
                 }
             }
             if ((rev & POLLHUP) && !(rev & POLLIN)) {
                 char test_ch;
-                if (recv(vdsd_intr, &test_ch, 1, MSG_PEEK | MSG_DONTWAIT | MSG_NOSIGNAL) == 0) goto shutdown_interrupt;
+                if (recv(vdsd_intr, &test_ch, 1, MSG_PEEK | MSG_DONTWAIT | MSG_NOSIGNAL) == 0) goto shutdown_global;
             }
         }
         continue;
 
-    shutdown_control:
+    shutdown_global:
+        // Modifikation: Verhindert den Zombie-Timeout durch vollständiges synchrones Schließen aller Leitungen
         if (client_ctrl >= 0) close(client_ctrl);
         if (vdsd_ctrl >= 0) close(vdsd_ctrl);
-        client_ctrl = -1; vdsd_ctrl = -1;
-        continue;
-
-    shutdown_interrupt:
         if (client_intr >= 0) close(client_intr);
         if (vdsd_intr >= 0) close(vdsd_intr);
+        client_ctrl = -1; vdsd_ctrl = -1;
         client_intr = -1; vdsd_intr = -1;
+        memset(controller_mac, 0, 6);
         continue;
     }
     free(heap_buffer); close(srv_ctrl); close(srv_intr); return 0;
