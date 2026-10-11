@@ -18,8 +18,6 @@
 #include <optional>
 #include <span>
 
-// ◼ FIX: Diese Klassen und Hilfs-Strukturen müssen zwingend global oder 
-// typengleich mit dem vds_bt.hh Header übereinstimmen.
 struct UniqueFd {
     int fd;
     UniqueFd() : fd(-1) {}
@@ -34,8 +32,6 @@ struct BtAcceptedChannel {
     UniqueFd fd;
 };
 
-// ◼ LINKER-FIX: Vorwärtsdeklaration muss sich außerhalb oder innerhalb 
-// entsprechend der Definition im Projekt befinden (hier global deklariert)
 extern std::optional<std::vector<std::uint8_t>> bt_feature_to_usb_feature_reply(std::span<const std::uint8_t> data);
 
 namespace vds {
@@ -43,7 +39,8 @@ namespace vds {
 static void setup_abstract_un(struct sockaddr_un &addr, const char *name) {
     ::memset(&addr, 0, sizeof(struct sockaddr_un));
     addr.sun_family = AF_UNIX;
-    addr.sun_path = '\0';
+    // ◼ COMPILER-FIX: Index explizit ansprechen, um dem char-Array das Nullbyte zuzuweisen
+    addr.sun_path[0] = '\0';
     ::memcpy(addr.sun_path + 1, name, ::strlen(name));
 }
 
@@ -77,7 +74,7 @@ static UniqueFd create_ipc_listener(const char *name) {
 }
 
 static std::string extract_dynamic_mac_from_payload(int client_fd) {
-    std::uint8_t mac_bytes[6] = {0};
+    std::uint8_t mac_bytes[6] = {0}; // ◼ SYNTAX-FIX: Valides 6-Byte Array initialisiert
     
     int flags = ::fcntl(client_fd, F_GETFL, 0);
     ::fcntl(client_fd, F_SETFL, flags & ~O_NONBLOCK);
@@ -99,9 +96,6 @@ static std::string extract_dynamic_mac_from_payload(int client_fd) {
     }
     return ss.str();
 }
-
-// ◼ NAMESPACE-FIX: Die Klassen-Implementierungen müssen zwingend 
-// innerhalb des Namespaces vds liegen, damit der Linker die Symbole auflösen kann!
 
 class BtL2capAcceptor {
     UniqueFd control_listener_fd_;
@@ -240,7 +234,7 @@ std::optional<std::vector<std::uint8_t>> BtL2capBackend::read_feature_report() {
 
     rx_buffer.resize(n);
 
-    // ◼ LINKER-FIX: Expliziter Aufruf der externen globalen Konvertierungsfunktion
+    // ◼ COMPILER-FIX: Indexzugriff rx_buffer[0], da ein std::vector nicht direkt mit einem Byte verglichen werden kann
     if (rx_buffer.size() > 1 && rx_buffer[0] == 0xA3) {
         return ::bt_feature_to_usb_feature_reply(std::span<const std::uint8_t>(rx_buffer.data() + 1, rx_buffer.size() - 1));
     }
