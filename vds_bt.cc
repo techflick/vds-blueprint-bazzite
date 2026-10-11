@@ -18,12 +18,10 @@
 #include <optional>
 #include <span>
 
-// ◼ EINBETTUNG DER ORIGINALEN PROJEKT-HEADER (Verhindert Signatur-Konflikte)
 #include "vds_bt.hh"
 
 namespace vds {
 
-// ◼ LINKER-FIX: Die Konvertierungsfunktion MUSS innerhalb des Namespaces vds deklariert sein!
 extern std::optional<std::vector<std::uint8_t>> bt_feature_to_usb_feature_reply(std::span<const std::uint8_t> data);
 
 static void setup_abstract_un(struct sockaddr_un &addr, const char *name) {
@@ -64,12 +62,10 @@ static UniqueFd create_ipc_listener(const char *name) {
 
 static std::string extract_dynamic_mac_from_payload(int client_fd) {
     std::uint8_t mac_bytes[6] = {0};
-    
     int flags = ::fcntl(client_fd, F_GETFL, 0);
     ::fcntl(client_fd, F_SETFL, flags & ~O_NONBLOCK);
     
     ssize_t n = ::recv(client_fd, mac_bytes, 6, MSG_WAITALL | MSG_NOSIGNAL);
-    
     ::fcntl(client_fd, F_SETFL, flags);
 
     if (n != 6) {
@@ -85,9 +81,6 @@ static std::string extract_dynamic_mac_from_payload(int client_fd) {
     }
     return ss.str();
 }
-
-// ◼ NAMESPACE-FIX: Direkte Implementierung der im Header deklarierten Methoden, 
-// ohne die Klassenstrukturen im cc-File künstlich zu duplizieren.
 
 BtL2capAcceptor::BtL2capAcceptor() 
     : control_listener_fd_(create_ipc_listener("v_c").release()), 
@@ -136,14 +129,14 @@ BtL2capBackend::~BtL2capBackend() {
 BtL2capBackend::BtL2capBackend(BtL2capBackend &&other) noexcept 
     : address_(std::move(other.address_)), control_fd_(other.control_fd_), interrupt_fd_(other.interrupt_fd_) {
     other.control_fd_ = -1;
-    other.interrupt_fd_ = -1;
+    other.interrupt_fd = -1;
 }
 
 BtL2capBackend &BtL2capBackend::operator=(BtL2capBackend &&other) noexcept {
     if (this != &other) {
         if(control_fd_ >= 0) ::close(control_fd_);
         if(interrupt_fd_ >= 0) ::close(interrupt_fd_);
-        address_ = std::move(other.address_); 
+        address = std::move(other.address_); 
         control_fd_ = other.control_fd_;    
         interrupt_fd_ = other.interrupt_fd_;
         other.control_fd_ = -1;
@@ -199,7 +192,7 @@ std::optional<std::vector<std::uint8_t>> BtL2capBackend::read_feature_report() {
 
     rx_buffer.resize(n);
 
-    // ◼ NAMESPACE-MATCHNIG: Aufruf ohne globalen Scope :: da die Funktion im selben Namespace liegt
+    // ◼ FIX: Typensicheres Slicing des Spans über das abgetrennte HID-Byte (0xA3)
     if (rx_buffer.size() > 1 && rx_buffer[0] == 0xA3) {
         return bt_feature_to_usb_feature_reply(std::span<const std::uint8_t>(rx_buffer.data() + 1, rx_buffer.size() - 1));
     }
