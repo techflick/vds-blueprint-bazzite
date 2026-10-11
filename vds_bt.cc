@@ -199,7 +199,7 @@ BtL2capBackend::BtL2capBackend(BtL2capBackend &&other) noexcept
     : address_(std::move(other.address_)), control_fd_(other.control_fd_),
       interrupt_fd_(other.interrupt_fd_) {
   other.control_fd_ = -1;
-  other.interrupt_fd = -1;
+  other.interrupt_fd_ = -1; // KORRIGIERT: Unterstrich hinzugefügt
 }
 
 BtL2capBackend &BtL2capBackend::operator=(BtL2capBackend &&other) noexcept {
@@ -209,7 +209,7 @@ BtL2capBackend &BtL2capBackend::operator=(BtL2capBackend &&other) noexcept {
   close_if_open(interrupt_fd_);
   close_if_open(control_fd_);
   address_ = std::move(other.address_);
-  control_fd = other.control_fd_;
+  control_fd_ = other.control_fd_; // KORRIGIERT: Unterstrich hinzugefügt
   interrupt_fd_ = other.interrupt_fd_;
   other.control_fd_ = -1;
   other.interrupt_fd_ = -1;
