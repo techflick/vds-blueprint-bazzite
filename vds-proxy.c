@@ -109,17 +109,32 @@ int connect_unix_pipe(const char *pipe_name, const uint8_t *mac_bytes) {
 
 ssize_t recv_stream_packet(int stream_fd, uint8_t *out_buf, size_t max_len) {
     uint16_t len_be;
+    // 1. Prüfen, ob der 2-Byte-Header im Kernel-Puffer liegt
     ssize_t n = recv(stream_fd, &len_be, 2, MSG_PEEK | MSG_DONTWAIT | MSG_NOSIGNAL);
-    if (n < 2) return (n == 0) ? 0 : -1; 
+    if (n < 2) {
+        if (n == 0) return 0; // Physisches Verbindung-Aus (EOF)
+        return -1; // Kernel setzt errno auf EAGAIN
+    } 
 
     uint16_t packet_len = ntohs(len_be);
-    if (packet_len > max_len) return -1; 
+    if (packet_len > max_len) {
+        errno = EMSGSIZE;
+        return -1; 
+    }
 
+    // 2. Prüfen, ob das gesamte Paket (Header + Payload) vollständig im Puffer liegt
     n = recv(stream_fd, out_buf, 2 + packet_len, MSG_PEEK | MSG_DONTWAIT | MSG_NOSIGNAL);
-    if (n < (2 + packet_len)) return -1; 
+    if (n < (2 + packet_len)) {
+        // ZWECKS HARMONISIERUNG: Paket ist unvollständig fragmentiert.
+        // Wir erzwingen EAGAIN, damit die Hauptschleife einfach weiterpollt.
+        errno = EAGAIN; 
+        return -1; 
+    } 
 
+    // 3. Erst jetzt das Paket final aus dem Kernel-Buffer absaugen
     recv(stream_fd, out_buf, 2 + packet_len, MSG_DONTWAIT | MSG_NOSIGNAL);
     
+    // Header abschneiden, damit die reine HID-Payload übrig bleibt
     memmove(out_buf, out_buf + 2, packet_len);
     return packet_len;
 }
