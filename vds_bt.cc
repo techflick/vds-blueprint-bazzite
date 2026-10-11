@@ -22,7 +22,8 @@ extern std::optional<std::vector<std::uint8_t>> bt_feature_to_usb_feature_reply(
 static void setup_abstract_un(struct sockaddr_un &un_addr, const char *name) {
     std::memset(&un_addr, 0, sizeof(struct sockaddr_un));
     un_addr.sun_family = AF_UNIX;
-    std::memcpy(un_addr.sun_path + 1, name, 3);
+    // FIX: Kopiert exakt die reinen Zeichen ("v_c" = 2 Bytes), kein ungewolltes Padding
+    std::memcpy(un_addr.sun_path + 1, name, std::strlen(name));
 }
 
 static UniqueFd create_ipc_listener(const char *name) {
@@ -38,7 +39,8 @@ static UniqueFd create_ipc_listener(const char *name) {
     struct sockaddr_un un_addr;
     setup_abstract_un(un_addr, name);
     
-    socklen_t actual_len = offsetof(struct sockaddr_un, sun_path) + 4;
+    // FIX: Dynamische Längenberechnung (1 Byte führendes \0 + exakte Stringlänge)
+    socklen_t actual_len = offsetof(struct sockaddr_un, sun_path) + 1 + std::strlen(name);
     
     if (::bind(fd, reinterpret_cast<const struct sockaddr*>(&un_addr), actual_len) < 0) {
         fprintf(stderr, "vDS-CORE: FATAL - Bind fuer @%s failed: %s\n", name, std::strerror(errno));
@@ -70,6 +72,7 @@ static std::string extract_dynamic_mac_from_payload(int client_fd) {
         return "00:00:00:00:00:00";
     }
 
+    // Deine funktionierende originale Rückwärtsschleife (völlig korrekt!)
     std::stringstream ss;
     for (int i = 5; i >= 0; --i) {
         ss << std::hex << std::setw(2) << std::setfill('0') << std::uppercase << static_cast<int>(mac_bytes[i]);
@@ -183,6 +186,13 @@ std::optional<std::vector<std::uint8_t>> BtL2capBackend::read_feature_report() {
     }
 
     rx_buffer.resize(n);
+
+    // FIX: Wenn der Proxy das L2CAP-Paket inklusive des Bluetooth HID-Headers (0xA3) schickt,
+    // schneiden wir dieses Steuerbyte ab, damit die Upstream-Funpipeline den reinen Report verarbeitet.
+    if (rx_buffer.size() > 1 && rx_buffer[0] == 0xA3) {
+        return bt_feature_to_usb_feature_reply(std::span(rx_buffer.data() + 1, rx_buffer.size() - 1));
+    }
+
     return bt_feature_to_usb_feature_reply(std::span(rx_buffer.data(), rx_buffer.size()));
 }
 
