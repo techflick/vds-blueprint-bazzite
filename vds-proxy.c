@@ -88,6 +88,7 @@ int connect_unix_pipe(const char *pipe_name, const uint8_t *mac_bytes) {
         return -1;
     }
     
+    // Identitäts-Payload direkt asynchron abschicken
     if (send(sock, mac_bytes, 6, MSG_NOSIGNAL) != 6) {
         close(sock);
         return -1;
