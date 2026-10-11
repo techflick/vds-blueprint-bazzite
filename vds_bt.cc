@@ -72,7 +72,6 @@ static std::string extract_dynamic_mac_from_payload(int client_fd) {
         return "00:00:00:00:00:00";
     }
 
-    // Deine funktionierende originale Rückwärtsschleife (völlig korrekt!)
     std::stringstream ss;
     for (int i = 5; i >= 0; --i) {
         ss << std::hex << std::setw(2) << std::setfill('0') << std::uppercase << static_cast<int>(mac_bytes[i]);
@@ -170,26 +169,36 @@ void BtL2capBackend::send_feature_set(std::span<const std::uint8_t> r) {
 std::optional<std::vector<std::uint8_t>> BtL2capBackend::read_feature_report() { 
     if (control_fd_ < 0) return std::nullopt;
 
+    // Temporär blockierend schalten, um stabil auf den Proxy-Handshake zu warten
     int flags = ::fcntl(control_fd_, F_GETFL, 0);
     if (flags >= 0) ::fcntl(control_fd_, F_SETFL, flags & ~O_NONBLOCK);
 
     std::vector<std::uint8_t> rx_buffer(1024);
     ssize_t n = ::recv(control_fd_, rx_buffer.data(), rx_buffer.size(), MSG_NOSIGNAL);
     
+    // Sofort wieder in den originalen (asynchronen) Zustand versetzen
     if (flags >= 0) ::fcntl(control_fd_, F_SETFL, flags);
 
     if (n <= 0) {
-        std::uint8_t peek_dummy;
-        ssize_t peek_n = ::recv(control_fd_, &peek_dummy, 1, MSG_PEEK | MSG_DONTWAIT | MSG_NOSIGNAL);
-        if (peek_n == 0) return std::nullopt;
+        if (n == 0) {
+            std::uint8_t peek_dummy;
+            ssize_t peek_n = ::recv(control_fd_, &peek_dummy, 1, MSG_PEEK | MSG_DONTWAIT | MSG_NOSIGNAL);
+            if (peek_n == 0) {
+                fprintf(stderr, "vDS-CORE: Control-Pipeline physisch geschlossen (EOF).\n");
+                fflush(stderr);
+            }
+        }
         return std::nullopt; 
     }
 
     rx_buffer.resize(n);
 
-    // FIX: Wenn der Proxy das L2CAP-Paket inklusive des Bluetooth HID-Headers (0xA3) schickt,
-    // schneiden wir dieses Steuerbyte ab, damit die Upstream-Funpipeline den reinen Report verarbeitet.
+    // ◼ TRANSPARENTE UPSTREAM-TRANSFORMATION
+    // Wenn der Proxy das L2CAP-Paket inklusive des Bluetooth HID-Headers (0xA3) schickt,
+    // schneiden wir dieses Steuerbyte ab, damit die Upstream-Pipeline den reinen Report verarbeitet.
     if (rx_buffer.size() > 1 && rx_buffer[0] == 0xA3) {
+        // Direktes Durchreichen der extrahierten Payload. 
+        // bt_feature_to_usb_feature_reply liefert bereits das korrekte std::optional!
         return bt_feature_to_usb_feature_reply(std::span(rx_buffer.data() + 1, rx_buffer.size() - 1));
     }
 
@@ -197,6 +206,8 @@ std::optional<std::vector<std::uint8_t>> BtL2capBackend::read_feature_report() {
 }
 
 std::optional<std::vector<std::uint8_t>> BtL2capBackend::read_interrupt_packet() {
+    if (interrupt_fd_ < 0) return std::nullopt;
+
     std::vector<std::uint8_t> buf(1024);
     ssize_t n = ::recv(interrupt_fd_, buf.data(), buf.size(), MSG_DONTWAIT | MSG_NOSIGNAL);
     
@@ -208,7 +219,10 @@ std::optional<std::vector<std::uint8_t>> BtL2capBackend::read_interrupt_packet()
     if (n == 0) {
         std::uint8_t peek_dummy;
         ssize_t peek_n = ::recv(interrupt_fd_, &peek_dummy, 1, MSG_PEEK | MSG_DONTWAIT | MSG_NOSIGNAL);
-        if (peek_n == 0) return std::nullopt; 
+        if (peek_n == 0) {
+            fprintf(stderr, "vDS-CORE: Interrupt-Pipeline physisch geschlossen (EOF).\n");
+            fflush(stderr);
+        } 
         return std::nullopt; 
     }
     
