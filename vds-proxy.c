@@ -1,7 +1,12 @@
->
+#define _GNU_SOURCE
+#include <sys/types.h>
+#include <stddef.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdint.h>
 #include <unistd.h>
 #include <fcntl.h>
-#include <stddef.h> 
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <sys/poll.h>
