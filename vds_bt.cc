@@ -111,7 +111,6 @@ UniqueFd listen_ipc_pipe(const char *name) {
   if (::bind(fd.get(), reinterpret_cast<const struct sockaddr *>(&sockaddr), actual_len) < 0) {
     throw std::runtime_error("failed to bind IPC socket @" + std::string(name) + ": " + std::strerror(errno));
   }
-  // Invariante: Blockierender Listener gegen Kernel-Korruption
   if (::listen(fd.get(), 5) < 0) {
     throw std::runtime_error("failed to listen on IPC socket @" + std::string(name) + ": " + std::strerror(errno));
   }
