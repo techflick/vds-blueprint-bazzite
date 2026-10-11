@@ -37,12 +37,12 @@ void close_if_open(int &fd) {
   }
 }
 
-// NEU: Hilfsfunktion für das Senden über das 2-Byte-Stream-Framing mit Debugging
+// Hilfsfunktion für das Senden über das 2-Byte-Stream-Framing mit Debugging
 bool send_framed_packet(int fd, std::span<const std::uint8_t> data) {
   if (fd < 0) return false;
   std::uint16_t len_be = htons(static_cast<std::uint16_t>(data.size()));
   
-  std::fprintf(stderr, "vDS-Daemon-Debug [SEND]: Versuche %zu Bytes zu senden (Framed-Header: %u)...\n", data.size(), data.size());
+  std::fprintf(stderr, "vDS-Daemon-Debug [SEND]: Versuche %zu Bytes zu senden (Framed-Header: %u)...\n", data.size(), (unsigned int)data.size());
 
   // 1. Sende den 2-Byte-Längen-Header (Big Endian)
   if (::send(fd, &len_be, 2, MSG_DONTWAIT | MSG_NOSIGNAL) != 2) {
@@ -61,7 +61,7 @@ bool send_framed_packet(int fd, std::span<const std::uint8_t> data) {
   return true;
 }
 
-// NEU: Hilfsfunktion für das atomare Lesen eines Stream-Pakets via MSG_PEEK mit Debugging
+// Hilfsfunktion für das atomare Lesen eines Stream-Pakets via MSG_PEEK mit Debugging
 std::optional<std::vector<std::uint8_t>> read_framed_packet(int fd) {
   if (fd < 0) return std::nullopt;
 
@@ -83,7 +83,6 @@ std::optional<std::vector<std::uint8_t>> read_framed_packet(int fd) {
   // Prüfen, ob das gesamte Paket im Kernel-Puffer liegt
   n = ::recv(fd, buf.data(), buf.size(), MSG_PEEK | MSG_DONTWAIT | MSG_NOSIGNAL);
   if (n < static_cast<ssize_t>(buf.size())) {
-    // Fragmentierungsschutz-Meldung (gedrosselt, um Spam zu vermeiden)
     static int fragment_count = 0;
     if (fragment_count++ % 100 == 0) {
       std::fprintf(stderr, "vDS-Daemon-Debug [RECV-FRAG]: Unvollständiges Paket auf fd=%d. Erwarte %d Bytes, im Puffer sind %zd.\n", fd, 2 + packet_len, n);
@@ -92,10 +91,40 @@ std::optional<std::vector<std::uint8_t>> read_framed_packet(int fd) {
   }
 
   // Paket endgültig aus der Pipeline konsumieren
-  ssize_t consumed = ::recv(fd, buf.data(), buf.size(), MSG_DONTWAIT | MSG_NOSIGNAL);
+  ::recv(fd, buf.data(), buf.size(), MSG_DONTWAIT | MSG_NOSIGNAL);
   std::fprintf(stderr, "vDS-Daemon-Debug [RECV-OK]: Stream-Paket komplett konsumiert (fd=%d, Payload: %u Bytes).\n", fd, packet_len);
 
   return std::vector<std::uint8_t>(buf.begin() + 2, buf.end());
+}
+
+static void setup_abstract_un(struct sockaddr_un &addr, const char *name) {
+  ::memset(&addr, 0, sizeof(struct sockaddr_un));
+  addr.sun_family = AF_UNIX;
+  addr.sun_path[0] = '\0';
+  ::memcpy(addr.sun_path + 1, name, ::strlen(name));
+}
+
+UniqueFd listen_ipc_pipe(const char *name) {
+  UniqueFd fd(::socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0));
+  if (!fd) {
+    throw std::runtime_error("failed to open IPC Unix socket: " + std::string(std::strerror(errno)));
+  }
+  set_nonblocking(fd.get(), "socket");
+
+  const int reuse = 1;
+  ::setsockopt(fd.get(), SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
+
+  struct sockaddr_un sockaddr{};
+  setup_abstract_un(sockaddr, name);
+  socklen_t actual_len = offsetof(struct sockaddr_un, sun_path) + 1 + ::strlen(name);
+
+  if (::bind(fd.get(), reinterpret_cast<const struct sockaddr *>(&sockaddr), actual_len) < 0) {
+    throw std::runtime_error("failed to bind IPC socket @" + std::string(name) + ": " + std::strerror(errno));
+  }
+  if (::listen(fd.get(), 5) < 0) {
+    throw std::runtime_error("failed to listen on IPC socket @" + std::string(name) + ": " + std::strerror(errno));
+  }
+  return fd;
 }
 
 std::optional<BtAcceptedChannel> accept_ipc_pipe(int listener_fd) {
@@ -124,7 +153,7 @@ std::optional<BtAcceptedChannel> accept_ipc_pipe(int listener_fd) {
   ssize_t n = ::recv(fd.get(), mac_bytes, 6, MSG_WAITALL | MSG_NOSIGNAL);
   if (n != 6) {
     std::fprintf(stderr, "vDS-Daemon-Debug [INIT-ERR]: MAC-Handshake ungültig! Nur %zd von 6 Bytes erhalten. Schließe Verbindung.\n", n);
-    return {}; // Handshake ungültig
+    return {}; 
   }
 
   // MAC in Text umwandeln
@@ -170,7 +199,7 @@ BtL2capBackend::BtL2capBackend(BtL2capBackend &&other) noexcept
     : address_(std::move(other.address_)), control_fd_(other.control_fd_),
       interrupt_fd_(other.interrupt_fd_) {
   other.control_fd_ = -1;
-  other.interrupt_fd_ = -1;
+  other.interrupt_fd = -1;
 }
 
 BtL2capBackend &BtL2capBackend::operator=(BtL2capBackend &&other) noexcept {
@@ -180,7 +209,7 @@ BtL2capBackend &BtL2capBackend::operator=(BtL2capBackend &&other) noexcept {
   close_if_open(interrupt_fd_);
   close_if_open(control_fd_);
   address_ = std::move(other.address_);
-  control_fd_ = other.control_fd_;
+  control_fd = other.control_fd_;
   interrupt_fd_ = other.interrupt_fd_;
   other.control_fd_ = -1;
   other.interrupt_fd_ = -1;
