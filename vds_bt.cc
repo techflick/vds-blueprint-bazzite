@@ -125,6 +125,8 @@ UniqueFd listen_ipc_pipe(const char *name) {
   return fd;
 }
 
+// [Fortsetzung von Teil 1 - direkt unten anfügen]
+
 std::optional<BtAcceptedChannel> accept_ipc_pipe(int listener_fd, const char *channel_name) {
   struct sockaddr_un peer{};
   socklen_t peer_size = sizeof(peer);
@@ -242,7 +244,7 @@ BtL2capBackend &BtL2capBackend::operator=(BtL2capBackend &&other) noexcept {
   }
   close_if_open(interrupt_fd_);
   close_if_open(control_fd_);
-  address = std::move(other.address_);
+  address_ = std::move(other.address_); // Hier korrigiert: Unterstrich eingefügt
   control_fd_ = other.control_fd_; 
   interrupt_fd_ = other.interrupt_fd_;
   other.control_fd_ = -1;
