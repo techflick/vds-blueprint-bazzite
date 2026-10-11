@@ -1,29 +1,45 @@
-#include "vds_bt.hh"
+#include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <unistd.h>
 #include <fcntl.h>
-#include <cstring>
+#include <string.h>
+#include <stdint.h>
+#include <errno.h>
+#include <signal.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <stdexcept>
-#include <vector>
-#include <span>
-#include <cstddef> 
-#include <stdio.h> 
-#include <cerrno>
-#include <csignal>
+#include <string>
 #include <sstream>
 #include <iomanip>
+#include <vector>
+#include <optional>
+#include <span>
+
+struct UniqueFd {
+    int fd;
+    UniqueFd() : fd(-1) {}
+    explicit UniqueFd(int f) : fd(f) {}
+    ~UniqueFd() { if (fd >= 0) ::close(fd); }
+    int get() const { return fd; }
+    int release() { int tmp = fd; fd = -1; return tmp; }
+};
+
+struct BtAcceptedChannel {
+    std::string address;
+    UniqueFd fd;
+};
+
+extern std::optional<std::vector<std::uint8_t>> bt_feature_to_usb_feature_reply(std::span<const std::uint8_t> data);
 
 namespace vds {
 
-// Forward-Deklaration der originalen Upstream-Pipeline
-extern std::optional<std::vector<std::uint8_t>> bt_feature_to_usb_feature_reply(std::span<const std::uint8_t> report);
-
-static void setup_abstract_un(struct sockaddr_un &un_addr, const char *name) {
-    std::memset(&un_addr, 0, sizeof(struct sockaddr_un));
-    un_addr.sun_family = AF_UNIX;
-    // FIX: Kopiert exakt die reinen Zeichen ("v_c" = 2 Bytes), kein ungewolltes Padding
-    std::memcpy(un_addr.sun_path + 1, name, std::strlen(name));
+static void setup_abstract_un(struct sockaddr_un &addr, const char *name) {
+    std::memset(&addr, 0, sizeof(struct sockaddr_un));
+    addr.sun_family = AF_UNIX;
+    addr.sun_path[0] = '\0';
+    std::memcpy(addr.sun_path + 1, name, std::strlen(name));
 }
 
 static UniqueFd create_ipc_listener(const char *name) {
@@ -39,7 +55,6 @@ static UniqueFd create_ipc_listener(const char *name) {
     struct sockaddr_un un_addr;
     setup_abstract_un(un_addr, name);
     
-    // FIX: Dynamische Längenberechnung (1 Byte führendes \0 + exakte Stringlänge)
     socklen_t actual_len = offsetof(struct sockaddr_un, sun_path) + 1 + std::strlen(name);
     
     if (::bind(fd, reinterpret_cast<const struct sockaddr*>(&un_addr), actual_len) < 0) {
@@ -80,6 +95,15 @@ static std::string extract_dynamic_mac_from_payload(int client_fd) {
     return ss.str();
 }
 
+class BtL2capAcceptor {
+    UniqueFd control_listener_fd_;
+    UniqueFd interrupt_listener_fd_;
+public:
+    BtL2capAcceptor();
+    std::optional<BtAcceptedChannel> accept_control();
+    std::optional<BtAcceptedChannel> accept_interrupt();
+};
+
 BtL2capAcceptor::BtL2capAcceptor() 
     : control_listener_fd_(create_ipc_listener("v_c")), 
       interrupt_listener_fd_(create_ipc_listener("v_i")) {}
@@ -114,6 +138,24 @@ std::optional<BtAcceptedChannel> BtL2capAcceptor::accept_interrupt() {
     return BtAcceptedChannel{.address = mac, .fd = UniqueFd(fd)};
 }
 
+class BtL2capBackend {
+    std::string address_;
+    int control_fd_;
+    int interrupt_fd_;
+public:
+    BtL2capBackend(std::string addr, UniqueFd c, UniqueFd i);
+    ~BtL2capBackend();
+    BtL2capBackend(BtL2capBackend &&other) noexcept;
+    BtL2capBackend &operator=(BtL2capBackend &&other) noexcept;
+    
+    void send_output_report(std::span<const std::uint8_t> r);
+    bool try_send_output_report(std::span<const std::uint8_t> r);
+    void send_feature_get(std::uint8_t id);
+    void send_feature_set(std::span<const std::uint8_t> r);
+    std::optional<std::vector<std::uint8_t>> read_feature_report();
+    std::optional<std::vector<std::uint8_t>> read_interrupt_packet();
+};
+
 BtL2capBackend::BtL2capBackend(std::string addr, UniqueFd c, UniqueFd i) 
     : address_(addr), control_fd_(c.release()), interrupt_fd_(i.release()) {
     std::signal(SIGPIPE, SIG_IGN);
@@ -134,7 +176,6 @@ BtL2capBackend &BtL2capBackend::operator=(BtL2capBackend &&other) noexcept {
     if (this != &other) {
         if(control_fd_ >= 0) ::close(control_fd_);
         if(interrupt_fd_ >= 0) ::close(interrupt_fd_);
-        
         address_ = std::move(other.address_); 
         control_fd_ = other.control_fd_;    
         interrupt_fd_ = other.interrupt_fd_;
@@ -168,15 +209,11 @@ void BtL2capBackend::send_feature_set(std::span<const std::uint8_t> r) {
 
 std::optional<std::vector<std::uint8_t>> BtL2capBackend::read_feature_report() { 
     if (control_fd_ < 0) return std::nullopt;
-
-    // Temporär blockierend schalten, um stabil auf den Proxy-Handshake zu warten
     int flags = ::fcntl(control_fd_, F_GETFL, 0);
     if (flags >= 0) ::fcntl(control_fd_, F_SETFL, flags & ~O_NONBLOCK);
 
     std::vector<std::uint8_t> rx_buffer(1024);
     ssize_t n = ::recv(control_fd_, rx_buffer.data(), rx_buffer.size(), MSG_NOSIGNAL);
-    
-    // Sofort wieder in den originalen (asynchronen) Zustand versetzen
     if (flags >= 0) ::fcntl(control_fd_, F_SETFL, flags);
 
     if (n <= 0) {
@@ -190,24 +227,16 @@ std::optional<std::vector<std::uint8_t>> BtL2capBackend::read_feature_report() {
         }
         return std::nullopt; 
     }
-
     rx_buffer.resize(n);
 
-    // ◼ TRANSPARENTE UPSTREAM-TRANSFORMATION
-    // Wenn der Proxy das L2CAP-Paket inklusive des Bluetooth HID-Headers (0xA3) schickt,
-    // schneiden wir dieses Steuerbyte ab, damit die Upstream-Pipeline den reinen Report verarbeitet.
     if (rx_buffer.size() > 1 && rx_buffer[0] == 0xA3) {
-        // Direktes Durchreichen der extrahierten Payload. 
-        // bt_feature_to_usb_feature_reply liefert bereits das korrekte std::optional!
         return bt_feature_to_usb_feature_reply(std::span(rx_buffer.data() + 1, rx_buffer.size() - 1));
     }
-
     return bt_feature_to_usb_feature_reply(std::span(rx_buffer.data(), rx_buffer.size()));
 }
 
 std::optional<std::vector<std::uint8_t>> BtL2capBackend::read_interrupt_packet() {
     if (interrupt_fd_ < 0) return std::nullopt;
-
     std::vector<std::uint8_t> buf(1024);
     ssize_t n = ::recv(interrupt_fd_, buf.data(), buf.size(), MSG_DONTWAIT | MSG_NOSIGNAL);
     
@@ -215,7 +244,6 @@ std::optional<std::vector<std::uint8_t>> BtL2capBackend::read_interrupt_packet()
         if (errno == EAGAIN || errno == EWOULDBLOCK) return std::nullopt;
         return std::nullopt;
     }
-    
     if (n == 0) {
         std::uint8_t peek_dummy;
         ssize_t peek_n = ::recv(interrupt_fd_, &peek_dummy, 1, MSG_PEEK | MSG_DONTWAIT | MSG_NOSIGNAL);
@@ -225,7 +253,6 @@ std::optional<std::vector<std::uint8_t>> BtL2capBackend::read_interrupt_packet()
         } 
         return std::nullopt; 
     }
-    
     buf.resize(n);
     return buf;
 }
