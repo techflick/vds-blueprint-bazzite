@@ -262,10 +262,16 @@ int main(void) {
                 } else if (len == 0) {
                     printf("vDS-Proxy: [DISCONN] vdsd_ctrl Stream sauber beendet.\n");
                     goto shutdown_global; 
-                } else if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
-                    static int err_count = 0;
-                    if (err_count++ % 100 == 0) {
-                        printf("vDS-Proxy: [STREAM-PEEK] Warte auf vollständiges Paket-Framing auf vdsd_ctrl...\n");
+                } else if (len < 0) {
+                    // Fix: Strukturierte Weiterschaltung bei Fragmentierung
+                    if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                        static int err_count = 0;
+                        if (err_count++ % 100 == 0) {
+                            printf("vDS-Proxy: [STREAM-PEEK] Warte auf vollständiges Paket-Framing auf vdsd_ctrl...\n");
+                        }
+                    } else {
+                        printf("vDS-Proxy: [DISCONN] Kritischer Lesefehler auf vdsd_ctrl Stream, errno=%d.\n", errno);
+                        goto shutdown_global;
                     }
                 }
             }
@@ -303,6 +309,12 @@ int main(void) {
                 } else if (len == 0) {
                     printf("vDS-Proxy: [DISCONN] vdsd_intr Stream sauber beendet.\n");
                     goto shutdown_global;
+                } else if (len < 0) {
+                    // Fix: Strukturierte Weiterschaltung bei Fragmentierung
+                    if (errno != EAGAIN && errno != EWOULDBLOCK) {
+                        printf("vDS-Proxy: [DISCONN] Kritischer Lesefehler auf vdsd_intr Stream.\n");
+                        goto shutdown_global;
+                    }
                 }
             }
             if ((rev & POLLHUP) && !(rev & POLLIN)) {
