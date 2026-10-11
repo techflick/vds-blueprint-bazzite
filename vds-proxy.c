@@ -117,7 +117,7 @@ ssize_t recv_stream_packet(int stream_fd, uint8_t *out_buf, size_t max_len) {
 
     n = recv(stream_fd, out_buf, 2 + packet_len, MSG_PEEK | MSG_DONTWAIT | MSG_NOSIGNAL);
     if (n < (2 + packet_len)) {
-        errno = EAGAIN; // Modifikation: Live-Lock-Schutz bei Teilfragmenten
+        errno = EAGAIN; 
         return -1; 
     }
 
@@ -202,18 +202,14 @@ int main(void) {
             }
         }
 
-        // Kaskadierender IPC-Aufbau erst, wenn BEIDE Bluetooth-Kanäle stehen
+        // Koordinierter, sequentieller IPC-Handshake (Verhindert den Deadlock im Daemon)
         if (client_ctrl >= 0 && client_intr >= 0 && vdsd_ctrl == -1 && vdsd_intr == -1) {
-            
-            // 1. Schritt: Control-Pipeline öffnen & Handshake durchführen
             vdsd_ctrl = connect_unix_pipe("v_c", controller_mac);
             if (vdsd_ctrl < 0) {
                 fprintf(stderr, "vDS-Proxy: [IPC-ERR] Fehler beim Verbinden mit vdsd_ctrl (@v_c)\n");
                 goto shutdown_global;
             }
-            printf("vDS-Proxy: [IPC] Control-Pipeline erfolgreich synchronisiert. Starte Interrupt-Kopplung...\n");
-
-            // 2. Schritt: Interrupt-Pipeline erst danach öffnen, damit vdsd im Ablauf hinterherspringen kann
+            
             vdsd_intr = connect_unix_pipe("v_i", controller_mac);
             if (vdsd_intr < 0) {
                 fprintf(stderr, "vDS-Proxy: [IPC-ERR] Fehler beim Verbinden mit vdsd_intr (@v_i)\n");
@@ -238,8 +234,8 @@ int main(void) {
                     uint8_t *ptr = (uint8_t *)heap_buffer;
                     packet_counter++;
                     if (packet_counter % 20 == 0 || ptr[0] == 0xA3) {
-                        printf("vDS-Proxy: [BT->IPC CTRL] Paket #%lu | Len: %ld | HID-Typ: 0x%02X | Report-ID: 0x%02X\n", 
-                               packet_counter, len, ptr[0], (len > 1 ? ptr[1] : 00));
+                        printf("vDS-Proxy: [BT->IPC CTRL] Paket #%lu | Len: %ld | HID-Typ: 0x%02X\n", 
+                               packet_counter, len, ptr[0]);
                     }
                     if (vdsd_ctrl >= 0) {
                         ssize_t s_ret = send_stream_packet(vdsd_ctrl, (const uint8_t *)heap_buffer, len);
@@ -252,10 +248,7 @@ int main(void) {
             }
             if ((rev & POLLHUP) && !(rev & POLLIN)) {
                 char test_ch;
-                if (recv(client_ctrl, &test_ch, 1, MSG_PEEK | MSG_DONTWAIT | MSG_NOSIGNAL) == 0) {
-                    printf("vDS-Proxy: [DISCONN] PEEK-Bestätigung für POLLHUP auf client_ctrl.\n");
-                    goto shutdown_global;
-                }
+                if (recv(client_ctrl, &test_ch, 1, MSG_PEEK | MSG_DONTWAIT | MSG_NOSIGNAL) == 0) goto shutdown_global;
             }
         }
 
@@ -265,20 +258,12 @@ int main(void) {
             if (rev & POLLIN) {
                 ssize_t len = recv_stream_packet(vdsd_ctrl, (uint8_t *)heap_buffer, 1024);
                 if (len > 0) {
-                    uint8_t *ptr = (uint8_t *)heap_buffer;
-                    printf("vDS-Proxy: [IPC->BT CTRL] Daemon-Antwort erhalten! Len: %ld | Typ: 0x%02X\n", len, ptr[0]);
                     if (client_ctrl >= 0) send(client_ctrl, heap_buffer, len, MSG_DONTWAIT | MSG_NOSIGNAL);
                 } else if (len == 0) {
                     printf("vDS-Proxy: [DISCONN] vdsd_ctrl Stream sauber beendet.\n");
                     goto shutdown_global; 
                 } else if (len < 0) {
-                    // Fix: Strukturierte Weiterschaltung bei Fragmentierung
-                    if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                        static int err_count = 0;
-                        if (err_count++ % 100 == 0) {
-                            printf("vDS-Proxy: [STREAM-PEEK] Warte auf vollständiges Paket-Framing auf vdsd_ctrl...\n");
-                        }
-                    } else {
+                    if (errno != EAGAIN && errno != EWOULDBLOCK) {
                         printf("vDS-Proxy: [DISCONN] Kritischer Lesefehler auf vdsd_ctrl Stream, errno=%d.\n", errno);
                         goto shutdown_global;
                     }
@@ -319,7 +304,6 @@ int main(void) {
                     printf("vDS-Proxy: [DISCONN] vdsd_intr Stream sauber beendet.\n");
                     goto shutdown_global;
                 } else if (len < 0) {
-                    // Fix: Strukturierte Weiterschaltung bei Fragmentierung
                     if (errno != EAGAIN && errno != EWOULDBLOCK) {
                         printf("vDS-Proxy: [DISCONN] Kritischer Lesefehler auf vdsd_intr Stream.\n");
                         goto shutdown_global;
@@ -334,7 +318,6 @@ int main(void) {
         continue;
 
     shutdown_global:
-        // Modifikation: Verhindert den Zombie-Timeout durch vollständiges synchrones Schließen aller Leitungen
         if (client_ctrl >= 0) close(client_ctrl);
         if (vdsd_ctrl >= 0) close(vdsd_ctrl);
         if (client_intr >= 0) close(client_intr);
