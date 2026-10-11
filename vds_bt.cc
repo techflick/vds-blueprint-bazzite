@@ -18,28 +18,17 @@
 #include <optional>
 #include <span>
 
-struct UniqueFd {
-    int fd;
-    UniqueFd() : fd(-1) {}
-    explicit UniqueFd(int f) : fd(f) {}
-    ~UniqueFd() { if (fd >= 0) ::close(fd); }
-    int get() const { return fd; }
-    int release() { int tmp = fd; fd = -1; return tmp; }
-};
-
-struct BtAcceptedChannel {
-    std::string address;
-    UniqueFd fd;
-};
-
-extern std::optional<std::vector<std::uint8_t>> bt_feature_to_usb_feature_reply(std::span<const std::uint8_t> data);
+// ◼ EINBETTUNG DER ORIGINALEN PROJEKT-HEADER (Verhindert Signatur-Konflikte)
+#include "vds_bt.hh"
 
 namespace vds {
+
+// ◼ LINKER-FIX: Die Konvertierungsfunktion MUSS innerhalb des Namespaces vds deklariert sein!
+extern std::optional<std::vector<std::uint8_t>> bt_feature_to_usb_feature_reply(std::span<const std::uint8_t> data);
 
 static void setup_abstract_un(struct sockaddr_un &addr, const char *name) {
     ::memset(&addr, 0, sizeof(struct sockaddr_un));
     addr.sun_family = AF_UNIX;
-    // ◼ COMPILER-FIX: Index explizit ansprechen, um dem char-Array das Nullbyte zuzuweisen
     addr.sun_path[0] = '\0';
     ::memcpy(addr.sun_path + 1, name, ::strlen(name));
 }
@@ -74,7 +63,7 @@ static UniqueFd create_ipc_listener(const char *name) {
 }
 
 static std::string extract_dynamic_mac_from_payload(int client_fd) {
-    std::uint8_t mac_bytes[6] = {0}; // ◼ SYNTAX-FIX: Valides 6-Byte Array initialisiert
+    std::uint8_t mac_bytes[6] = {0};
     
     int flags = ::fcntl(client_fd, F_GETFL, 0);
     ::fcntl(client_fd, F_SETFL, flags & ~O_NONBLOCK);
@@ -97,18 +86,12 @@ static std::string extract_dynamic_mac_from_payload(int client_fd) {
     return ss.str();
 }
 
-class BtL2capAcceptor {
-    UniqueFd control_listener_fd_;
-    UniqueFd interrupt_listener_fd_;
-public:
-    BtL2capAcceptor();
-    std::optional<BtAcceptedChannel> accept_control();
-    std::optional<BtAcceptedChannel> accept_interrupt();
-};
+// ◼ NAMESPACE-FIX: Direkte Implementierung der im Header deklarierten Methoden, 
+// ohne die Klassenstrukturen im cc-File künstlich zu duplizieren.
 
 BtL2capAcceptor::BtL2capAcceptor() 
-    : control_listener_fd_(create_ipc_listener("v_c")), 
-      interrupt_listener_fd_(create_ipc_listener("v_i")) {}
+    : control_listener_fd_(create_ipc_listener("v_c").release()), 
+      interrupt_listener_fd_(create_ipc_listener("v_i").release()) {}
 
 std::optional<BtAcceptedChannel> BtL2capAcceptor::accept_control() {
     struct sockaddr_un peer;
@@ -139,24 +122,6 @@ std::optional<BtAcceptedChannel> BtL2capAcceptor::accept_interrupt() {
     
     return BtAcceptedChannel{.address = mac, .fd = UniqueFd(fd)};
 }
-
-class BtL2capBackend {
-    std::string address_;
-    int control_fd_;
-    int interrupt_fd_;
-public:
-    BtL2capBackend(std::string addr, UniqueFd c, UniqueFd i);
-    ~BtL2capBackend();
-    BtL2capBackend(BtL2capBackend &&other) noexcept;
-    BtL2capBackend &operator=(BtL2capBackend &&other) noexcept;
-    
-    void send_output_report(std::span<const std::uint8_t> r);
-    bool try_send_output_report(std::span<const std::uint8_t> r);
-    void send_feature_get(std::uint8_t id);
-    void send_feature_set(std::span<const std::uint8_t> r);
-    std::optional<std::vector<std::uint8_t>> read_feature_report();
-    std::optional<std::vector<std::uint8_t>> read_interrupt_packet();
-};
 
 BtL2capBackend::BtL2capBackend(std::string addr, UniqueFd c, UniqueFd i) 
     : address_(std::move(addr)), control_fd_(c.release()), interrupt_fd_(i.release()) {
@@ -234,11 +199,11 @@ std::optional<std::vector<std::uint8_t>> BtL2capBackend::read_feature_report() {
 
     rx_buffer.resize(n);
 
-    // ◼ COMPILER-FIX: Indexzugriff rx_buffer[0], da ein std::vector nicht direkt mit einem Byte verglichen werden kann
+    // ◼ NAMESPACE-MATCHNIG: Aufruf ohne globalen Scope :: da die Funktion im selben Namespace liegt
     if (rx_buffer.size() > 1 && rx_buffer[0] == 0xA3) {
-        return ::bt_feature_to_usb_feature_reply(std::span<const std::uint8_t>(rx_buffer.data() + 1, rx_buffer.size() - 1));
+        return bt_feature_to_usb_feature_reply(std::span<const std::uint8_t>(rx_buffer.data() + 1, rx_buffer.size() - 1));
     }
-    return ::bt_feature_to_usb_feature_reply(std::span<const std::uint8_t>(rx_buffer.data(), rx_buffer.size()));
+    return bt_feature_to_usb_feature_reply(std::span<const std::uint8_t>(rx_buffer.data(), rx_buffer.size()));
 }
 
 std::optional<std::vector<std::uint8_t>> BtL2capBackend::read_interrupt_packet() {
