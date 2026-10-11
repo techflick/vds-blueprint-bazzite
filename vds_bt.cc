@@ -16,6 +16,9 @@
 
 namespace vds {
 
+// Forward-Deklaration der originalen Upstream-Pipeline
+extern std::optional<std::vector<std::uint8_t>> bt_feature_to_usb_feature_reply(std::span<const std::uint8_t> report);
+
 static void setup_abstract_un(struct sockaddr_un &un_addr, const char *name) {
     std::memset(&un_addr, 0, sizeof(struct sockaddr_un));
     un_addr.sun_family = AF_UNIX;
@@ -67,7 +70,6 @@ static std::string extract_dynamic_mac_from_payload(int client_fd) {
         return "00:00:00:00:00:00";
     }
 
-    // Für das Bazzite-Log sauber menschenlesbar formatieren (z. B. 88:03:4C...)
     std::stringstream ss;
     for (int i = 5; i >= 0; --i) {
         ss << std::hex << std::setw(2) << std::setfill('0') << std::uppercase << static_cast<int>(mac_bytes[i]);
@@ -86,13 +88,7 @@ std::optional<BtAcceptedChannel> BtL2capAcceptor::accept_control() {
     std::memset(&peer, 0, sizeof(struct sockaddr_un));
 
     int fd = ::accept4(control_listener_fd_.get(), reinterpret_cast<struct sockaddr*>(&peer), &len, SOCK_NONBLOCK | SOCK_CLOEXEC);
-    
-    if (fd < 0) {
-        if (errno == EAGAIN || errno == EWOULDBLOCK) {
-            return std::nullopt;
-        }
-        return std::nullopt;
-    }
+    if (fd < 0) return std::nullopt;
     
     std::string mac = extract_dynamic_mac_from_payload(fd);
     fprintf(stderr, "vDS-CORE: Control-Kanal erfolgreich extrahiert. Controller-MAC: %s\n", mac.c_str());
@@ -107,13 +103,7 @@ std::optional<BtAcceptedChannel> BtL2capAcceptor::accept_interrupt() {
     std::memset(&peer, 0, sizeof(struct sockaddr_un));
 
     int fd = ::accept4(interrupt_listener_fd_.get(), reinterpret_cast<struct sockaddr*>(&peer), &len, SOCK_NONBLOCK | SOCK_CLOEXEC);
-    
-    if (fd < 0) {
-        if (errno == EAGAIN || errno == EWOULDBLOCK) {
-            return std::nullopt;
-        }
-        return std::nullopt;
-    }
+    if (fd < 0) return std::nullopt;
     
     std::string mac = extract_dynamic_mac_from_payload(fd);
     fprintf(stderr, "vDS-CORE: Interrupt-Kanal erfolgreich extrahiert. Controller-MAC: %s\n", mac.c_str());
@@ -193,7 +183,7 @@ std::optional<std::vector<std::uint8_t>> BtL2capBackend::read_feature_report() {
     }
 
     rx_buffer.resize(n);
-    return rx_buffer; // 1:1 Pass-Through der echten Hardware-Daten an Upstream
+    return bt_feature_to_usb_feature_reply(std::span(rx_buffer.data(), rx_buffer.size()));
 }
 
 std::optional<std::vector<std::uint8_t>> BtL2capBackend::read_interrupt_packet() {
