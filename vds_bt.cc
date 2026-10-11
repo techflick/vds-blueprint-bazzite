@@ -129,14 +129,14 @@ BtL2capBackend::~BtL2capBackend() {
 BtL2capBackend::BtL2capBackend(BtL2capBackend &&other) noexcept 
     : address_(std::move(other.address_)), control_fd_(other.control_fd_), interrupt_fd_(other.interrupt_fd_) {
     other.control_fd_ = -1;
-    other.interrupt_fd = -1;
+    other.interrupt_fd_ = -1; // Korrigiert: Unterstrich hinzugefügt
 }
 
 BtL2capBackend &BtL2capBackend::operator=(BtL2capBackend &&other) noexcept {
     if (this != &other) {
         if(control_fd_ >= 0) ::close(control_fd_);
         if(interrupt_fd_ >= 0) ::close(interrupt_fd_);
-        address = std::move(other.address_); 
+        address_ = std::move(other.address_); // Korrigiert: Unterstrich hinzugefügt
         control_fd_ = other.control_fd_;    
         interrupt_fd_ = other.interrupt_fd_;
         other.control_fd_ = -1;
@@ -192,7 +192,6 @@ std::optional<std::vector<std::uint8_t>> BtL2capBackend::read_feature_report() {
 
     rx_buffer.resize(n);
 
-    // ◼ FIX: Typensicheres Slicing des Spans über das abgetrennte HID-Byte (0xA3)
     if (rx_buffer.size() > 1 && rx_buffer[0] == 0xA3) {
         return bt_feature_to_usb_feature_reply(std::span<const std::uint8_t>(rx_buffer.data() + 1, rx_buffer.size() - 1));
     }
