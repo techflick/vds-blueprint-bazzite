@@ -204,14 +204,23 @@ int main(void) {
 
         // Kaskadierender IPC-Aufbau erst, wenn BEIDE Bluetooth-Kanäle stehen
         if (client_ctrl >= 0 && client_intr >= 0 && vdsd_ctrl == -1 && vdsd_intr == -1) {
+            
+            // 1. Schritt: Control-Pipeline öffnen & Handshake durchführen
             vdsd_ctrl = connect_unix_pipe("v_c", controller_mac);
-            vdsd_intr = connect_unix_pipe("v_i", controller_mac);
-            if (vdsd_ctrl >= 0 && vdsd_intr >= 0) {
-                printf("vDS-Proxy: [IPC] Control- & Interrupt-Pipeline erfolgreich aktiv geschaltet.\n");
-            } else {
-                fprintf(stderr, "vDS-Proxy: [IPC-ERR] Fehler beim Verbinden mit vdsd Daemon (ctrl: %d, intr: %d)\n", vdsd_ctrl, vdsd_intr);
+            if (vdsd_ctrl < 0) {
+                fprintf(stderr, "vDS-Proxy: [IPC-ERR] Fehler beim Verbinden mit vdsd_ctrl (@v_c)\n");
                 goto shutdown_global;
             }
+            printf("vDS-Proxy: [IPC] Control-Pipeline erfolgreich synchronisiert. Starte Interrupt-Kopplung...\n");
+
+            // 2. Schritt: Interrupt-Pipeline erst danach öffnen, damit vdsd im Ablauf hinterherspringen kann
+            vdsd_intr = connect_unix_pipe("v_i", controller_mac);
+            if (vdsd_intr < 0) {
+                fprintf(stderr, "vDS-Proxy: [IPC-ERR] Fehler beim Verbinden mit vdsd_intr (@v_i)\n");
+                goto shutdown_global;
+            }
+
+            printf("vDS-Proxy: [IPC] Control- & Interrupt-Pipeline erfolgreich aktiv geschaltet.\n");
         }
 
         // Fehler-Evaluierung (FD-Filter-Gate)
