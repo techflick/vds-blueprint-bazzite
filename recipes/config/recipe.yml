@@ -178,12 +178,13 @@ modules:
             PKG_ROOT="/vds-pkg-root" && \
             cp /vds_build_dir/module/vds_hcd.ko "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra/vds_hcd.ko" && \
             chmod 644 "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra/vds_hcd.ko" && \
-            # Native C-Kompilierung des Proxys mit gesetzten Optimierungen
-            g++ -O3 -Wall /vds_build_dir/vds-proxy.c -o /vds_build_dir/vds-proxy-bin && \
             #
-            # KORREKTUR: Überschreibe die originalen Blueprint-Dateien mit deinen modifizierten Versionen
+            # Kopiere deine modifizierten Versionen aus dem Projekt-Root in den Build-Ordner
             cp /vds_bt.cc /vds_build_dir/src/platform/linux/vds_bt.cc && \
             cp /vds_bt.hh /vds_build_dir/src/platform/linux/vds_bt.hh && \
+            #
+            # Native C-Kompilierung des Proxys mit gesetzten Optimierungen
+            g++ -O3 -Wall /vds_build_dir/vds-proxy.c -o /vds_build_dir/vds-proxy-bin && \
             #
             # CMake generiert das Build-Verzeichnis unter Verwendung der überschriebenen Dateien
             cd /vds_build_dir && mkdir -p build && cd build && \
