@@ -144,11 +144,8 @@ std::optional<BtAcceptedChannel> accept_ipc_pipe(int listener_fd, const char *ch
     return std::nullopt; 
   }
 
-  // KORREKTUR: Aufruf korrigiert zu 'set_nonblocking' (aus vds_io.hh / vdsd Namespace)
-  if (set_nonblocking(fd.get()) < 0) {
-    std::fprintf(stderr, "vDS-Daemon-Debug [INIT-ERR]: Fehler beim Setzen von O_NONBLOCK auf %s (fd=%d)\n", channel_name, fd.get());
-    return std::nullopt;
-  }
+  // KORREKTUR: Korrekter Aufruf mit zwei Argumenten (FD und string_view Label) gemäß vds_io.hh Invariante
+  set_nonblocking(fd.get(), channel_name);
 
   char mac_str[18]{};
   std::snprintf(mac_str, sizeof(mac_str), "%02x:%02x:%02x:%02x:%02x:%02x",
@@ -221,7 +218,6 @@ BtL2capBackend::~BtL2capBackend() {
 BtL2capBackend::BtL2capBackend(BtL2capBackend &&other) noexcept
     : address_(std::move(other.address_)), control_fd_(other.control_fd_),
       interrupt_fd_(other.interrupt_fd_) {
-  // KORREKTUR: Unterstriche hinzugefügt, um auf die Membervariablen statt Funktionen zuzugreifen
   other.control_fd_ = -1;
   other.interrupt_fd_ = -1; 
 }
