@@ -88,16 +88,20 @@ modules:
         # Kopiert die fehlerfreien C/C++ Dateien direkt in das Dateisystem des Containers
         COPY vds-proxy.c /vds_build_dir/vds-proxy.c
         COPY vds_bt.cc /vds_build_dir/vds_bt.cc
+        # KORREKTUR: Holt das modifizierte C++ Konstruktionsblatt (Header) in den Container
+        COPY vds_bt.hh /vds_build_dir/vds_bt.hh
 
         RUN cd /vds_build_dir && \
             # Ersetzt die originale vds_bt.cc radikal vor dem CMake-Aufruf
             cp /vds_build_dir/vds_bt.cc /vds_build_dir/src/platform/linux/vds_bt.cc && \
+            # KORREKTUR: Überschreibt den originalen Blueprint-Header an der korrekten Stelle
+            cp /vds_build_dir/vds_bt.hh /vds_build_dir/src/platform/linux/vds_bt.hh && \
             # Deaktiviert BlueZ-Abhängigkeiten im Build-System
             sed -i '/pkg_check_modules.*bluez/c\set(bluez_FOUND TRUE)\nset(bluez_INCLUDE_DIRS "/vds_build_dir/include")\nset(bluez_LIBRARIES "")' CMakeLists.txt && \
             sed -i 's/PkgConfig::BLUEZ//g' CMakeLists.txt && \
             # Starr typisierte Hardware-Fälschung maskiert patchen (\x3a verhindert YAML-Parser-Kollaps)
             sed -i "s|vds::bluez_device_modalias(address);|std::optional<std::string>(\"usb\x3av054Cp0CE6d0100\");|g" src/platform/linux/vdsd.cc
-        
+
         # BLOCK 5: SYSTEM-KONFIGURATIONEN (SYSTEMD, UDEV, ALSA) - MIT KERNEL-BOOT-SCHUTZ
         RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
             PKG_ROOT="/vds-pkg-root" && \
@@ -178,15 +182,9 @@ modules:
             PKG_ROOT="/vds-pkg-root" && \
             cp /vds_build_dir/module/vds_hcd.ko "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra/vds_hcd.ko" && \
             chmod 644 "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra/vds_hcd.ko" && \
-            #
-            # Exakt das alte, funktionierende Pfad-Verhalten aus dem Container-Wurzelverzeichnis
-            cp /vds_bt.cc /vds_build_dir/src/platform/linux/vds_bt.cc && \
-            cp /vds_bt.hh /vds_build_dir/src/platform/linux/vds_bt.hh && \
-            #
             # Native C-Kompilierung des Proxys mit gesetzten Optimierungen
             g++ -O3 -Wall /vds_build_dir/vds-proxy.c -o /vds_build_dir/vds-proxy-bin && \
-            #
-            # CMake generiert das Build-Verzeichnis unter Verwendung der überschriebenen Dateien
+            # CMake generiert das Build-Verzeichnis unter Verwendung der überschriebenen vds_bt.cc
             cd /vds_build_dir && mkdir -p build && cd build && \
             cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS="-isystem /vds_build_dir/include" -DCMAKE_CXX_FLAGS="-isystem /vds_build_dir/include" && \
             make -j$(nproc) && \
@@ -229,5 +227,6 @@ modules:
                    /etc/systemd/system/multi-user.target.wants/vdsd.service && \
             ln -sf /usr/lib/systemd/system/vds-chmod-sdp.path \
                    /etc/systemd/system/multi-user.target.wants/vds-chmod-sdp.path && \
-            # Sauberes Entfernen der Build-Überreste
-            rm -rf /vds_build_dir /vds_bt.cc /vds-proxy.c /vds-pkg-root /tmp/vds-rpm /root/rpmbuild
+            #
+            # KORREKTUR: Sauberes Entfernen ALLER Build-Überreste (inklusive der vds_bt.hh)
+            rm -rf /vds_build_dir /vds_bt.cc /vds_bt.hh /vds-proxy.c /vds-pkg-root /tmp/vds-rpm /root/rpmbuild
