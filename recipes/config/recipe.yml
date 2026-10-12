@@ -179,10 +179,9 @@ modules:
             cp /vds_build_dir/module/vds_hcd.ko "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra/vds_hcd.ko" && \
             chmod 644 "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra/vds_hcd.ko" && \
             #
-            # KORREKTUR: relative Pfade (Punkt vorangestellt oder ohne führenden Slash), 
-            # damit die Quelldateien aus dem Build-Kontext gezogen werden.
-            cp ./vds_bt.cc /vds_build_dir/src/platform/linux/vds_bt.cc && \
-            cp ./vds_bt.hh /vds_build_dir/src/platform/linux/vds_bt.hh && \
+            # Exakt das alte, funktionierende Pfad-Verhalten aus dem Container-Wurzelverzeichnis
+            cp /vds_bt.cc /vds_build_dir/src/platform/linux/vds_bt.cc && \
+            cp /vds_bt.hh /vds_build_dir/src/platform/linux/vds_bt.hh && \
             #
             # Native C-Kompilierung des Proxys mit gesetzten Optimierungen
             g++ -O3 -Wall /vds_build_dir/vds-proxy.c -o /vds_build_dir/vds-proxy-bin && \
