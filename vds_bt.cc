@@ -137,7 +137,6 @@ std::optional<BtAcceptedChannel> accept_ipc_pipe(int listener_fd, const char *ch
   UniqueFd fd(raw_fd);
   std::fprintf(stderr, "vDS-Daemon-Debug [INIT]: %s-Verbindung akzeptiert (fd=%d). Starte blockierende Identitäts-Phase (Warte auf 6-Byte MAC)...\n", channel_name, fd.get());
 
-  // KORREKTUR: Explizites 6-Byte Array deklariert, um void* Konversion zu erfüllen
   std::uint8_t mac_bytes[6] = {0};
   ssize_t n = ::recv(fd.get(), mac_bytes, 6, MSG_WAITALL | MSG_NOSIGNAL);
   if (n != 6) {
@@ -145,13 +144,12 @@ std::optional<BtAcceptedChannel> accept_ipc_pipe(int listener_fd, const char *ch
     return std::nullopt; 
   }
 
-  // KORREKTUR: Nutzen der originalen, globalen vds-Funktion set_nonblocking_fd anstatt des Namensdrehers
-  if (set_nonblocking_fd(fd.get()) < 0) {
+  // KORREKTUR: Aufruf korrigiert zu 'set_nonblocking' (aus vds_io.hh / vdsd Namespace)
+  if (set_nonblocking(fd.get()) < 0) {
     std::fprintf(stderr, "vDS-Daemon-Debug [INIT-ERR]: Fehler beim Setzen von O_NONBLOCK auf %s (fd=%d)\n", channel_name, fd.get());
     return std::nullopt;
   }
 
-  // KORREKTUR: Korrekte Array-Größe für den Format-String bereitgestellt
   char mac_str[18]{};
   std::snprintf(mac_str, sizeof(mac_str), "%02x:%02x:%02x:%02x:%02x:%02x",
                 mac_bytes[0], mac_bytes[1], mac_bytes[2], mac_bytes[3], mac_bytes[4], mac_bytes[5]);
@@ -223,8 +221,9 @@ BtL2capBackend::~BtL2capBackend() {
 BtL2capBackend::BtL2capBackend(BtL2capBackend &&other) noexcept
     : address_(std::move(other.address_)), control_fd_(other.control_fd_),
       interrupt_fd_(other.interrupt_fd_) {
-  other.control_fd = -1;
-  other.interrupt_fd = -1; 
+  // KORREKTUR: Unterstriche hinzugefügt, um auf die Membervariablen statt Funktionen zuzugreifen
+  other.control_fd_ = -1;
+  other.interrupt_fd_ = -1; 
 }
 
 BtL2capBackend &BtL2capBackend::operator=(BtL2capBackend &&other) noexcept {
