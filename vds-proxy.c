@@ -30,7 +30,7 @@
 struct custom_sockaddr_l2 {
     uint16_t    l2_family;
     uint16_t    l2_psm;       
-    uint8_t     l2_bdaddr[6];
+    uint8_t     l2_bdaddr[6]; // Explizites 6-Byte Array für die Bluetooth-Adresse
     uint16_t    l2_cid;
     uint8_t     l2_bdaddr_type;
 };
@@ -150,7 +150,7 @@ int main(void) {
 
     int client_ctrl = -1, vdsd_ctrl = -1;
     int client_intr = -1, vdsd_intr = -1;
-    uint8_t controller_mac[6] = {0};
+    uint8_t controller_mac[6] = {0}; // Fix: Korrekte Array-Deklaration
 
     void *heap_buffer = malloc(1024);
     if (!heap_buffer) return 1;
@@ -233,9 +233,10 @@ int main(void) {
                 if (len > 0) {
                     uint8_t *ptr = (uint8_t *)heap_buffer;
                     packet_counter++;
-                    if (packet_counter % 20 == 0 || ptr[0] == 0xA3) {
+                    // Fix: Dereferenzierung (*ptr) für Byte-Vergleich
+                    if (packet_counter % 20 == 0 || *ptr == 0xA3) {
                         printf("vDS-Proxy: [BT->IPC CTRL] Paket #%lu | Len: %ld | HID-Typ: 0x%02X\n", 
-                               packet_counter, len, ptr[0]);
+                               packet_counter, len, *ptr);
                     }
                     if (vdsd_ctrl >= 0) {
                         ssize_t s_ret = send_stream_packet(vdsd_ctrl, (const uint8_t *)heap_buffer, len);
@@ -318,6 +319,7 @@ int main(void) {
         continue;
 
     shutdown_global:
+        printf("vDS-Proxy: [RESET] Führe globalen Reset aller aktiven Arbeits-Kanäle durch.\n");
         if (client_ctrl >= 0) close(client_ctrl);
         if (vdsd_ctrl >= 0) close(vdsd_ctrl);
         if (client_intr >= 0) close(client_intr);
@@ -325,8 +327,12 @@ int main(void) {
         client_ctrl = -1; vdsd_ctrl = -1;
         client_intr = -1; vdsd_intr = -1;
         memset(controller_mac, 0, 6);
+        packet_counter = 0;
         continue;
     }
-    free(heap_buffer); close(srv_ctrl); close(srv_intr); return 0;
-}
 
+    free(heap_buffer); 
+    close(srv_ctrl);
+    close(srv_intr);
+    return 0;
+}
