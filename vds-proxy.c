@@ -164,6 +164,11 @@ int main(void) {
 
     struct pollfd fds[TOTAL_FDS];
     uint64_t packet_counter = 0;
+    
+    // Variablen-Deklarationen an den Funktionsanfang verschoben, um goto-Scope-Fehler zu beheben
+    int ret = 0;
+    int tmp = 0;
+    ssize_t len = 0;
 
     while (1) {
         // STAGE SETUP: Falls Pipelines unvollständig sind, blockierend im Kernel-Space synchronisieren
@@ -177,14 +182,14 @@ int main(void) {
             socklen_t slen = sizeof(saddr);
 
             // 1. Warte blockierend auf Bluetooth Control (PSM 0x11)
-            struct pollfd listen_fds[2];
-            listen_fds[0].fd = srv_ctrl; listen_fds[0].events = POLLIN;
-            listen_fds[1].fd = srv_intr; listen_fds[1].events = POLLIN;
+            struct pollfd listen_fds;
+            listen_fds.fd = srv_ctrl; listen_fds.events = POLLIN;
+            listen_fds.fd = srv_intr; listen_fds.events = POLLIN;
 
             printf("vDS-Proxy: [STAGE 1] Warte auf physische Verbindung (Control-Kanal)...\n");
             while (client_ctrl == -1) {
-                if (poll(&listen_fds[0], 1, -1) > 0 && (listen_fds[0].revents & POLLIN)) {
-                    int tmp = accept4(srv_ctrl, (struct sockaddr *)&saddr, &slen, SOCK_NONBLOCK | SOCK_CLOEXEC);
+                if (poll(&listen_fds, 1, -1) > 0 && (listen_fds.revents & POLLIN)) {
+                    tmp = accept4(srv_ctrl, (struct sockaddr *)&saddr, &slen, SOCK_NONBLOCK | SOCK_CLOEXEC);
                     if (tmp >= 0) {
                         client_ctrl = tmp;
                         memcpy(controller_mac, saddr.l2_bdaddr, 6);
@@ -197,8 +202,8 @@ int main(void) {
             // 2. Sofort blockierend auf Bluetooth Interrupt (PSM 0x13) warten (L2CAP-Timeout-Schutz)
             printf("vDS-Proxy: [STAGE 2] Control steht. Erwarte sequentiell Interrupt-Kanal...\n");
             while (client_intr == -1) {
-                if (poll(&listen_fds[1], 1, 2000) > 0 && (listen_fds[1].revents & POLLIN)) {
-                    int tmp = accept4(srv_intr, (struct sockaddr *)&saddr, &slen, SOCK_NONBLOCK | SOCK_CLOEXEC);
+                if (poll(&listen_fds, 1, 2000) > 0 && (listen_fds.revents & POLLIN)) {
+                    tmp = accept4(srv_intr, (struct sockaddr *)&saddr, &slen, SOCK_NONBLOCK | SOCK_CLOEXEC);
                     if (tmp >= 0) {
                         client_intr = tmp;
                         printf("vDS-Proxy: [INIT] Interrupt-Kanal aktiv abgefangen.\n");
@@ -242,7 +247,7 @@ int main(void) {
         fds[IDX_CLI_INTR].fd  = client_intr; fds[IDX_CLI_INTR].events  = POLLIN;
         fds[IDX_VDSD_INTR].fd = vdsd_intr;   fds[IDX_VDSD_INTR].events = POLLIN;
 
-        int ret = poll(fds, TOTAL_FDS, -1);
+        ret = poll(fds, TOTAL_FDS, -1);
         if (ret < 0) {
             if (errno == EINTR) continue;
             break;
@@ -256,12 +261,12 @@ int main(void) {
 
         // Datentransfer Control: Client -> Daemon
         if (fds[IDX_CLI_CTRL].fd >= 0 && (fds[IDX_CLI_CTRL].revents & POLLIN)) {
-            ssize_t len = recv(client_ctrl, heap_buffer, 1024, MSG_DONTWAIT | MSG_NOSIGNAL);
+            len = recv(client_ctrl, heap_buffer, 1024, MSG_DONTWAIT | MSG_NOSIGNAL);
             if (len > 0) {
                 packet_counter++;
-                if (packet_counter % 20 == 0 || heap_buffer[0] == 0xA3) {
+                if (packet_counter % 20 == 0 || *heap_buffer == 0xA3) {
                     printf("vDS-Proxy: [BT->IPC CTRL] Paket #%lu | Len: %ld | HID-Typ: 0x%02X\n", 
-                           packet_counter, len, heap_buffer[0]);
+                           packet_counter, len, *heap_buffer);
                 }
                 send_stream_packet(vdsd_ctrl, (const uint8_t *)heap_buffer, len);
             } else if (len == 0 || (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK)) {
@@ -271,7 +276,7 @@ int main(void) {
 
         // Datentransfer Control: Daemon -> Client
         if (fds[IDX_VDSD_CTRL].fd >= 0 && (fds[IDX_VDSD_CTRL].revents & POLLIN)) {
-            ssize_t len = recv_stream_packet(vdsd_ctrl, heap_buffer, 1024);
+            len = recv_stream_packet(vdsd_ctrl, heap_buffer, 1024);
             if (len > 0) {
                 send(client_ctrl, heap_buffer, len, MSG_DONTWAIT | MSG_NOSIGNAL);
             } else if (len == 0 || (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK)) {
@@ -281,7 +286,7 @@ int main(void) {
 
         // Datentransfer Interrupt: Client -> Daemon
         if (fds[IDX_CLI_INTR].fd >= 0 && (fds[IDX_CLI_INTR].revents & POLLIN)) {
-            ssize_t len = recv(client_intr, heap_buffer, 1024, MSG_DONTWAIT | MSG_NOSIGNAL);
+            len = recv(client_intr, heap_buffer, 1024, MSG_DONTWAIT | MSG_NOSIGNAL);
             if (len > 0) {
                 send_stream_packet(vdsd_intr, (const uint8_t *)heap_buffer, len);
             } else if (len == 0 || (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK)) {
@@ -291,7 +296,7 @@ int main(void) {
 
         // Datentransfer Interrupt: Daemon -> Client
         if (fds[IDX_VDSD_INTR].fd >= 0 && (fds[IDX_VDSD_INTR].revents & POLLIN)) {
-            ssize_t len = recv_stream_packet(vdsd_intr, heap_buffer, 1024);
+            len = recv_stream_packet(vdsd_intr, heap_buffer, 1024);
             if (len > 0) {
                 send(client_intr, heap_buffer, len, MSG_DONTWAIT | MSG_NOSIGNAL);
             } else if (len == 0 || (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK)) {
