@@ -112,7 +112,12 @@ int connect_unix_pipe(const char *pipe_name, const uint8_t *mac_bytes, int send_
 ssize_t recv_stream_packet(int stream_fd, uint8_t *out_buf, size_t max_len) {
     uint16_t len_be;
     ssize_t n = recv(stream_fd, &len_be, 2, MSG_PEEK | MSG_DONTWAIT | MSG_NOSIGNAL);
-    if (n < 2) return (n == 0) ? 0 : -1; 
+    if (n < 2) {
+        if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+            errno = EAGAIN;
+        }
+        return -1; 
+    }
 
     uint16_t packet_len = ntohs(len_be);
     if (packet_len > max_len) return -1; 
@@ -152,7 +157,7 @@ int main(void) {
     int client_intr = -1, vdsd_intr = -1;
     uint8_t controller_mac[6] = {0};
 
-    void *heap_buffer = malloc(1024);
+    uint8_t *heap_buffer = (uint8_t *)malloc(1024);
     if (!heap_buffer) return 1;
 
     printf("vDS-Proxy: Initialisierung erfolgreich. Warte auf DualSense-Controller...\n");
@@ -161,19 +166,81 @@ int main(void) {
     uint64_t packet_counter = 0;
 
     while (1) {
+        // STAGE SETUP: Falls Pipelines unvollständig sind, blockierend im Kernel-Space synchronisieren
+        if (client_ctrl == -1 || client_intr == -1 || vdsd_ctrl == -1 || vdsd_intr == -1) {
+            if (client_ctrl >= 0) { close(client_ctrl); client_ctrl = -1; }
+            if (client_intr >= 0) { close(client_intr); client_intr = -1; }
+            if (vdsd_ctrl >= 0)   { close(vdsd_ctrl);   vdsd_ctrl = -1; }
+            if (vdsd_intr >= 0)   { close(vdsd_intr);   vdsd_intr = -1; }
+
+            struct custom_sockaddr_l2 saddr;
+            socklen_t slen = sizeof(saddr);
+
+            // 1. Warte blockierend auf Bluetooth Control (PSM 0x11)
+            struct pollfd listen_fds[2];
+            listen_fds[0].fd = srv_ctrl; listen_fds[0].events = POLLIN;
+            listen_fds[1].fd = srv_intr; listen_fds[1].events = POLLIN;
+
+            printf("vDS-Proxy: [STAGE 1] Warte auf physische Verbindung (Control-Kanal)...\n");
+            while (client_ctrl == -1) {
+                if (poll(&listen_fds[0], 1, -1) > 0 && (listen_fds[0].revents & POLLIN)) {
+                    int tmp = accept4(srv_ctrl, (struct sockaddr *)&saddr, &slen, SOCK_NONBLOCK | SOCK_CLOEXEC);
+                    if (tmp >= 0) {
+                        client_ctrl = tmp;
+                        memcpy(controller_mac, saddr.l2_bdaddr, 6);
+                        printf("vDS-Proxy: [INIT] Control-Kanal aktiv abgefangen. MAC: %02x:%02x:%02x:%02x:%02x:%02x\n",
+                               controller_mac[0], controller_mac[1], controller_mac[2], controller_mac[3], controller_mac[4], controller_mac[5]);
+                    }
+                }
+            }
+
+            // 2. Sofort blockierend auf Bluetooth Interrupt (PSM 0x13) warten (L2CAP-Timeout-Schutz)
+            printf("vDS-Proxy: [STAGE 2] Control steht. Erwarte sequentiell Interrupt-Kanal...\n");
+            while (client_intr == -1) {
+                if (poll(&listen_fds[1], 1, 2000) > 0 && (listen_fds[1].revents & POLLIN)) {
+                    int tmp = accept4(srv_intr, (struct sockaddr *)&saddr, &slen, SOCK_NONBLOCK | SOCK_CLOEXEC);
+                    if (tmp >= 0) {
+                        client_intr = tmp;
+                        printf("vDS-Proxy: [INIT] Interrupt-Kanal aktiv abgefangen.\n");
+                    }
+                } else {
+                    printf("vDS-Proxy: [TIMEOUT] Controller-Interrupt ausgeblieben. Reset.\n");
+                    goto shutdown_global;
+                }
+            }
+
+            // 3. Kaskadierung zum Daemon aufbauen (Strikte, sequentielle Abfolge)
+            printf("vDS-Proxy: [STAGE 3] Bluetooth komplett. Synchronisiere mit Daemon (@v_c)...\n");
+            vdsd_ctrl = connect_unix_pipe("v_c", controller_mac, 1);
+            if (vdsd_ctrl < 0) {
+                fprintf(stderr, "vDS-Proxy: [IPC-ERR] Fehler beim Verbinden mit vdsd_ctrl (@v_c)\n");
+                goto shutdown_global;
+            }
+            
+            // Kleine Atempause für den Kernel/Daemon-Kontextwechsel, um ECONNREFUSED zu verhindern
+            usleep(5000); 
+
+            printf("vDS-Proxy: [STAGE 4] Control-Handshake verifiziert. Verbinde mit @v_i...\n");
+            vdsd_intr = connect_unix_pipe("v_i", controller_mac, 0);
+            if (vdsd_intr < 0) {
+                fprintf(stderr, "vDS-Proxy: [IPC-ERR] Fehler beim Verbinden mit vdsd_intr (@v_i)\n");
+                goto shutdown_global;
+            }
+
+            printf("vDS-Proxy: [IPC] Alle Kanäle stabil verbunden. Schalte asynchronen Datentunnel aktiv.\n");
+        }
+
+        // ASYNCHRONER TRANSFER-LOOP
         for (int i = 0; i < TOTAL_FDS; i++) {
             fds[i].fd = -1;
             fds[i].events = 0;
             fds[i].revents = 0;
-        }
-        
-        if (client_ctrl < 0) { fds[IDX_SRV_CTRL].fd = srv_ctrl; fds[IDX_SRV_CTRL].events = POLLIN; }
-        if (client_intr < 0) { fds[IDX_SRV_INTR].fd = srv_intr; fds[IDX_SRV_INTR].events = POLLIN; }
+        } 
 
-        if (client_ctrl >= 0 && vdsd_ctrl >= 0 && vdsd_intr >= 0) { fds[IDX_CLI_CTRL].fd = client_ctrl; fds[IDX_CLI_CTRL].events = POLLIN; }
-        if (vdsd_ctrl >= 0 && client_ctrl >= 0 && vdsd_intr >= 0)   { fds[IDX_VDSD_CTRL].fd = vdsd_ctrl;   fds[IDX_VDSD_CTRL].events = POLLIN; }
-        if (client_intr >= 0 && vdsd_ctrl >= 0 && vdsd_intr >= 0) { fds[IDX_CLI_INTR].fd = client_intr; fds[IDX_CLI_INTR].events = POLLIN; }
-        if (vdsd_intr >= 0 && client_ctrl >= 0 && vdsd_ctrl >= 0)   { fds[IDX_VDSD_INTR].fd = vdsd_intr;   fds[IDX_VDSD_INTR].events = POLLIN; }
+        fds[IDX_CLI_CTRL].fd  = client_ctrl; fds[IDX_CLI_CTRL].events  = POLLIN;
+        fds[IDX_VDSD_CTRL].fd = vdsd_ctrl;   fds[IDX_VDSD_CTRL].events = POLLIN;
+        fds[IDX_CLI_INTR].fd  = client_intr; fds[IDX_CLI_INTR].events  = POLLIN;
+        fds[IDX_VDSD_INTR].fd = vdsd_intr;   fds[IDX_VDSD_INTR].events = POLLIN;
 
         int ret = poll(fds, TOTAL_FDS, -1);
         if (ret < 0) {
@@ -181,120 +248,63 @@ int main(void) {
             break;
         }
 
-        if (fds[IDX_SRV_CTRL].fd >= 0 && (fds[IDX_SRV_CTRL].revents & POLLIN)) {
-            struct custom_sockaddr_l2 saddr;
-            socklen_t slen = sizeof(saddr);
-            int tmp = accept4(srv_ctrl, (struct sockaddr *)&saddr, &slen, SOCK_NONBLOCK | SOCK_CLOEXEC);
-            if (tmp >= 0) {
-                client_ctrl = tmp;
-                memcpy(controller_mac, saddr.l2_bdaddr, 6);
-                printf("vDS-Proxy: [INIT] Control-Kanal aktiv abgefangen. MAC: %02x:%02x:%02x:%02x:%02x:%02x\n",
-                       controller_mac[0], controller_mac[1], controller_mac[2], controller_mac[3], controller_mac[4], controller_mac[5]);
-            }
-        }
+        // FD-Filter-Gate vor jeder revents-Auswertung
+        if (fds[IDX_CLI_CTRL].fd >= 0 && (fds[IDX_CLI_CTRL].revents & (POLLERR | POLLNVAL))) goto shutdown_global;
+        if (fds[IDX_VDSD_CTRL].fd >= 0 && (fds[IDX_VDSD_CTRL].revents & (POLLERR | POLLNVAL))) goto shutdown_global;
+        if (fds[IDX_CLI_INTR].fd >= 0 && (fds[IDX_CLI_INTR].revents & (POLLERR | POLLNVAL))) goto shutdown_global;
+        if (fds[IDX_VDSD_INTR].fd >= 0 && (fds[IDX_VDSD_INTR].revents & (POLLERR | POLLNVAL))) goto shutdown_global;
 
-        if (fds[IDX_SRV_INTR].fd >= 0 && (fds[IDX_SRV_INTR].revents & POLLIN)) {
-            struct custom_sockaddr_l2 saddr;
-            socklen_t slen = sizeof(saddr);
-            int tmp = accept4(srv_intr, (struct sockaddr *)&saddr, &slen, SOCK_NONBLOCK | SOCK_CLOEXEC);
-            if (tmp >= 0) {
-                client_intr = tmp;
-                printf("vDS-Proxy: [INIT] Interrupt-Kanal aktiv abgefangen.\n");
-            }
-        }
-
-        if (client_ctrl >= 0 && client_intr >= 0 && vdsd_ctrl == -1 && vdsd_intr == -1) {
-            vdsd_ctrl = connect_unix_pipe("v_c", controller_mac, 1);
-            if (vdsd_ctrl < 0) {
-                fprintf(stderr, "vDS-Proxy: [IPC-ERR] Fehler beim Verbinden mit vdsd_ctrl (@v_c)\n");
+        // Datentransfer Control: Client -> Daemon
+        if (fds[IDX_CLI_CTRL].fd >= 0 && (fds[IDX_CLI_CTRL].revents & POLLIN)) {
+            ssize_t len = recv(client_ctrl, heap_buffer, 1024, MSG_DONTWAIT | MSG_NOSIGNAL);
+            if (len > 0) {
+                packet_counter++;
+                if (packet_counter % 20 == 0 || heap_buffer[0] == 0xA3) {
+                    printf("vDS-Proxy: [BT->IPC CTRL] Paket #%lu | Len: %ld | HID-Typ: 0x%02X\n", 
+                           packet_counter, len, heap_buffer[0]);
+                }
+                send_stream_packet(vdsd_ctrl, (const uint8_t *)heap_buffer, len);
+            } else if (len == 0 || (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK)) {
                 goto shutdown_global;
             }
-            
-            vdsd_intr = connect_unix_pipe("v_i", controller_mac, 0);
-            if (vdsd_intr < 0) {
-                fprintf(stderr, "vDS-Proxy: [IPC-ERR] Fehler beim Verbinden mit vdsd_intr (@v_i)\n");
+        }
+
+        // Datentransfer Control: Daemon -> Client
+        if (fds[IDX_VDSD_CTRL].fd >= 0 && (fds[IDX_VDSD_CTRL].revents & POLLIN)) {
+            ssize_t len = recv_stream_packet(vdsd_ctrl, heap_buffer, 1024);
+            if (len > 0) {
+                send(client_ctrl, heap_buffer, len, MSG_DONTWAIT | MSG_NOSIGNAL);
+            } else if (len == 0 || (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK)) {
+                goto shutdown_global; 
+            }
+        }
+
+        // Datentransfer Interrupt: Client -> Daemon
+        if (fds[IDX_CLI_INTR].fd >= 0 && (fds[IDX_CLI_INTR].revents & POLLIN)) {
+            ssize_t len = recv(client_intr, heap_buffer, 1024, MSG_DONTWAIT | MSG_NOSIGNAL);
+            if (len > 0) {
+                send_stream_packet(vdsd_intr, (const uint8_t *)heap_buffer, len);
+            } else if (len == 0 || (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK)) {
                 goto shutdown_global;
             }
-
-            printf("vDS-Proxy: [IPC] Control- & Interrupt-Pipeline erfolgreich aktiv geschaltet.\n");
         }
 
-        if (client_ctrl >= 0 && fds[IDX_CLI_CTRL].fd >= 0 && (fds[IDX_CLI_CTRL].revents & (POLLERR | POLLNVAL))) goto shutdown_global;
-        if (vdsd_ctrl >= 0   && fds[IDX_VDSD_CTRL].fd >= 0 && (fds[IDX_VDSD_CTRL].revents & (POLLERR | POLLNVAL))) goto shutdown_global;
-        if (client_intr >= 0 && fds[IDX_CLI_INTR].fd >= 0 && (fds[IDX_CLI_INTR].revents & (POLLERR | POLLNVAL))) goto shutdown_global;
-        if (vdsd_intr >= 0   && fds[IDX_VDSD_INTR].fd >= 0 && (fds[IDX_VDSD_INTR].revents & (POLLERR | POLLNVAL))) goto shutdown_global;
-
-        if (client_ctrl >= 0 && fds[IDX_CLI_CTRL].fd >= 0) {
-            short rev = fds[IDX_CLI_CTRL].revents;
-            if (rev & POLLIN) {
-                ssize_t len = recv(client_ctrl, heap_buffer, 1024, MSG_DONTWAIT | MSG_NOSIGNAL);
-                if (len > 0) {
-                    uint8_t *ptr = (uint8_t *)heap_buffer;
-                    packet_counter++;
-                    if (packet_counter % 20 == 0 || *ptr == 0xA3) {
-                        printf("vDS-Proxy: [BT->IPC CTRL] Paket #%lu | Len: %ld | HID-Typ: 0x%02X\n", 
-                               packet_counter, len, *ptr);
-                    }
-                    if (vdsd_ctrl >= 0) {
-                        send_stream_packet(vdsd_ctrl, (const uint8_t *)heap_buffer, len);
-                    }
-                } else if (len == 0 || (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK)) {
-                    goto shutdown_global;
-                }
-            }
-            if ((rev & POLLHUP) && !(rev & POLLIN)) {
-                char test_ch;
-                if (recv(client_ctrl, &test_ch, 1, MSG_PEEK | MSG_DONTWAIT | MSG_NOSIGNAL) == 0) goto shutdown_global;
+        // Datentransfer Interrupt: Daemon -> Client
+        if (fds[IDX_VDSD_INTR].fd >= 0 && (fds[IDX_VDSD_INTR].revents & POLLIN)) {
+            ssize_t len = recv_stream_packet(vdsd_intr, heap_buffer, 1024);
+            if (len > 0) {
+                send(client_intr, heap_buffer, len, MSG_DONTWAIT | MSG_NOSIGNAL);
+            } else if (len == 0 || (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK)) {
+                goto shutdown_global;
             }
         }
 
-        if (vdsd_ctrl >= 0 && fds[IDX_VDSD_CTRL].fd >= 0) {
-            short rev = fds[IDX_VDSD_CTRL].revents;
-            if (rev & POLLIN) {
-                ssize_t len = recv_stream_packet(vdsd_ctrl, (uint8_t *)heap_buffer, 1024);
-                if (len > 0) {
-                    if (client_ctrl >= 0) send(client_ctrl, heap_buffer, len, MSG_DONTWAIT | MSG_NOSIGNAL);
-                } else if (len == 0 || (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK)) {
-                    goto shutdown_global; 
-                }
-            }
-            if ((rev & POLLHUP) && !(rev & POLLIN)) {
-                char test_ch;
-                if (recv(vdsd_ctrl, &test_ch, 1, MSG_PEEK | MSG_DONTWAIT | MSG_NOSIGNAL) == 0) goto shutdown_global;
-            }
-        }
+        // Separierte POLLHUP-Auswertung nach verarbeitetem POLLIN
+        if (fds[IDX_CLI_CTRL].fd >= 0 && (fds[IDX_CLI_CTRL].revents & POLLHUP)) goto shutdown_global;
+        if (fds[IDX_VDSD_CTRL].fd >= 0 && (fds[IDX_VDSD_CTRL].revents & POLLHUP)) goto shutdown_global;
+        if (fds[IDX_CLI_INTR].fd >= 0 && (fds[IDX_CLI_INTR].revents & POLLHUP)) goto shutdown_global;
+        if (fds[IDX_VDSD_INTR].fd >= 0 && (fds[IDX_VDSD_INTR].revents & POLLHUP)) goto shutdown_global;
 
-        if (client_intr >= 0 && fds[IDX_CLI_INTR].fd >= 0) {
-            short rev = fds[IDX_CLI_INTR].revents;
-            if (rev & POLLIN) {
-                ssize_t len = recv(client_intr, heap_buffer, 1024, MSG_DONTWAIT | MSG_NOSIGNAL);
-                if (len > 0) {
-                    if (vdsd_intr >= 0) send_stream_packet(vdsd_intr, (const uint8_t *)heap_buffer, len);
-                } else if (len == 0 || (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK)) {
-                    goto shutdown_global;
-                }
-            }
-            if ((rev & POLLHUP) && !(rev & POLLIN)) {
-                char test_ch;
-                if (recv(client_intr, &test_ch, 1, MSG_PEEK | MSG_DONTWAIT | MSG_NOSIGNAL) == 0) goto shutdown_global;
-            }
-        }
-
-        if (vdsd_intr >= 0 && fds[IDX_VDSD_INTR].fd >= 0) {
-            short rev = fds[IDX_VDSD_INTR].revents;
-            if (rev & POLLIN) {
-                ssize_t len = recv_stream_packet(vdsd_intr, (uint8_t *)heap_buffer, 1024);
-                if (len > 0) {
-                    if (client_intr >= 0) send(client_intr, heap_buffer, len, MSG_DONTWAIT | MSG_NOSIGNAL);
-                } else if (len == 0 || (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK)) {
-                    goto shutdown_global;
-                }
-            }
-            if ((rev & POLLHUP) && !(rev & POLLIN)) {
-                char test_ch;
-                if (recv(vdsd_intr, &test_ch, 1, MSG_PEEK | MSG_DONTWAIT | MSG_NOSIGNAL) == 0) goto shutdown_global;
-            }
-        }
         continue;
 
     shutdown_global:
