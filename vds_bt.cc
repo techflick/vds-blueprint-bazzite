@@ -144,7 +144,6 @@ std::optional<BtAcceptedChannel> accept_ipc_pipe(int listener_fd, const char *ch
     return std::nullopt; 
   }
 
-  // KORREKTUR: Korrekter Aufruf mit zwei Argumenten (FD und string_view Label) gemäß vds_io.hh Invariante
   set_nonblocking(fd.get(), channel_name);
 
   char mac_str[18]{};
@@ -159,7 +158,29 @@ std::optional<BtAcceptedChannel> accept_ipc_pipe(int listener_fd, const char *ch
   };
 }
 
+UniqueFd accept_interrupt_pipe_pure(int listener_fd, const char *channel_name) {
+  struct sockaddr_un peer{};
+  socklen_t peer_size = sizeof(peer);
+  
+  std::fprintf(stderr, "vDS-Daemon-Debug [INIT]: Warte auf sequentielles accept4() für %s (listener_fd=%d)...\n", channel_name, listener_fd);
+  
+  int raw_fd = ::accept4(listener_fd, reinterpret_cast<struct sockaddr *>(&peer), &peer_size, SOCK_CLOEXEC);
+  if (raw_fd < 0) {
+    const int error = errno;
+    std::fprintf(stderr, "vDS-Daemon-Debug [INIT-ERR]: accept4() auf %s fehlgeschlagen, error=%d\n", channel_name, error);
+    throw std::runtime_error("failed to accept interrupt IPC connection: " + std::string(std::strerror(error)));
+  }
+
+  UniqueFd fd(raw_fd);
+  std::fprintf(stderr, "vDS-Daemon-Debug [INIT]: %s-Verbindung akzeptiert (fd=%d). Überspringe MAC-Phase (Kaskaden-Tunnel).\n", channel_name, fd.get());
+
+  set_nonblocking(fd.get(), channel_name);
+  return fd;
+}
+
 } // namespace
+
+namespace vds {
 
 BtL2capAcceptor::BtL2capAcceptor()
     : control_listener_fd_(listen_ipc_pipe("v_c")),
@@ -169,11 +190,11 @@ BtL2capAcceptor::BtL2capAcceptor()
 }
 
 std::optional<BtAcceptedChannel> BtL2capAcceptor::accept_control() {
-  return accept_ipc_pipe(control_listener_fd_.get(), "Control-Kanal");
+  return accept_ipc_pipe(control_listener_fd_.get(), "vdsd_ctrl");
 }
 
 std::optional<BtAcceptedChannel> BtL2capAcceptor::accept_interrupt() {
-  return accept_ipc_pipe(interrupt_listener_fd_.get(), "Interrupt-Kanal");
+  return std::nullopt;
 }
 
 std::optional<BtL2capBackend> BtL2capAcceptor::establish_backend_blocking() {
@@ -184,15 +205,11 @@ std::optional<BtL2capBackend> BtL2capAcceptor::establish_backend_blocking() {
 
   std::fprintf(stderr, "vDS-Daemon-Debug [SEQ-FLOW]: Control-Kanal erfolgreich synchronisiert. Wechsle SOFORT auf Interrupt-Listener (Mandat).\n");
 
-  auto interrupt_channel = accept_interrupt();
-  if (!interrupt_channel) {
-    std::fprintf(stderr, "vDS-Daemon-Debug [FATAL]: Control verbunden, aber Interrupt-Kanal fehlgeschlagen. Globaler Reset erzwungen.\n");
-    return std::nullopt; 
-  }
-
-  if (control_channel->address != interrupt_channel->address) {
-    std::fprintf(stderr, "vDS-Daemon-Debug [FATAL]: MAC-Mismatch zwischen Control (%s) und Interrupt (%s)!\n",
-                 control_channel->address.c_str(), interrupt_channel->address.c_str());
+  UniqueFd interrupt_fd;
+  try {
+    interrupt_fd = accept_interrupt_pipe_pure(interrupt_listener_fd_.get(), "vdsd_intr");
+  } catch (const std::exception &e) {
+    std::fprintf(stderr, "vDS-Daemon-Debug [FATAL]: Control verbunden, aber Interrupt-Kanal fehlgeschlagen. Globaler Reset erzwungen. Fehler: %s\n", e.what());
     return std::nullopt;
   }
 
@@ -201,7 +218,7 @@ std::optional<BtL2capBackend> BtL2capAcceptor::establish_backend_blocking() {
   return BtL2capBackend(
       control_channel->address,
       std::move(control_channel->fd),
-      std::move(interrupt_channel->fd)
+      std::move(interrupt_fd)
   );
 }
 
