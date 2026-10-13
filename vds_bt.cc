@@ -78,8 +78,7 @@ std::optional<std::vector<std::uint8_t>> read_framed_packet(int fd) {
 
   n = ::recv(fd, buf.data(), buf.size(), MSG_PEEK | MSG_DONTWAIT | MSG_NOSIGNAL);
   if (n < static_cast<ssize_t>(buf.size())) {
-    // Symmetrischer Fragmentierungsschutz (Anti-Live-Lock)
-    errno = EAGAIN;
+    errno = EAGAIN; 
     return std::nullopt; 
   }
 
@@ -178,9 +177,7 @@ UniqueFd accept_interrupt_pipe_pure(int listener_fd, const char *channel_name) {
   return fd;
 }
 
-} // namespace
-
-namespace vds {
+} // namespace (anonym)
 
 BtL2capAcceptor::BtL2capAcceptor()
     : control_listener_fd_(listen_ipc_pipe("v_c")),
@@ -222,10 +219,8 @@ std::optional<BtL2capBackend> BtL2capAcceptor::establish_backend_blocking() {
   );
 }
 
-BtL2capBackend::BtL2capBackend(std::string address, UniqueFd control_fd,
-                               UniqueFd interrupt_fd)
-    : address_(std::move(address)), control_fd_(control_fd.release()),
-      interrupt_fd_(interrupt_fd.release()) {}
+BtL2capBackend::BtL2capBackend(std::string address, UniqueFd control_fd, UniqueFd interrupt_fd)
+    : address_(std::move(address)), control_fd_(control_fd.release()), interrupt_fd_(interrupt_fd.release()) {}
 
 BtL2capBackend::~BtL2capBackend() {
   close_if_open(interrupt_fd_);
@@ -233,8 +228,7 @@ BtL2capBackend::~BtL2capBackend() {
 }
 
 BtL2capBackend::BtL2capBackend(BtL2capBackend &&other) noexcept
-    : address_(std::move(other.address_)), control_fd_(other.control_fd_),
-      interrupt_fd_(other.interrupt_fd_) {
+    : address_(std::move(other.address_)), control_fd_(other.control_fd_), interrupt_fd_(other.interrupt_fd_) {
   other.control_fd_ = -1;
   other.interrupt_fd_ = -1; 
 }
