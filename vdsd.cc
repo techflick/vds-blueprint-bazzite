@@ -1,6 +1,3 @@
-// SPDX-License-Identifier: MIT
-// Copyright (C) 2026 Jihong Min <hurryman2212@gmail.com>
-
 #include <algorithm>
 #include <array>
 #include <cerrno>
@@ -1561,106 +1558,99 @@ void complete_pending_controller(ControllerRuntime &controller,
 
 void handle_bt_accept(std::vector<VirtualPort> &ports,
                       std::vector<ControllerRuntime> &controllers,
-                      vds::BtL2capAcceptor &acceptor, bool control_channel,
+                      vds::BtL2capAcceptor &acceptor,
                       vds::Logger &logger, bool &epoll_dirty) {
-  while (true) {
-    auto accepted = control_channel ? acceptor.accept_control()
-                                    : acceptor.accept_interrupt();
-    if (!accepted) {
+  
+  // ATOMARES KASKADEN-MANDAT (Rev-19):
+  // Wir holen Control (@v_c) und Interrupt (@v_i) in einem einzigen, 
+  // ununterbrochenen Rutsch ab, bevor wir an Epoll zurückgeben.
+  auto backend_opt = acceptor.establish_backend_blocking();
+  if (!backend_opt) {
+    return; 
+  }
+
+  // Die MAC-Adresse extrahieren wir direkt aus dem verifizierten Backend
+  ControllerRuntime *controller =
+      controller_for_address(controllers, backend_opt->address());
+  if (!controller) {
+    logger.log(vds::LogScope::Bluetooth, vds::LogLevel::Warn,
+               "rejected raw HID channel from unregistered address=" +
+                   backend_opt->address());
+    return;
+  }
+  if (controller->backend) {
+    logger.log(vds::LogScope::Bluetooth, vds::LogLevel::Warn,
+               "rejected duplicate raw HID channel address=" +
+                   backend_opt->address());
+    return;
+  }
+
+  std::optional<std::size_t> port_index;
+  if (!controller->device.empty()) {
+    port_index = find_port_index(ports, controller->device);
+    if (port_index && port_used_by_other_controller(controllers, *controller,
+                                                      controller->device)) {
+      port_index.reset();
+    }
+  }
+  if (!port_index) {
+    if (ports.empty()) {
+      controller->last_error = kLinuxVirtualPortProviderUnavailable;
+      logger.log(vds::LogScope::Port, vds::LogLevel::Error,
+                 "rejected raw HID channel address=" + backend_opt->address() +
+                     " reason=" + kVirtualPortProviderUnavailableReason +
+                     " detail=" + kLinuxVirtualPortProviderUnavailable);
       return;
     }
-
-    ControllerRuntime *controller =
-        controller_for_address(controllers, accepted->address);
-    if (!controller) {
-      logger.log(vds::LogScope::Bluetooth, vds::LogLevel::Warn,
-                 "rejected raw HID channel from unregistered address=" +
-                     accepted->address);
-      continue;
-    }
-    if (controller->backend) {
-      logger.log(vds::LogScope::Bluetooth, vds::LogLevel::Warn,
-                 "rejected duplicate raw HID channel address=" +
-                     accepted->address);
-      continue;
-    }
-
-    std::optional<std::size_t> port_index;
-    if (!controller->device.empty()) {
-      port_index = find_port_index(ports, controller->device);
-      if (port_index && port_used_by_other_controller(controllers, *controller,
-                                                      controller->device)) {
-        port_index.reset();
-      }
-    }
+    port_index = available_port_index(ports, controllers, *controller);
     if (!port_index) {
-      if (ports.empty()) {
-        controller->last_error = kLinuxVirtualPortProviderUnavailable;
-        logger.log(vds::LogScope::Port, vds::LogLevel::Error,
-                   "rejected raw HID channel address=" + accepted->address +
-                       " reason=" + kVirtualPortProviderUnavailableReason +
-                       " detail=" + kLinuxVirtualPortProviderUnavailable);
-        continue;
-      }
-      port_index = available_port_index(ports, controllers, *controller);
-      if (!port_index) {
-        controller->last_error = "no available virtual port";
-        logger.log(vds::LogScope::Port, vds::LogLevel::Warn,
-                   "rejected raw HID channel address=" + accepted->address +
-                       " reason=no available virtual port");
-        continue;
-      }
-      controller->device = ports[*port_index].path;
-      logger.log(vds::LogScope::Config, vds::LogLevel::Info,
-                 "controller assigned address=" + controller->config.address +
-                     " device=" + controller->device + " profile=\"" +
-                     vds::controller_profile_name(controller->config.profile) +
-                     "\"");
+      controller->last_error = "no available virtual port";
+      logger.log(vds::LogScope::Port, vds::LogLevel::Warn,
+                 "rejected raw HID channel address=" + backend_opt->address() +
+                     " reason=no available virtual port");
+      return;
     }
+    controller->device = ports[*port_index].path;
+    logger.log(vds::LogScope::Config, vds::LogLevel::Info,
+               "controller assigned address=" + controller->config.address +
+                   " device=" + controller->device + " profile=\"" +
+                   vds::controller_profile_name(controller->config.profile) +
+                   "\"");
+  }
 
-    if (control_channel) {
-      controller->pending_control_fd = std::move(accepted->fd);
-      logger.log(vds::LogScope::Bluetooth, vds::LogLevel::Info,
-                 "accepted raw HID control channel address=" +
-                     accepted->address);
-    } else {
-      controller->pending_interrupt_fd = std::move(accepted->fd);
-      logger.log(vds::LogScope::Bluetooth, vds::LogLevel::Info,
-                 "accepted raw HID interrupt channel address=" +
-                     accepted->address);
-    }
+  // Atomare Entkopplung und direkte Übergabe an die Runtime-Strukturen des Daemons
+  controller->pending_control_fd = vds::UniqueFd(backend_opt->release_control_fd());
+  controller->pending_interrupt_fd = vds::UniqueFd(backend_opt->release_interrupt_fd());
 
-    if (!controller->pending_control_fd || !controller->pending_interrupt_fd) {
-      continue;
-    }
+  logger.log(vds::LogScope::Bluetooth, vds::LogLevel::Info,
+             "accepted stable cascaded tunnel for address=" + backend_opt->address());
 
-    port_index = find_port_index(ports, controller->device);
-    if (!port_index) {
-      controller->pending_control_fd.reset();
-      controller->pending_interrupt_fd.reset();
-      controller->device.clear();
-      controller->last_error = "assigned virtual port disappeared";
-      logger.log(vds::LogScope::Port, vds::LogLevel::Error,
-                 "controller inactive address=" + controller->config.address +
-                     " reason=assigned port disappeared");
-      continue;
-    }
+  port_index = find_port_index(ports, controller->device);
+  if (!port_index) {
+    controller->pending_control_fd.reset();
+    controller->pending_interrupt_fd.reset();
+    controller->device.clear();
+    controller->last_error = "assigned virtual port disappeared";
+    logger.log(vds::LogScope::Port, vds::LogLevel::Error,
+               "controller inactive address=" + controller->config.address +
+                   " reason=assigned port disappeared");
+    return;
+  }
 
-    try {
-      complete_pending_controller(*controller, ports[*port_index], logger);
-      epoll_dirty = true;
-    } catch (const std::exception &error) {
-      controller->backend.reset();
-      controller->pending_control_fd.reset();
-      controller->pending_interrupt_fd.reset();
-      controller->virtual_connected = false;
-      controller->device.clear();
-      controller->last_error = error.what();
-      logger.log(vds::LogScope::Bluetooth, vds::LogLevel::Error,
-                 "connect failed address=" + controller->config.address +
-                     " device=" + ports[*port_index].path +
-                     " error=" + error.what());
-    }
+  try {
+    complete_pending_controller(*controller, ports[*port_index], logger);
+    epoll_dirty = true;
+  } catch (const std::exception &error) {
+    controller->backend.reset();
+    controller->pending_control_fd.reset();
+    controller->pending_interrupt_fd.reset();
+    controller->virtual_connected = false;
+    controller->device.clear();
+    controller->last_error = error.what();
+    logger.log(vds::LogScope::Bluetooth, vds::LogLevel::Error,
+               "connect failed address=" + controller->config.address +
+                   " device=" + ports[*port_index].path +
+                   " error=" + error.what());
   }
 }
 
@@ -2261,17 +2251,22 @@ int main(int argc, char **argv) {
           continue;
         }
 
-        if (source.type == EventType::BtAcceptControl ||
-            source.type == EventType::BtAcceptInterrupt) {
+        if (source.type == EventType::BtAcceptControl) {
           if ((revents & EPOLLIN) != 0) {
-            handle_bt_accept(ports, controllers, bt_acceptor,
-                             source.type == EventType::BtAcceptControl, logger,
-                             epoll_dirty);
+            // Aufruf ohne den asynchronen bool-Parameter. 
+            // Zieht die Pipes für Control und Interrupt atomar an sich.
+            handle_bt_accept(ports, controllers, bt_acceptor, logger, epoll_dirty);
           }
           if ((revents & (EPOLLERR | EPOLLHUP)) != 0) {
             throw std::runtime_error("Bluetooth listener epoll error");
           }
           continue;
+        }
+        
+        // REZEPT-PARALLELITÄT: Der Interrupt-Listener im Epoll wird übersprungen,
+        // da establish_backend_blocking den Kanal direkt im Kernel abholt.
+        if (source.type == EventType::BtAcceptInterrupt) {
+          continue; 
         }
 
         if (source.type == EventType::Udev) {
