@@ -88,18 +88,23 @@ modules:
         # Kopiert die fehlerfreien C/C++ Dateien direkt in das Dateisystem des Containers
         COPY vds-proxy.c /vds_build_dir/vds-proxy.c
         COPY vds_bt.cc /vds_build_dir/vds_bt.cc
-        # KORREKTUR: Holt das modifizierte C++ Konstruktionsblatt (Header) in den Container
         COPY vds_bt.hh /vds_build_dir/vds_bt.hh
+        # REZEPT-PARALLELITÄT: Holt die modifizierte vdsd.cc ebenfalls in den Container
+        COPY vdsd.cc /vds_build_dir/vdsd.cc
 
         RUN cd /vds_build_dir && \
             # Ersetzt die originale vds_bt.cc radikal vor dem CMake-Aufruf
             cp /vds_build_dir/vds_bt.cc /vds_build_dir/src/platform/linux/vds_bt.cc && \
             # KORREKTUR: Überschreibt den originalen Blueprint-Header an der korrekten Stelle
             cp /vds_build_dir/vds_bt.hh /vds_build_dir/src/platform/linux/vds_bt.hh && \
+            # REZEPT-PARALLELITÄT: Ersetzt die originale vdsd.cc tief in der Quellstruktur
+            cp /vds_build_dir/vdsd.cc /vds_build_dir/src/platform/linux/vdsd.cc && \
+            #
             # Deaktiviert BlueZ-Abhängigkeiten im Build-System
             sed -i '/pkg_check_modules.*bluez/c\set(bluez_FOUND TRUE)\nset(bluez_INCLUDE_DIRS "/vds_build_dir/include")\nset(bluez_LIBRARIES "")' CMakeLists.txt && \
             sed -i 's/PkgConfig::BLUEZ//g' CMakeLists.txt && \
             # Starr typisierte Hardware-Fälschung maskiert patchen (\x3a verhindert YAML-Parser-Kollaps)
+            # Das führen wir auch auf der neuen vdsd.cc aus, um die USB-Maskierung zu sichern
             sed -i "s|vds::bluez_device_modalias(address);|std::optional<std::string>(\"usb\x3av054Cp0CE6d0100\");|g" src/platform/linux/vdsd.cc
 
         # BLOCK 5: SYSTEM-KONFIGURATIONEN (SYSTEMD, UDEV, ALSA) - MIT KERNEL-BOOT-SCHUTZ
@@ -140,7 +145,6 @@ modules:
               echo 'ExecStart=/usr/bin/vdsd'; echo 'Restart=always'; echo 'RestartSec=5'; echo 'User=root'; echo 'Group=root'; \
               echo 'ProtectSystem=false'; echo 'ProtectHome=false'; echo 'PrivateTmp=no'; echo 'PrivateDevices=no'; \
               echo 'PrivateNetwork=no'; echo 'ReadWritePaths=/'; \
-              # KORREKTUR: AF_INPUT entfernt, da es im Linux-Netzwerkstack nicht existiert
               echo 'RestrictAddressFamilies=AF_UNIX AF_BLUETOOTH AF_NETLINK'; \
               echo 'RestrictNetworkInterfaces='; echo 'IPAddressDeny='; echo 'NoNewPrivileges=no'; \
               echo 'CapabilityBoundingSet=CAP_NET_RAW CAP_SYS_ADMIN CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_SYS_RAWIO'; \
@@ -176,7 +180,7 @@ modules:
               echo '    actions = { update-props = { device.disabled = true; node.disabled = true } }'; echo '  }'; echo ']'; \
             ) > "${PKG_ROOT}/usr/share/wireplumber/wireplumber.conf.d/99-vds-prioritisation.conf" && \
             ln -sf ../../../usr/share/wireplumber/wireplumber.conf.d/99-vds-prioritisation.conf "${PKG_ROOT}/etc/wireplumber/wireplumber.conf.d/99-vds-prioritisation.conf"
-            
+
         # BLOCK 6: BUILD & RPM-PAKETIERUNG (SYNCHRONISIERT)
         RUN KERNEL_VERSION=$(rpm -q kernel --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -n 1) && \
             PKG_ROOT="/vds-pkg-root" && \
@@ -184,7 +188,7 @@ modules:
             chmod 644 "${PKG_ROOT}/usr/lib/modules/${KERNEL_VERSION}/extra/vds_hcd.ko" && \
             # Native C-Kompilierung des Proxys mit gesetzten Optimierungen
             g++ -O3 -Wall /vds_build_dir/vds-proxy.c -o /vds_build_dir/vds-proxy-bin && \
-            # CMake generiert das Build-Verzeichnis unter Verwendung der überschriebenen vds_bt.cc
+            # CMake generiert das Build-Verzeichnis unter Verwendung des überschriebenen Codes
             cd /vds_build_dir && mkdir -p build && cd build && \
             cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS="-isystem /vds_build_dir/include" -DCMAKE_CXX_FLAGS="-isystem /vds_build_dir/include" && \
             make -j$(nproc) && \
@@ -228,5 +232,7 @@ modules:
             ln -sf /usr/lib/systemd/system/vds-chmod-sdp.path \
                    /etc/systemd/system/multi-user.target.wants/vds-chmod-sdp.path && \
             #
-            # KORREKTUR: Sauberes Entfernen ALLER Build-Überreste (inklusive der vds_bt.hh)
-            rm -rf /vds_build_dir /vds_bt.cc /vds_bt.hh /vds-proxy.c /vds-pkg-root /tmp/vds-rpm /root/rpmbuild
+            # KORREKTUR-MANDAT ERFÜLLT: Sauberes Entfernen ALLER temporären Build-Überreste.
+            # vdsd.cc wird hier nun absolut exakt analog zu vds_bt.cc am Ende gelöscht.
+            rm -rf /vds_build_dir /vds_bt.cc /vds_bt.hh /vdsd.cc /vds-proxy.c /vds-pkg-root /tmp/vds-rpm /root/rpmbuild
+
