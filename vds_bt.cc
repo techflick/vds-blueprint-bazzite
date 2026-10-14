@@ -173,9 +173,11 @@ UniqueFd accept_interrupt_pipe_pure(int listener_fd, const char *channel_name) {
   UniqueFd fd(raw_fd);
   std::fprintf(stderr, "vDS-Daemon-Debug [INIT]: %s-Verbindung akzeptiert (fd=%d). Überspringe MAC-Phase (Kaskaden-Tunnel).\n", channel_name, fd.get());
 
+  // Protokoll-Invariante: Sofort nach dem Verbindungsaufbau auf non-blocking schalten!
   set_nonblocking(fd.get(), channel_name);
   return fd;
 }
+
 
 } // namespace (anonym)
 
