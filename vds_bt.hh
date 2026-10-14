@@ -60,6 +60,23 @@ public:
   std::optional<std::vector<std::uint8_t>> read_feature_report();
   std::optional<std::vector<std::uint8_t>> read_interrupt_packet();
 
+  // =================================================================
+  // ERWEITERUNG: Öffentliche Schnittstellen für das Kaskaden-Mandat
+  // =================================================================
+  const std::string& address() const { return address_; }
+
+  int release_control_fd() {
+    int fd = control_fd_;
+    control_fd_ = -1;
+    return fd;
+  }
+
+  int release_interrupt_fd() {
+    int fd = interrupt_fd_;
+    interrupt_fd_ = -1;
+    return fd;
+  }
+
 private:
   std::string address_;
   int control_fd_ = -1;
