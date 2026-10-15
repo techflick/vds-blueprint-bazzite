@@ -64,12 +64,14 @@ std::optional<std::vector<std::uint8_t>> read_framed_packet(int fd) {
 
   std::uint16_t len_be;
   ssize_t n = ::recv(fd, &len_be, 2, MSG_PEEK | MSG_DONTWAIT | MSG_NOSIGNAL);
+  
   if (n < 2) {
-    if (n == 0) {
-      std::fprintf(stderr, "vDS-Daemon-Debug [RECV-DISCONN]: Verbindung vom Proxy auf fd=%d getrennt.\n", fd);
+    if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+      errno = EAGAIN;
       return std::nullopt;
-    } else if (errno == EAGAIN || errno == EWOULDBLOCK) {
-      errno = EAGAIN; // Symmetrischer Fragmentierungsschutz
+    }
+    if (n == 0) {
+      errno = EAGAIN; 
       return std::nullopt;
     }
     std::fprintf(stderr, "vDS-Daemon-Debug [RECV-ERR]: Header-PEEK fehlgeschlagen auf fd=%d, errno=%d\n", fd, errno);
@@ -81,7 +83,7 @@ std::optional<std::vector<std::uint8_t>> read_framed_packet(int fd) {
 
   n = ::recv(fd, buf.data(), buf.size(), MSG_PEEK | MSG_DONTWAIT | MSG_NOSIGNAL);
   if (n < static_cast<ssize_t>(buf.size())) {
-    errno = EAGAIN; // Anti-Live-Lock Invariante erzwingen
+    errno = EAGAIN;
     return std::nullopt; 
   }
 
@@ -132,7 +134,6 @@ std::optional<BtAcceptedChannel> accept_ipc_pipe(int listener_fd, const char *ch
     if (error == EAGAIN || error == EWOULDBLOCK || error == EINTR) {
       return std::nullopt;
     }
-    std::fprintf(stderr, "vDS-Daemon-Debug [INIT-ERR]: accept() auf %s fehlgeschlagen, error=%d\n", channel_name, error);
     throw std::runtime_error("failed to accept incoming IPC connection: " + std::string(std::strerror(error)));
   }
 
@@ -142,7 +143,6 @@ std::optional<BtAcceptedChannel> accept_ipc_pipe(int listener_fd, const char *ch
   std::uint8_t mac_bytes[6] = {0};
   ssize_t n = ::recv(fd.get(), mac_bytes, 6, MSG_WAITALL | MSG_NOSIGNAL);
   if (n != 6) {
-    std::fprintf(stderr, "vDS-Daemon-Debug [INIT-ERR]: %s MAC-Handshake ungültig! Nur %zd von 6 Bytes erhalten. Schließe Verbindung.\n", channel_name, n);
     return std::nullopt; 
   }
 
@@ -151,8 +151,6 @@ std::optional<BtAcceptedChannel> accept_ipc_pipe(int listener_fd, const char *ch
   char mac_str[18]{};
   std::snprintf(mac_str, sizeof(mac_str), "%02x:%02x:%02x:%02x:%02x:%02x",
                 mac_bytes[0], mac_bytes[1], mac_bytes[2], mac_bytes[3], mac_bytes[4], mac_bytes[5]);
-
-  std::fprintf(stderr, "vDS-Daemon-Debug [INIT-OK]: %s Handshake erfolgreich. Controller-MAC: %s. Schalte Socket auf asynchron.\n", channel_name, mac_str);
 
   return BtAcceptedChannel{
       .address = mac_str,
@@ -164,18 +162,12 @@ UniqueFd accept_interrupt_pipe_pure(int listener_fd, const char *channel_name) {
   struct sockaddr_un peer{};
   socklen_t peer_size = sizeof(peer);
   
-  std::fprintf(stderr, "vDS-Daemon-Debug [INIT]: Warte auf sequentielles accept4() für %s (listener_fd=%d)...\n", channel_name, listener_fd);
-  
   int raw_fd = ::accept4(listener_fd, reinterpret_cast<struct sockaddr *>(&peer), &peer_size, SOCK_CLOEXEC);
   if (raw_fd < 0) {
-    const int error = errno;
-    std::fprintf(stderr, "vDS-Daemon-Debug [INIT-ERR]: accept4() auf %s fehlgeschlagen, error=%d\n", channel_name, error);
-    throw std::runtime_error("failed to accept interrupt IPC connection: " + std::string(std::strerror(error)));
+    throw std::runtime_error("failed to accept interrupt IPC connection: " + std::string(std::strerror(errno)));
   }
 
   UniqueFd fd(raw_fd);
-  std::fprintf(stderr, "vDS-Daemon-Debug [INIT]: %s-Verbindung akzeptiert (fd=%d). Überspringe MAC-Phase (Kaskaden-Tunnel).\n", channel_name, fd.get());
-
   set_nonblocking(fd.get(), channel_name);
   return fd;
 }
@@ -199,21 +191,14 @@ std::optional<BtAcceptedChannel> BtL2capAcceptor::accept_interrupt() {
 
 std::optional<BtL2capBackend> BtL2capAcceptor::establish_backend_blocking() {
   auto control_channel = accept_control();
-  if (!control_channel) {
-    return std::nullopt;
-  }
-
-  std::fprintf(stderr, "vDS-Daemon-Debug [SEQ-FLOW]: Control-Kanal erfolgreich synchronisiert. Wechsle SOFORT auf Interrupt-Listener (Mandat).\n");
+  if (!control_channel) return std::nullopt;
 
   UniqueFd interrupt_fd;
   try {
     interrupt_fd = accept_interrupt_pipe_pure(interrupt_listener_fd_.get(), "vdsd_intr");
   } catch (const std::exception &e) {
-    std::fprintf(stderr, "vDS-Daemon-Debug [FATAL]: Control verbunden, aber Interrupt-Kanal fehlgeschlagen. Globaler Reset erzwungen. Fehler: %s\n", e.what());
     return std::nullopt;
   }
-
-  std::fprintf(stderr, "vDS-Daemon-Debug [INIT-OK]: Pipeline vollständig synchronisiert. Übergebe an Hauptschleife.\n");
 
   return BtL2capBackend(
       control_channel->address,
@@ -251,34 +236,28 @@ BtL2capBackend &BtL2capBackend::operator=(BtL2capBackend &&other) noexcept {
 
 void BtL2capBackend::send_output_report(std::span<const std::uint8_t> report) {
   if (interrupt_fd_ < 0) return;
-  const auto packet = hidp_output_packet(report);
-  send_framed_packet(interrupt_fd_, packet);
+  send_framed_packet(interrupt_fd_, hidp_output_packet(report));
 }
 
 bool BtL2capBackend::try_send_output_report(std::span<const std::uint8_t> report) {
   if (interrupt_fd_ < 0) return false;
-  const auto packet = hidp_output_packet(report);
-  return send_framed_packet(interrupt_fd_, packet);
+  return send_framed_packet(interrupt_fd_, hidp_output_packet(report));
 }
 
 void BtL2capBackend::send_feature_get(std::uint8_t report_id) {
   if (control_fd_ < 0) return;
-  const auto packet = feature_get_packet(report_id);
-  send_framed_packet(control_fd_, packet);
+  send_framed_packet(control_fd_, feature_get_packet(report_id));
 }
 
 void BtL2capBackend::send_feature_set(std::span<const std::uint8_t> report) {
   if (control_fd_ < 0) return;
-  const auto packet = feature_set_packet(report);
-  if (!packet.empty()) {
-    send_framed_packet(control_fd_, packet);
-  }
+  auto packet = feature_set_packet(report);
+  if (!packet.empty()) send_framed_packet(control_fd_, packet);
 }
 
 std::optional<std::vector<std::uint8_t>> BtL2capBackend::read_feature_report() {
   auto packet = read_framed_packet(control_fd_);
   if (!packet || packet->empty()) return std::nullopt;
-
   if (packet->at(0) == 0xA3) {
       return bt_feature_to_usb_feature_reply(std::span(packet->data() + 1, packet->size() - 1));
   }
