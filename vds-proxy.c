@@ -116,7 +116,6 @@ ssize_t recv_stream_packet(int stream_fd, uint8_t *out_buf, size_t max_len) {
         if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
             errno = EAGAIN;
         } else if (n == 0) {
-            // Explizit auf Null-Bytes prüfen, um kein falsches EOF zu triggern falls Pipe leer ist
             return 0;
         }
         return -1; 
@@ -173,7 +172,6 @@ int main(void) {
     ssize_t len = 0;
 
     while (1) {
-        // STAGE SETUP: Falls Pipelines unvollständig sind, blockierend im Kernel-Space synchronisieren
         if (client_ctrl == -1 || client_intr == -1 || vdsd_ctrl == -1 || vdsd_intr == -1) {
             if (client_ctrl >= 0) { close(client_ctrl); client_ctrl = -1; }
             if (client_intr >= 0) { close(client_intr); client_intr = -1; }
@@ -183,7 +181,6 @@ int main(void) {
             struct custom_sockaddr_l2 saddr;
             socklen_t slen = sizeof(saddr);
 
-            // 1. Warte blockierend auf Bluetooth Control (PSM 0x11)
             struct pollfd poll_ctrl;
             poll_ctrl.fd = srv_ctrl; 
             poll_ctrl.events = POLLIN;
@@ -203,7 +200,6 @@ int main(void) {
                 }
             }
 
-            // 2. Sofort blockierend auf Bluetooth Interrupt (PSM 0x13) warten (L2CAP-Timeout-Schutz)
             struct pollfd poll_intr;
             poll_intr.fd = srv_intr; 
             poll_intr.events = POLLIN;
@@ -223,7 +219,6 @@ int main(void) {
                 }
             }
 
-            // 3. Kaskadierung zum Daemon aufbauen (Strikte, sequentielle Abfolge)
             printf("vDS-Proxy: [STAGE 3] Bluetooth komplett. Synchronisiere mit Daemon (@v_c)...\n");
             vdsd_ctrl = connect_unix_pipe("v_c", controller_mac, 1);
             if (vdsd_ctrl < 0) {
@@ -231,7 +226,6 @@ int main(void) {
                 goto shutdown_global;
             }
             
-            // Kleine Atempause für den Kernel/Daemon-Kontextwechsel, um ECONNREFUSED zu verhindern
             usleep(5000); 
 
             printf("vDS-Proxy: [STAGE 4] Control-Handshake verifiziert. Verbinde mit @v_i...\n");
@@ -244,7 +238,6 @@ int main(void) {
             printf("vDS-Proxy: [IPC] Alle Kanäle stabil verbunden. Schalte asynchronen Datentunnel aktiv.\n");
         }
 
-        // ASYNCHRONER TRANSFER-LOOP
         for (int i = 0; i < TOTAL_FDS; i++) {
             fds[i].fd = -1;
             fds[i].events = 0;
@@ -262,7 +255,6 @@ int main(void) {
             break;
         }
 
-        // FD-Filter-Gate vor jeder revents-Auswertung
         if (fds[IDX_CLI_CTRL].fd >= 0 && (fds[IDX_CLI_CTRL].revents & (POLLERR | POLLNVAL))) goto shutdown_global;
         if (fds[IDX_VDSD_CTRL].fd >= 0 && (fds[IDX_VDSD_CTRL].revents & (POLLERR | POLLNVAL))) goto shutdown_global;
         if (fds[IDX_CLI_INTR].fd >= 0 && (fds[IDX_CLI_INTR].revents & (POLLERR | POLLNVAL))) goto shutdown_global;
@@ -270,6 +262,7 @@ int main(void) {
 
         // Datentransfer Control: Client -> Daemon
         if (fds[IDX_CLI_CTRL].fd >= 0 && (fds[IDX_CLI_CTRL].revents & POLLIN)) {
+            errno = 0;
             len = recv(client_ctrl, heap_buffer, 1024, MSG_DONTWAIT | MSG_NOSIGNAL);
             if (len > 0) {
                 packet_counter++;
@@ -278,42 +271,56 @@ int main(void) {
                            packet_counter, len, *heap_buffer);
                 }
                 send_stream_packet(vdsd_ctrl, (const uint8_t *)heap_buffer, len);
-            } else if (len == 0 || (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK)) {
-                goto shutdown_global;
+            } else if (len < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+                // Puffer leer, ignorieren
+            } else {
+                if (len < 0) goto shutdown_global;
             }
         }
 
         // Datentransfer Control: Daemon -> Client
         if (fds[IDX_VDSD_CTRL].fd >= 0 && (fds[IDX_VDSD_CTRL].revents & POLLIN)) {
+            errno = 0;
             len = recv_stream_packet(vdsd_ctrl, heap_buffer, 1024);
             if (len > 0) {
                 send(client_ctrl, heap_buffer, len, MSG_DONTWAIT | MSG_NOSIGNAL);
-            } else if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
+            } else if (len < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+                // Fragmentierungsschutz aktiv, ignorieren
+            } else if (len == 0) {
+                // Pipe leer, ignorieren
+            } else {
                 goto shutdown_global; 
             }
         }
 
         // Datentransfer Interrupt: Client -> Daemon
         if (fds[IDX_CLI_INTR].fd >= 0 && (fds[IDX_CLI_INTR].revents & POLLIN)) {
+            errno = 0;
             len = recv(client_intr, heap_buffer, 1024, MSG_DONTWAIT | MSG_NOSIGNAL);
             if (len > 0) {
                 send_stream_packet(vdsd_intr, (const uint8_t *)heap_buffer, len);
-            } else if (len == 0 || (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK)) {
-                goto shutdown_global;
+            } else if (len < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+                // Puffer leer, ignorieren
+            } else {
+                if (len < 0) goto shutdown_global;
             }
         }
 
         // Datentransfer Interrupt: Daemon -> Client
         if (fds[IDX_VDSD_INTR].fd >= 0 && (fds[IDX_VDSD_INTR].revents & POLLIN)) {
+            errno = 0;
             len = recv_stream_packet(vdsd_intr, heap_buffer, 1024);
             if (len > 0) {
                 send(client_intr, heap_buffer, len, MSG_DONTWAIT | MSG_NOSIGNAL);
-            } else if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
+            } else if (len < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+                // Fragmentierungsschutz aktiv, ignorieren
+            } else if (len == 0) {
+                // Pipe leer, ignorieren
+            } else {
                 goto shutdown_global;
             }
         }
 
-        // Separierte POLLHUP-Auswertung nach verarbeitetem POLLIN
         if (fds[IDX_CLI_CTRL].fd >= 0 && (fds[IDX_CLI_CTRL].revents & POLLHUP)) goto shutdown_global;
         if (fds[IDX_VDSD_CTRL].fd >= 0 && (fds[IDX_VDSD_CTRL].revents & POLLHUP)) goto shutdown_global;
         if (fds[IDX_CLI_INTR].fd >= 0 && (fds[IDX_CLI_INTR].revents & POLLHUP)) goto shutdown_global;
