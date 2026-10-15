@@ -115,6 +115,9 @@ ssize_t recv_stream_packet(int stream_fd, uint8_t *out_buf, size_t max_len) {
     if (n < 2) {
         if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
             errno = EAGAIN;
+        } else if (n == 0) {
+            // Explizit auf Null-Bytes prüfen, um kein falsches EOF zu triggern falls Pipe leer ist
+            return 0;
         }
         return -1; 
     }
@@ -165,7 +168,6 @@ int main(void) {
     struct pollfd fds[TOTAL_FDS];
     uint64_t packet_counter = 0;
     
-    // Variablen-Deklarationen an den Funktionsanfang verschoben, um goto-Scope-Fehler zu beheben
     int ret = 0;
     int tmp = 0;
     ssize_t len = 0;
@@ -182,27 +184,34 @@ int main(void) {
             socklen_t slen = sizeof(saddr);
 
             // 1. Warte blockierend auf Bluetooth Control (PSM 0x11)
-            struct pollfd listen_fds;
-            listen_fds.fd = srv_ctrl; listen_fds.events = POLLIN;
-            listen_fds.fd = srv_intr; listen_fds.events = POLLIN;
+            struct pollfd poll_ctrl;
+            poll_ctrl.fd = srv_ctrl; 
+            poll_ctrl.events = POLLIN;
+            poll_ctrl.revents = 0;
 
             printf("vDS-Proxy: [STAGE 1] Warte auf physische Verbindung (Control-Kanal)...\n");
             while (client_ctrl == -1) {
-                if (poll(&listen_fds, 1, -1) > 0 && (listen_fds.revents & POLLIN)) {
+                if (poll(&poll_ctrl, 1, -1) > 0 && (poll_ctrl.revents & POLLIN)) {
                     tmp = accept4(srv_ctrl, (struct sockaddr *)&saddr, &slen, SOCK_NONBLOCK | SOCK_CLOEXEC);
                     if (tmp >= 0) {
                         client_ctrl = tmp;
                         memcpy(controller_mac, saddr.l2_bdaddr, 6);
                         printf("vDS-Proxy: [INIT] Control-Kanal aktiv abgefangen. MAC: %02x:%02x:%02x:%02x:%02x:%02x\n",
-                               controller_mac[0], controller_mac[1], controller_mac[2], controller_mac[3], controller_mac[4], controller_mac[5]);
+                               controller_mac[0], controller_mac[1], controller_mac[2], 
+                               controller_mac[3], controller_mac[4], controller_mac[5]);
                     }
                 }
             }
 
             // 2. Sofort blockierend auf Bluetooth Interrupt (PSM 0x13) warten (L2CAP-Timeout-Schutz)
+            struct pollfd poll_intr;
+            poll_intr.fd = srv_intr; 
+            poll_intr.events = POLLIN;
+            poll_intr.revents = 0;
+
             printf("vDS-Proxy: [STAGE 2] Control steht. Erwarte sequentiell Interrupt-Kanal...\n");
             while (client_intr == -1) {
-                if (poll(&listen_fds, 1, 2000) > 0 && (listen_fds.revents & POLLIN)) {
+                if (poll(&poll_intr, 1, 2000) > 0 && (poll_intr.revents & POLLIN)) {
                     tmp = accept4(srv_intr, (struct sockaddr *)&saddr, &slen, SOCK_NONBLOCK | SOCK_CLOEXEC);
                     if (tmp >= 0) {
                         client_intr = tmp;
@@ -279,7 +288,7 @@ int main(void) {
             len = recv_stream_packet(vdsd_ctrl, heap_buffer, 1024);
             if (len > 0) {
                 send(client_ctrl, heap_buffer, len, MSG_DONTWAIT | MSG_NOSIGNAL);
-            } else if (len == 0 || (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK)) {
+            } else if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
                 goto shutdown_global; 
             }
         }
@@ -299,7 +308,7 @@ int main(void) {
             len = recv_stream_packet(vdsd_intr, heap_buffer, 1024);
             if (len > 0) {
                 send(client_intr, heap_buffer, len, MSG_DONTWAIT | MSG_NOSIGNAL);
-            } else if (len == 0 || (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK)) {
+            } else if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
                 goto shutdown_global;
             }
         }
