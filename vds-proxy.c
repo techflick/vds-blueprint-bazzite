@@ -106,7 +106,7 @@ ssize_t recv_stream_packet(int stream_fd, uint8_t *out_buf, size_t max_len) {
     ssize_t n = recv(stream_fd, &len_be, 2, MSG_PEEK | MSG_DONTWAIT | MSG_NOSIGNAL);
     if (n < 2) {
         if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) return -2;
-        if (n == 0) return 0;
+        if (n == 0) return -2; // Invariante: 0 im asynchronen Puffer ist KEIN Abbruch
         return -1; 
     }
 
@@ -183,7 +183,9 @@ int main(void) {
 
             vdsd_ctrl = connect_unix_pipe("v_c", controller_mac, 1);
             if (vdsd_ctrl < 0) goto shutdown_global;
-            usleep(5000); 
+            
+            // Erhöhtes Intervall für das atomare Kaskaden-Mandat des Daemons
+            usleep(15000); 
             vdsd_intr = connect_unix_pipe("v_i", controller_mac, 0);
             if (vdsd_intr < 0) goto shutdown_global;
             printf("vDS-Proxy: [IPC] Tunnel aktiv.\n");
@@ -203,34 +205,57 @@ int main(void) {
         if (fds[IDX_CLI_INTR].fd >= 0 && (fds[IDX_CLI_INTR].revents & (POLLERR|POLLNVAL))) goto shutdown_global;
         if (fds[IDX_VDSD_INTR].fd >= 0 && (fds[IDX_VDSD_INTR].revents & (POLLERR|POLLNVAL))) goto shutdown_global;
 
+        // I/O für Client Control
         if (fds[IDX_CLI_CTRL].fd >= 0 && (fds[IDX_CLI_CTRL].revents & POLLIN)) {
             len = recv(client_ctrl, heap_buffer, 1024, MSG_DONTWAIT | MSG_NOSIGNAL);
-            if (len > 0) send_stream_packet(vdsd_ctrl, heap_buffer, len);
-            else if (!(len < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))) goto shutdown_global;
+            if (len > 0) {
+                send_stream_packet(vdsd_ctrl, heap_buffer, len);
+            } else if (len == 0) {
+                // Invariante: Leerer asynchroner Puffer darf nicht trennen
+                continue;
+            } else if (!(errno == EAGAIN || errno == EWOULDBLOCK)) {
+                goto shutdown_global;
+            }
         }
 
+        // I/O für Daemon Control
         if (fds[IDX_VDSD_CTRL].fd >= 0 && (fds[IDX_VDSD_CTRL].revents & POLLIN)) {
             len = recv_stream_packet(vdsd_ctrl, heap_buffer, 1024);
             if (len > 0) send(client_ctrl, heap_buffer, len, MSG_DONTWAIT | MSG_NOSIGNAL);
-            else if (len != -2) goto shutdown_global;
+            else if (len == -1) goto shutdown_global; 
         }
 
+        // I/O für Client Interrupt
         if (fds[IDX_CLI_INTR].fd >= 0 && (fds[IDX_CLI_INTR].revents & POLLIN)) {
             len = recv(client_intr, heap_buffer, 1024, MSG_DONTWAIT | MSG_NOSIGNAL);
-            if (len > 0) send_stream_packet(vdsd_intr, heap_buffer, len);
-            else if (!(len < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))) goto shutdown_global;
+            if (len > 0) {
+                send_stream_packet(vdsd_intr, heap_buffer, len);
+            } else if (len == 0) {
+                continue;
+            } else if (!(errno == EAGAIN || errno == EWOULDBLOCK)) {
+                goto shutdown_global;
+            }
         }
 
+        // I/O für Daemon Interrupt
         if (fds[IDX_VDSD_INTR].fd >= 0 && (fds[IDX_VDSD_INTR].revents & POLLIN)) {
             len = recv_stream_packet(vdsd_intr, heap_buffer, 1024);
             if (len > 0) send(client_intr, heap_buffer, len, MSG_DONTWAIT | MSG_NOSIGNAL);
-            else if (len != -2) goto shutdown_global;
+            else if (len == -1) goto shutdown_global;
         }
 
+        // HUP-Validierung erst nach der I/O-Filterung prüfen, um Fehlalarme zu blockieren
         if ((fds[IDX_CLI_CTRL].fd >= 0 && (fds[IDX_CLI_CTRL].revents & POLLHUP)) ||
-            (fds[IDX_VDSD_CTRL].fd >= 0 && (fds[IDX_VDSD_CTRL].revents & POLLHUP)) ||
-            (fds[IDX_CLI_INTR].fd >= 0 && (fds[IDX_CLI_INTR].revents & POLLHUP)) ||
-            (fds[IDX_VDSD_INTR].fd >= 0 && (fds[IDX_VDSD_INTR].revents & POLLHUP))) goto shutdown_global;
+            (fds[IDX_CLI_INTR].fd >= 0 && (fds[IDX_CLI_INTR].revents & POLLHUP))) {
+            goto shutdown_global;
+        }
+        
+        // Pipes dürfen erst nach erfolgreichem I/O-Durchlauf auf echten Verbindungsabriss geprüft werden
+        if ((fds[IDX_VDSD_CTRL].fd >= 0 && (fds[IDX_VDSD_CTRL].revents & POLLHUP)) ||
+            (fds[IDX_VDSD_INTR].fd >= 0 && (fds[IDX_VDSD_INTR].revents & POLLHUP))) {
+            // Nur trennen, wenn davor kein auslesbarer Puffer den Zustand gerettet hat
+            if (len == -1) goto shutdown_global;
+        }
         continue;
 
     shutdown_global:
