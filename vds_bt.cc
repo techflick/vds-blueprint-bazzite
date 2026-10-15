@@ -67,9 +67,12 @@ std::optional<std::vector<std::uint8_t>> read_framed_packet(int fd) {
   if (n < 2) {
     if (n == 0) {
       std::fprintf(stderr, "vDS-Daemon-Debug [RECV-DISCONN]: Verbindung vom Proxy auf fd=%d getrennt.\n", fd);
-    } else if (errno != EAGAIN && errno != EWOULDBLOCK) {
-      std::fprintf(stderr, "vDS-Daemon-Debug [RECV-ERR]: Header-PEEK fehlgeschlagen auf fd=%d, errno=%d\n", fd, errno);
+      return std::nullopt;
+    } else if (errno == EAGAIN || errno == EWOULDBLOCK) {
+      errno = EAGAIN; // Symmetrischer Fragmentierungsschutz
+      return std::nullopt;
     }
+    std::fprintf(stderr, "vDS-Daemon-Debug [RECV-ERR]: Header-PEEK fehlgeschlagen auf fd=%d, errno=%d\n", fd, errno);
     return std::nullopt; 
   }
 
@@ -78,7 +81,7 @@ std::optional<std::vector<std::uint8_t>> read_framed_packet(int fd) {
 
   n = ::recv(fd, buf.data(), buf.size(), MSG_PEEK | MSG_DONTWAIT | MSG_NOSIGNAL);
   if (n < static_cast<ssize_t>(buf.size())) {
-    errno = EAGAIN; 
+    errno = EAGAIN; // Anti-Live-Lock Invariante erzwingen
     return std::nullopt; 
   }
 
@@ -173,11 +176,9 @@ UniqueFd accept_interrupt_pipe_pure(int listener_fd, const char *channel_name) {
   UniqueFd fd(raw_fd);
   std::fprintf(stderr, "vDS-Daemon-Debug [INIT]: %s-Verbindung akzeptiert (fd=%d). Überspringe MAC-Phase (Kaskaden-Tunnel).\n", channel_name, fd.get());
 
-  // Protokoll-Invariante: Sofort nach dem Verbindungsaufbau auf non-blocking schalten!
   set_nonblocking(fd.get(), channel_name);
   return fd;
 }
-
 
 } // namespace (anonym)
 
