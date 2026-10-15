@@ -2120,8 +2120,11 @@ vds::UniqueFd rebuild_epoll(int control_fd, vds::BtL2capAcceptor &bt_acceptor,
   add_epoll_fd(epoll_fd.get(), vds_monitor.fd(), EventType::Udev, 0);
   add_epoll_fd(epoll_fd.get(), bt_acceptor.control_listener_fd(),
                EventType::BtAcceptControl, 0);
-  add_epoll_fd(epoll_fd.get(), bt_acceptor.interrupt_listener_fd(),
-               EventType::BtAcceptInterrupt, 0);
+  
+  // STRIKTE CODE-INVARIANTE (Symmetrie-Fix): BtAcceptInterrupt darf HIER NIEMALS registriert werden!
+  // Da establish_backend_blocking() den Kanal bereits synchron aus dem Kernel fischt, 
+  // würde eine Epoll-Registrierung zu verwaisten Geister-Events (Busy-Loops) im Kernel führen.
+
   for (std::size_t i = 0; i < ports.size(); ++i) {
     add_epoll_fd(epoll_fd.get(), ports[i].fd.get(), EventType::Port, i);
   }
