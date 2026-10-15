@@ -134,6 +134,12 @@ ssize_t recv_stream_packet(int stream_fd, uint8_t *out_buf, size_t max_len) {
     return packet_len;
 }
 
+ssize_t send_stream_packet(int stream_fd, const uint8_t *payload, size_t len) {
+    uint16_t len_be = htons((uint16_t)len);
+    if (send(stream_fd, &len_be, 2, MSG_DONTWAIT | MSG_NOSIGNAL) != 2) return -1;
+    return send(stream_fd, payload, len, MSG_DONTWAIT | MSG_NOSIGNAL);
+}
+
 int main(void) {
     signal(SIGPIPE, SIG_IGN);
     setvbuf(stdout, NULL, _IOLBF, 0);
